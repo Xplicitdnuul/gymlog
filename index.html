@@ -376,7 +376,15 @@ const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
 const createClient = supabase.createClient;
-const sb = createClient(SUPA_URL, SUPA_KEY);
+const sb = createClient(SUPA_URL, SUPA_KEY, {
+  auth: {
+    storage: window.localStorage,
+    autoRefreshToken: true,
+    persistSession: true,
+    detectSessionInUrl: true,
+    lock: async (name, acquireTimeout, fn) => fn()
+  }
+});
 
 let currentUser = null;
 
@@ -596,7 +604,7 @@ RECENT EXERCISES (avoid repeating if alternatives exist): ${recent.join(', ')||'
 Return ONLY valid JSON, no markdown:
 {"sessionTitle":"...","exercises":[{"name":"...","muscle":"...","sets":${sets},"reps":"10 reps","isRepeat":false,"isCardio":false,"tip":"..."}],"coachNote":"..."}`;
   try {
-    const res=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1000,messages:[{role:'user',content:prompt}]})});
+    const res=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1000,messages:[{role:'user',content:prompt}]})});
     const data=await res.json();
     const txt=data.content.map(b=>b.text||'').join('').replace(/```json|```/g,'').trim();
     const session=JSON.parse(txt);
