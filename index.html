@@ -393,7 +393,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.0.4';
+const APP_VERSION = '1.0.5';
 const storedVersion = localStorage.getItem('gymlog_version');
 if(storedVersion !== APP_VERSION) {
   localStorage.removeItem('sb-hpyosiqjvsjtaeijsjnu-auth-token');
@@ -606,9 +606,9 @@ function renderPlanner() {
   document.getElementById('planner-weights').innerHTML=MUSCLES_W.map(m=>{
     const days=daysSince(m),isSug=days>7,isGoal=goalMuscles.includes(m);
     const cls=['mpill',isGoal?'goal-linked':(isSug?'suggested':''),db.selectedMuscles.includes(m)?'sel':''].filter(Boolean).join(' ');
-    return '<button class="'+cls+'" onclick="togglePlanMuscle(this,''+m+'')">'+m+(days<999?' <span class="days-lbl">'+days+'d</span>':'')+'</button>';
+    return '<button class="'+cls+'" data-m="'+m+'" onclick="togglePlanMuscle(this,this.dataset.m)">'+m+(days<999?' <span class="days-lbl">'+days+'d</span>':'')+'</button>';
   }).join('');
-  document.getElementById('planner-cardio').innerHTML=MUSCLES_C.map(m=>'<button class="mpill cardio'+(db.selectedMuscles.includes(m)?' sel':'')+'" onclick="togglePlanMuscle(this,''+m+'')">'+m+'</button>').join('');
+  document.getElementById('planner-cardio').innerHTML=MUSCLES_C.map(m=>'<button class="mpill cardio'+(db.selectedMuscles.includes(m)?' sel':'')+'" data-m="'+m+'" onclick="togglePlanMuscle(this,this.dataset.m)">'+m+'</button>').join('');
   renderMuscleSettings();
   renderSavedWorkouts();
   updateEstimate();
@@ -630,15 +630,15 @@ function renderMuscleSettings(){
     const s=db.muscleSettings[m]||{goal:'hypertrophy',sets:3,expm:2};
     return '<div style="display:grid;grid-template-columns:110px 1fr 1fr 1fr;align-items:center;gap:10px;padding:10px 0;border-bottom:0.5px solid var(--border);">'
       +'<div style="font-size:13px;font-weight:500;">'+m+'</div>'
-      +'<div class="form-group"><label class="form-label">Goal</label><select onchange="setMuscleSetting(''+m+'','goal',this.value)">'
+      +'<div class="form-group"><label class="form-label">Goal</label><select data-muscle="'+m+'" data-key="goal" onchange="setMuscleSetting(this.dataset.muscle,this.dataset.key,this.value)">'
       +'<option value="strength"'+(s.goal==='strength'?' selected':'')+'>Strength</option>'
       +'<option value="hypertrophy"'+(s.goal==='hypertrophy'?' selected':'')+'>Hypertrophy</option>'
       +'<option value="endurance"'+(s.goal==='endurance'?' selected':'')+'>Endurance</option>'
       +'</select></div>'
-      +'<div class="form-group"><label class="form-label">Sets</label><select onchange="setMuscleSetting(''+m+'','sets',parseInt(this.value))">'
+      +'<div class="form-group"><label class="form-label">Sets</label><select data-muscle="'+m+'" data-key="sets" onchange="setMuscleSetting(this.dataset.muscle,this.dataset.key,parseInt(this.value))">'
       +[2,3,4,5].map(n=>'<option value="'+n+'"'+(s.sets===n?' selected':'')+'>'+n+' sets</option>').join('')
       +'</select></div>'
-      +'<div class="form-group"><label class="form-label">Exercises</label><select onchange="setMuscleSetting(''+m+'','expm',parseInt(this.value))">'
+      +'<div class="form-group"><label class="form-label">Exercises</label><select data-muscle="'+m+'" data-key="expm" onchange="setMuscleSetting(this.dataset.muscle,this.dataset.key,parseInt(this.value))">'
       +[1,2,3,4].map(n=>'<option value="'+n+'"'+(s.expm===n?' selected':'')+'>'+n+'</option>').join('')
       +'</select></div>'
       +'</div>';
