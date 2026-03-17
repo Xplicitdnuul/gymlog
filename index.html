@@ -604,10 +604,19 @@ RECENT EXERCISES (avoid repeating if alternatives exist): ${recent.join(', ')||'
 Return ONLY valid JSON, no markdown:
 {"sessionTitle":"...","exercises":[{"name":"...","muscle":"...","sets":${sets},"reps":"10 reps","isRepeat":false,"isCardio":false,"tip":"..."}],"coachNote":"..."}`;
   try {
-    const res=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1000,messages:[{role:'user',content:prompt}]})});
+    const res=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:2000,messages:[{role:'user',content:prompt}]})});
     const data=await res.json();
     const txt=data.content.map(b=>b.text||'').join('').replace(/```json|```/g,'').trim();
-    const session=JSON.parse(txt);
+    let session;
+    try {
+      session=JSON.parse(txt);
+    } catch(parseErr) {
+      console.error('Raw AI response:', txt);
+      status.textContent='';
+      toast('AI response was incomplete. Please try again.','error');
+      btn.disabled=false;
+      return;
+    }
     db.pendingSession={...session,muscles:db.selectedMuscles,date:new Date().toISOString()};
     renderPlannerResult(session);status.textContent='';
   } catch(e){status.textContent='Error generating. Try again.';console.error(e);}
