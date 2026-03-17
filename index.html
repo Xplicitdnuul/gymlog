@@ -375,6 +375,12 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
+const APP_VERSION = '1.0.3';
+const storedVersion = localStorage.getItem('gymlog_version');
+if(storedVersion !== APP_VERSION) {
+  localStorage.removeItem('sb-hpyosiqjvsjtaeijsjnu-auth-token');
+  localStorage.setItem('gymlog_version', APP_VERSION);
+}
 const createClient = supabase.createClient;
 const sb = createClient(SUPA_URL, SUPA_KEY, {
   auth: {
@@ -458,11 +464,26 @@ sb.auth.onAuthStateChange(async (event,session) => {
     currentUser=session.user;
     document.getElementById('auth-screen').style.display='none';
     document.getElementById('app').style.display='flex';
-    await loadUserData();
-    renderOverview(); updateProfileUI();
+    try {
+      await loadUserData();
+      renderOverview(); updateProfileUI();
+    } catch(e) {
+      console.warn('Session load error, signing out cleanly:', e);
+      await sb.auth.signOut();
+    }
   } else {
+    currentUser=null;
+    db={...defaultDb};
     document.getElementById('auth-screen').style.display='flex';
     document.getElementById('app').style.display='none';
+  }
+});
+
+// On page load, verify the existing session is still valid
+window.addEventListener('load', async () => {
+  const { data: { session }, error } = await sb.auth.getSession();
+  if(error || !session) {
+    await sb.auth.signOut();
   }
 });
 
