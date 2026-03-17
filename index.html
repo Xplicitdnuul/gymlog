@@ -211,7 +211,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
       <div class="page-title">Plan a session</div>
       <div class="page-sub" id="planner-date"></div>
       <div class="card">
-        <div class="card-title">Which muscle groups?</div>
+        <div class="card-title">Select muscle groups</div>
         <div style="display:flex;gap:16px;margin-bottom:10px;flex-wrap:wrap;">
           <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);"><div style="width:8px;height:8px;border-radius:50%;background:var(--blue);"></div>Suggested by recency</div>
           <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);"><div style="width:8px;height:8px;border-radius:50%;background:var(--green);"></div>Linked to your goals</div>
@@ -220,30 +220,52 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
         <div class="muscle-grid" id="planner-weights"></div>
         <div class="section-sep" style="margin-top:14px;">Cardio</div>
         <div class="muscle-grid" id="planner-cardio"></div>
-        <div class="divider"></div>
-        <div class="card-title">How long do you have?</div>
-        <div style="display:flex;flex-wrap:wrap;gap:7px;margin-bottom:12px;" id="time-pills">
-          <button class="time-pill" onclick="selTime(this,'30')">30 min</button>
-          <button class="time-pill" onclick="selTime(this,'45')">45 min</button>
-          <button class="time-pill sel" onclick="selTime(this,'60')">60 min</button>
-          <button class="time-pill" onclick="selTime(this,'75')">75 min</button>
-          <button class="time-pill" onclick="selTime(this,'90')">90 min</button>
-          <button class="time-pill" onclick="selTime(this,'120')">120 min</button>
+      </div>
+
+      <div class="card" id="muscle-settings-card" style="display:none;">
+        <div class="card-title">Per-muscle settings</div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:12px;">Customise goal, sets, and exercises for each selected muscle group.</div>
+        <div id="muscle-settings-list"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Time available</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:4px;">
+          <div>
+            <div style="font-size:12px;color:var(--muted);margin-bottom:8px;">Lifting</div>
+            <div style="display:flex;flex-wrap:wrap;gap:7px;" id="time-pills-lifting">
+              <button class="time-pill" onclick="selTimeLift(this,'20')">20 min</button>
+              <button class="time-pill" onclick="selTimeLift(this,'30')">30 min</button>
+              <button class="time-pill" onclick="selTimeLift(this,'45')">45 min</button>
+              <button class="time-pill sel" onclick="selTimeLift(this,'60')">60 min</button>
+              <button class="time-pill" onclick="selTimeLift(this,'75')">75 min</button>
+              <button class="time-pill" onclick="selTimeLift(this,'90')">90 min</button>
+            </div>
+          </div>
+          <div>
+            <div style="font-size:12px;color:var(--muted);margin-bottom:8px;">Cardio</div>
+            <div style="display:flex;flex-wrap:wrap;gap:7px;" id="time-pills-cardio">
+              <button class="time-pill" onclick="selTimeCardio(this,'0')">Skip</button>
+              <button class="time-pill sel" onclick="selTimeCardio(this,'15')">15 min</button>
+              <button class="time-pill" onclick="selTimeCardio(this,'20')">20 min</button>
+              <button class="time-pill" onclick="selTimeCardio(this,'30')">30 min</button>
+              <button class="time-pill" onclick="selTimeCardio(this,'45')">45 min</button>
+            </div>
+          </div>
         </div>
-        <div class="divider"></div>
-        <div class="card-title">Session preferences</div>
-        <div class="form-row form-3">
-          <div class="form-group"><label class="form-label">Goal</label><select id="pl-goal"><option value="strength">Strength</option><option value="hypertrophy" selected>Hypertrophy</option><option value="endurance">Endurance</option></select></div>
-          <div class="form-group"><label class="form-label">Sets per exercise</label><select id="pl-sets"><option value="2">2 sets</option><option value="3" selected>3 sets</option><option value="4">4 sets</option><option value="5">5 sets</option></select></div>
-          <div class="form-group"><label class="form-label">Exercises per muscle</label><select id="pl-expm"><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option></select></div>
-        </div>
-        <div id="planner-estimate" class="banner banner-blue"></div>
+        <div id="planner-estimate" class="banner banner-blue" style="margin-top:12px;"></div>
         <div style="display:flex;gap:10px;margin-top:14px;">
           <button class="btn btn-dark" id="gen-btn" onclick="generateSession()">Generate session ↗</button>
           <span id="gen-status" style="font-size:13px;color:var(--muted);align-self:center;"></span>
         </div>
       </div>
       <div id="planner-result"></div>
+
+      <div class="card" style="margin-top:14px;">
+        <div class="card-title">Saved workouts</div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:12px;">Saved sessions you can load and log any time, without using the AI.</div>
+        <div id="saved-workouts-list"></div>
+      </div>
     </div>
 
     <div id="page-log" class="page">
@@ -262,23 +284,19 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 
     <div id="page-food" class="page">
       <div class="page-title">Nutrition</div>
-      <div class="page-sub">Track your daily macros</div>
+      <div class="page-sub">Log your daily macros</div>
       <div class="card">
-        <div class="card-title">Log food</div>
-        <div class="form-row form-2">
-          <div class="form-group"><label class="form-label">Food / meal</label><input type="text" id="food-name" placeholder="e.g. Chicken and rice"></div>
-          <div class="form-group"><label class="form-label">Meal type</label><select id="food-type"><option>Breakfast</option><option>Lunch</option><option>Dinner</option><option>Snack</option></select></div>
-        </div>
+        <div class="card-title">Today's intake</div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:14px;">Enter your totals for the day — update anytime, the entry will overwrite today's log.</div>
         <div class="form-row form-4">
-          <div class="form-group"><label class="form-label">Calories (kcal)</label><input type="number" id="food-kcal" placeholder="450" min="0"></div>
-          <div class="form-group"><label class="form-label">Protein (g)</label><input type="number" id="food-protein" placeholder="35" min="0"></div>
-          <div class="form-group"><label class="form-label">Carbs (g)</label><input type="number" id="food-carbs" placeholder="55" min="0"></div>
-          <div class="form-group"><label class="form-label">Fat (g)</label><input type="number" id="food-fat" placeholder="12" min="0"></div>
+          <div class="form-group"><label class="form-label">Calories (kcal)</label><input type="number" id="food-kcal" placeholder="2200" min="0"></div>
+          <div class="form-group"><label class="form-label">Protein (g)</label><input type="number" id="food-protein" placeholder="160" min="0"></div>
+          <div class="form-group"><label class="form-label">Carbs (g)</label><input type="number" id="food-carbs" placeholder="220" min="0"></div>
+          <div class="form-group"><label class="form-label">Fat (g)</label><input type="number" id="food-fat" placeholder="70" min="0"></div>
         </div>
-        <button class="btn btn-dark btn-sm" onclick="logFood()">Add entry</button>
+        <button class="btn btn-dark btn-sm" onclick="logFood()">Save today's macros</button>
       </div>
-      <div class="card"><div class="card-title">Today's totals</div><div id="food-totals"></div></div>
-      <div class="card"><div class="card-title">Today's entries</div><div id="food-list"></div></div>
+      <div class="card"><div class="card-title">Today's summary</div><div id="food-totals"></div></div>
       <div class="card"><div class="card-title">Macro trend — last 14 days</div><div class="chart-wrap" style="height:200px;"><canvas id="chart-macros"></canvas></div></div>
     </div>
 
@@ -375,7 +393,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.0.3';
+const APP_VERSION = '1.0.4';
 const storedVersion = localStorage.getItem('gymlog_version');
 if(storedVersion !== APP_VERSION) {
   localStorage.removeItem('sb-hpyosiqjvsjtaeijsjnu-auth-token');
@@ -488,7 +506,7 @@ window.addEventListener('load', async () => {
 });
 
 // ── DATA LAYER ───────────────────────────────────────────────────
-const defaultDb = { profile:{name:'',level:'intermediate',goal:'hypertrophy',calGoal:2200}, library:[], sessions:[], food:[], body:[], goals:[], rest:{strength:180,hyp:90,end:60,trans:120}, selectedMuscles:[], selectedTime:'60', progressFilter:'All', activeSession:null, pendingSession:null };
+const defaultDb = { profile:{name:'',level:'intermediate',goal:'hypertrophy',calGoal:2200}, library:[], sessions:[], food:[], body:[], goals:[], rest:{strength:180,hyp:90,end:60,trans:120}, selectedMuscles:[], selectedTime:'60', selectedTimeCardio:'15', muscleSettings:{}, progressFilter:'All', activeSession:null, pendingSession:null, savedWorkouts:[] };
 let db = {...defaultDb};
 
 async function loadUserData() {
@@ -507,6 +525,7 @@ async function loadUserData() {
   db.food = (food.data||[]).map(f=>({...f}));
   db.body = (body.data||[]).map(b=>({...b}));
   db.goals = (goals.data||[]).map(g=>({...g}));
+  try { db.savedWorkouts = JSON.parse(localStorage.getItem('gymlog_saved_workouts')||'[]'); } catch(e){ db.savedWorkouts=[]; }
 }
 
 async function saveProfile() {
@@ -587,20 +606,90 @@ function renderPlanner() {
   document.getElementById('planner-weights').innerHTML=MUSCLES_W.map(m=>{
     const days=daysSince(m),isSug=days>7,isGoal=goalMuscles.includes(m);
     const cls=['mpill',isGoal?'goal-linked':(isSug?'suggested':''),db.selectedMuscles.includes(m)?'sel':''].filter(Boolean).join(' ');
-    return `<button class="${cls}" onclick="togglePlanMuscle(this,'${m}')">${m}${days<999?` <span class="days-lbl">${days}d</span>`:''}</button>`;
+    return '<button class="'+cls+'" onclick="togglePlanMuscle(this,''+m+'')">'+m+(days<999?' <span class="days-lbl">'+days+'d</span>':'')+'</button>';
   }).join('');
-  document.getElementById('planner-cardio').innerHTML=MUSCLES_C.map(m=>`<button class="mpill cardio${db.selectedMuscles.includes(m)?' sel':''}" onclick="togglePlanMuscle(this,'${m}')">${m}</button>`).join('');
+  document.getElementById('planner-cardio').innerHTML=MUSCLES_C.map(m=>'<button class="mpill cardio'+(db.selectedMuscles.includes(m)?' sel':'')+'" onclick="togglePlanMuscle(this,''+m+'')">'+m+'</button>').join('');
+  renderMuscleSettings();
+  renderSavedWorkouts();
   updateEstimate();
 }
-function togglePlanMuscle(btn,m){btn.classList.toggle('sel');db.selectedMuscles=btn.classList.contains('sel')?[...db.selectedMuscles,m]:db.selectedMuscles.filter(x=>x!==m);updateEstimate();}
-function selTime(btn,t){document.querySelectorAll('.time-pill').forEach(p=>p.classList.remove('sel'));btn.classList.add('sel');db.selectedTime=t;updateEstimate();}
-function updateEstimate(){
-  const t=parseInt(db.selectedTime||60),sets=parseInt(document.getElementById('pl-sets')?.value||3),expm=parseInt(document.getElementById('pl-expm')?.value||2);
-  const muscles=db.selectedMuscles.filter(m=>MUSCLES_W.includes(m)).length,cardio=db.selectedMuscles.filter(m=>MUSCLES_C.includes(m)).length;
-  const estimated=Math.round((muscles*expm+cardio)*((sets*2)+(sets*(db.rest.hyp||90)/60))+cardio*20);
-  const el=document.getElementById('planner-estimate'); if(!el) return;
-  el.textContent=db.selectedMuscles.length?`Estimated ${estimated} min for ${muscles*expm+cardio} exercises × ${sets} sets. ${estimated>t?'⚠ Might be tight — consider reducing exercises.':'Fits comfortably in '+t+' min.'}`:'Select muscle groups to see an estimate.';
+
+function togglePlanMuscle(btn,m){
+  btn.classList.toggle('sel');
+  db.selectedMuscles=btn.classList.contains('sel')?[...db.selectedMuscles,m]:db.selectedMuscles.filter(x=>x!==m);
+  if(!btn.classList.contains('sel')) delete db.muscleSettings[m];
+  renderMuscleSettings(); updateEstimate();
 }
+
+function renderMuscleSettings(){
+  const weightSel=db.selectedMuscles.filter(m=>MUSCLES_W.includes(m));
+  const card=document.getElementById('muscle-settings-card');
+  if(!weightSel.length){card.style.display='none';return;}
+  card.style.display='block';
+  document.getElementById('muscle-settings-list').innerHTML=weightSel.map(m=>{
+    const s=db.muscleSettings[m]||{goal:'hypertrophy',sets:3,expm:2};
+    return '<div style="display:grid;grid-template-columns:110px 1fr 1fr 1fr;align-items:center;gap:10px;padding:10px 0;border-bottom:0.5px solid var(--border);">'
+      +'<div style="font-size:13px;font-weight:500;">'+m+'</div>'
+      +'<div class="form-group"><label class="form-label">Goal</label><select onchange="setMuscleSetting(''+m+'','goal',this.value)">'
+      +'<option value="strength"'+(s.goal==='strength'?' selected':'')+'>Strength</option>'
+      +'<option value="hypertrophy"'+(s.goal==='hypertrophy'?' selected':'')+'>Hypertrophy</option>'
+      +'<option value="endurance"'+(s.goal==='endurance'?' selected':'')+'>Endurance</option>'
+      +'</select></div>'
+      +'<div class="form-group"><label class="form-label">Sets</label><select onchange="setMuscleSetting(''+m+'','sets',parseInt(this.value))">'
+      +[2,3,4,5].map(n=>'<option value="'+n+'"'+(s.sets===n?' selected':'')+'>'+n+' sets</option>').join('')
+      +'</select></div>'
+      +'<div class="form-group"><label class="form-label">Exercises</label><select onchange="setMuscleSetting(''+m+'','expm',parseInt(this.value))">'
+      +[1,2,3,4].map(n=>'<option value="'+n+'"'+(s.expm===n?' selected':'')+'>'+n+'</option>').join('')
+      +'</select></div>'
+      +'</div>';
+  }).join('');
+}
+
+function setMuscleSetting(muscle,key,val){
+  if(!db.muscleSettings[muscle]) db.muscleSettings[muscle]={goal:'hypertrophy',sets:3,expm:2};
+  db.muscleSettings[muscle][key]=val; updateEstimate();
+}
+
+function selTimeLift(btn,t){
+  document.querySelectorAll('#time-pills-lifting .time-pill').forEach(p=>p.classList.remove('sel'));
+  btn.classList.add('sel'); db.selectedTime=t; updateEstimate();
+}
+function selTimeCardio(btn,t){
+  document.querySelectorAll('#time-pills-cardio .time-pill').forEach(p=>p.classList.remove('sel'));
+  btn.classList.add('sel'); db.selectedTimeCardio=t; updateEstimate();
+}
+
+function updateEstimate(){
+  const tLift=parseInt(db.selectedTime||60), tCardio=parseInt(db.selectedTimeCardio||15);
+  const weightSel=db.selectedMuscles.filter(m=>MUSCLES_W.includes(m));
+  const cardioSel=db.selectedMuscles.filter(m=>MUSCLES_C.includes(m));
+  let totalMin=0, totalEx=0;
+  weightSel.forEach(m=>{const s=db.muscleSettings[m]||{sets:3,expm:2};totalEx+=s.expm;totalMin+=s.expm*((s.sets*2)+(s.sets*(db.rest.hyp||90)/60));});
+  if(cardioSel.length) totalMin+=tCardio;
+  const el=document.getElementById('planner-estimate'); if(!el) return;
+  const budget=tLift+(cardioSel.length?tCardio:0);
+  el.textContent=db.selectedMuscles.length
+    ?'Estimated '+Math.round(totalMin)+' min for '+totalEx+' exercises.'+(cardioSel.length?' + '+tCardio+' min cardio.':'')+' Budget: '+budget+' min. '+(Math.round(totalMin)>budget?'Might be tight.':'Looks good.')
+    :'Select muscle groups to see an estimate.';
+}
+
+function renderSavedWorkouts(){
+  const el=document.getElementById('saved-workouts-list'); if(!el) return;
+  if(!db.savedWorkouts||!db.savedWorkouts.length){el.innerHTML='<p style="font-size:13px;color:var(--muted);">No saved workouts yet. Generate a session and save it for later.</p>';return;}
+  el.innerHTML=db.savedWorkouts.map((w,i)=>
+    '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:0.5px solid var(--border);">'
+    +'<div><div style="font-size:13px;font-weight:500;">'+w.sessionTitle+'</div>'
+    +'<div style="font-size:11px;color:var(--muted);">'+(w.muscles?w.muscles.join(', '):'')+' &middot; '+(w.exercises?w.exercises.length:0)+' exercises &middot; saved '+fmt(w.savedAt)+'</div></div>'
+    +'<div style="display:flex;gap:8px;">'
+    +'<button class="btn btn-dark btn-sm" onclick="loadSavedWorkout('+i+')">Load &amp; log</button>'
+    +'<button class="btn btn-sm" onclick="deleteSavedWorkout('+i+')">Delete</button>'
+    +'</div></div>'
+  ).join('');
+}
+
+function loadSavedWorkout(i){db.activeSession=JSON.parse(JSON.stringify(db.savedWorkouts[i]));showPage('log');}
+function deleteSavedWorkout(i){if(!confirm('Delete this saved workout?'))return;db.savedWorkouts.splice(i,1);saveSavedWorkouts();renderSavedWorkouts();}
+function saveSavedWorkouts(){localStorage.setItem('gymlog_saved_workouts',JSON.stringify(db.savedWorkouts||[]));}
 
 async function generateSession() {
   if(!db.selectedMuscles.length){alert('Pick at least one muscle group.');return;}
@@ -608,22 +697,20 @@ async function generateSession() {
   const btn=document.getElementById('gen-btn'),status=document.getElementById('gen-status');
   btn.disabled=true;status.innerHTML='<span class="loading"><span></span><span></span><span></span></span>';
   document.getElementById('planner-result').innerHTML='';
-  const goal=document.getElementById('pl-goal').value,sets=document.getElementById('pl-sets').value,expm=document.getElementById('pl-expm').value;
   const recent=db.sessions.slice(-5).flatMap(s=>s.exercises?s.exercises.map(e=>e.name):[]);
-  const libTxt=db.library.map(e=>`${e.name} (${e.muscle})`).join('\n');
+  const libTxt=db.library.map(e=>e.name+' ('+e.muscle+')').join('\n');
   const goalTxt=db.goals.map(g=>g.text).join(', ')||'None';
   const wm=db.selectedMuscles.filter(m=>MUSCLES_W.includes(m)),cm=db.selectedMuscles.filter(m=>MUSCLES_C.includes(m));
-  const prompt=`You are a personal trainer AI. Generate a gym session.
-MUSCLE GROUPS: ${wm.join(', ')||'None'}
-CARDIO: ${cm.join(', ')||'None'}
-GOAL: ${goal}, SETS: ${sets}, EXERCISES PER MUSCLE: ${expm}
-TIME AVAILABLE: ${db.selectedTime} min
-USER GOALS (slightly favour these, do not ignore other muscle groups): ${goalTxt}
-EXERCISE LIBRARY (ONLY use these, never invent any exercise):
-${libTxt}
-RECENT EXERCISES (avoid repeating if alternatives exist): ${recent.join(', ')||'None'}
-Return ONLY valid JSON, no markdown:
-{"sessionTitle":"...","exercises":[{"name":"...","muscle":"...","sets":${sets},"reps":"10 reps","isRepeat":false,"isCardio":false,"tip":"..."}],"coachNote":"..."}`;
+  const muscleLines=wm.map(m=>{const s=db.muscleSettings[m]||{goal:'hypertrophy',sets:3,expm:2};return '- '+m+': '+s.expm+' exercise(s), '+s.sets+' sets, goal='+s.goal;}).join('\n');
+  const prompt='You are a personal trainer AI. Generate a gym session.\n'
+    +'PER-MUSCLE INSTRUCTIONS:\n'+muscleLines+'\n'
+    +'CARDIO: '+(cm.length?cm.join(', ')+' - '+db.selectedTimeCardio+' min each':'None')+'\n'
+    +'USER GOALS (slightly favour, do not crowd out other muscles): '+goalTxt+'\n'
+    +'EXERCISE LIBRARY (ONLY use these, never invent):\n'+libTxt+'\n'
+    +'RECENT EXERCISES TO AVOID: '+(recent.length?recent.join(', '):'None')+'\n'
+    +'Reps guide: strength=3-6, hypertrophy=8-12, endurance=15-20. Apply per muscle based on its goal.\n'
+    +'Return ONLY valid JSON, no markdown, no extra text:\n'
+    +'{"sessionTitle":"...","exercises":[{"name":"...","muscle":"...","sets":3,"reps":"10 reps","isRepeat":false,"isCardio":false,"tip":"..."}],"coachNote":"..."}';
   try {
     const res=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:2000,messages:[{role:'user',content:prompt}]})});
     const data=await res.json();
@@ -645,20 +732,52 @@ Return ONLY valid JSON, no markdown:
 }
 
 function renderPlannerResult(s) {
-  document.getElementById('planner-result').innerHTML=`<div class="card">
-    <div style="font-size:16px;font-weight:500;margin-bottom:4px;">${s.sessionTitle}</div>
-    <div style="font-size:13px;color:var(--muted);margin-bottom:14px;">${s.exercises.length} exercises · ${db.selectedMuscles.join(', ')}</div>
-    ${s.coachNote?`<div class="banner banner-blue" style="margin-bottom:14px;">${s.coachNote}</div>`:''}
-    ${s.exercises.map(ex=>`<div style="padding:10px 0;border-bottom:0.5px solid var(--border);">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;"><span style="font-size:14px;font-weight:500;">${ex.name}</span><span class="${ex.isCardio?'tag-cardio':ex.isRepeat?'tag-repeat':'tag-new'}">${ex.isCardio?'cardio':ex.isRepeat?'repeated':'fresh pick'}</span></div>
-      <div style="font-size:12px;color:var(--muted);">${ex.muscle} · ${ex.isCardio?ex.reps:ex.sets+' × '+ex.reps}</div>
-      <div style="font-size:12px;color:var(--faint);font-style:italic;margin-top:3px;">${ex.tip}</div>
-    </div>`).join('')}
-    <div style="display:flex;gap:10px;margin-top:14px;">
-      <button class="btn btn-dark" onclick="startSession()">Start & log this session</button>
-      <button class="btn" onclick="generateSession()">Regenerate ↗</button>
-    </div>
-  </div>`;
+  const exRows=s.exercises.map((ex,i)=>{
+    const swapOptions=db.library.filter(l=>l.muscle===ex.muscle&&l.name!==ex.name);
+    const swapHtml=swapOptions.length
+      ?'<select onchange="swapExercise('+i+',this.value)" style="font-size:11px;padding:3px 6px;border:0.5px solid var(--border-md);border-radius:var(--radius-sm);background:var(--bg);color:var(--muted);margin-top:5px;width:auto;">'
+        +'<option value="">Swap exercise...</option>'
+        +swapOptions.map(o=>'<option value="'+o.name+'">'+o.name+'</option>').join('')
+        +'</select>'
+      :'';
+    return '<div style="padding:10px 0;border-bottom:0.5px solid var(--border);" id="ex-result-'+i+'">'
+      +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">'
+      +'<span style="font-size:14px;font-weight:500;">'+ex.name+'</span>'
+      +'<span class="'+(ex.isCardio?'tag-cardio':ex.isRepeat?'tag-repeat':'tag-new')+'">'+(ex.isCardio?'cardio':ex.isRepeat?'repeated':'fresh pick')+'</span>'
+      +'</div>'
+      +'<div style="font-size:12px;color:var(--muted);">'+ex.muscle+' &middot; '+(ex.isCardio?ex.reps:ex.sets+' &times; '+ex.reps)+'</div>'
+      +'<div style="font-size:12px;color:var(--faint);font-style:italic;margin-top:3px;">'+ex.tip+'</div>'
+      +swapHtml
+      +'</div>';
+  }).join('');
+  document.getElementById('planner-result').innerHTML='<div class="card">'
+    +'<div style="font-size:16px;font-weight:500;margin-bottom:4px;">'+s.sessionTitle+'</div>'
+    +'<div style="font-size:13px;color:var(--muted);margin-bottom:14px;">'+s.exercises.length+' exercises &middot; '+db.selectedMuscles.join(', ')+'</div>'
+    +(s.coachNote?'<div class="banner banner-blue" style="margin-bottom:14px;">'+s.coachNote+'</div>':'')
+    +exRows
+    +'<div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;">'
+    +'<button class="btn btn-dark" onclick="startSession()">Start &amp; log this session</button>'
+    +'<button class="btn" onclick="saveForLater()">Save for later</button>'
+    +'<button class="btn" onclick="generateSession()">Regenerate &#8599;</button>'
+    +'</div></div>';
+}
+
+function swapExercise(idx, newName){
+  if(!newName||!db.pendingSession) return;
+  const ex=db.pendingSession.exercises[idx];
+  const libEntry=db.library.find(l=>l.name===newName);
+  ex.name=newName;
+  ex.isRepeat=db.sessions.slice(-5).flatMap(s=>s.exercises?s.exercises.map(e=>e.name):[]).includes(newName);
+  renderPlannerResult(db.pendingSession);
+}
+
+function saveForLater(){
+  if(!db.pendingSession) return;
+  const w={...db.pendingSession, savedAt:new Date().toISOString()};
+  db.savedWorkouts.push(w);
+  saveSavedWorkouts();
+  toast('Workout saved!','ok');
+  renderSavedWorkouts();
 }
 
 function startSession(){if(!db.pendingSession)return;db.activeSession=JSON.parse(JSON.stringify(db.pendingSession));showPage('log');}
@@ -751,12 +870,26 @@ function renderProgressCharts(){
 
 // ── FOOD ──────────────────────────────────────────────────────────
 async function logFood(){
-  const name=document.getElementById('food-name').value.trim();if(!name)return;
   const today=new Date().toISOString().split('T')[0];
-  const entry={user_id:currentUser.id,name,meal_type:document.getElementById('food-type').value,kcal:parseInt(document.getElementById('food-kcal').value)||0,protein:parseInt(document.getElementById('food-protein').value)||0,carbs:parseInt(document.getElementById('food-carbs').value)||0,fat:parseInt(document.getElementById('food-fat').value)||0,log_date:today};
-  const {data:foodData,error:foodErr}=await sb.from('food_log').insert(entry).select().single();
-  if(foodErr){dbErr('Food log',foodErr);return;}if(foodData){db.food.push(foodData);toast('Food entry added.','ok');}
-  ['food-name','food-kcal','food-protein','food-carbs','food-fat'].forEach(id=>document.getElementById(id).value='');
+  const kcal=parseInt(document.getElementById('food-kcal').value)||0;
+  const protein=parseInt(document.getElementById('food-protein').value)||0;
+  const carbs=parseInt(document.getElementById('food-carbs').value)||0;
+  const fat=parseInt(document.getElementById('food-fat').value)||0;
+  if(!kcal&&!protein&&!carbs&&!fat){toast('Enter at least one macro value.','error');return;}
+  // Check if entry for today exists — update it, else insert
+  const existing=db.food.find(f=>f.log_date===today);
+  if(existing){
+    const {error:ue}=await sb.from('food_log').update({kcal,protein,carbs,fat}).eq('id',existing.id);
+    if(ue){dbErr('Update food',ue);return;}
+    existing.kcal=kcal;existing.protein=protein;existing.carbs=carbs;existing.fat=fat;
+    toast("Today's macros updated.",'ok');
+  } else {
+    const entry={user_id:currentUser.id,kcal,protein,carbs,fat,log_date:today};
+    const {data:foodData,error:foodErr}=await sb.from('food_log').insert(entry).select().single();
+    if(foodErr){dbErr('Food log',foodErr);return;}
+    if(foodData) db.food.push(foodData);
+    toast("Today's macros saved.",'ok');
+  }
   renderFood();
 }
 
@@ -764,17 +897,21 @@ let macroChart=null;
 function renderFood(){
   const today=new Date().toISOString().split('T')[0];
   const todayFood=db.food.filter(f=>f.log_date===today);
-  const tot={kcal:0,protein:0,carbs:0,fat:0};
-  todayFood.forEach(f=>{tot.kcal+=f.kcal;tot.protein+=f.protein;tot.carbs+=f.carbs;tot.fat+=f.fat;});
+  const entry=todayFood.length?todayFood[todayFood.length-1]:null;
+  const tot={kcal:entry?entry.kcal:0,protein:entry?entry.protein:0,carbs:entry?entry.carbs:0,fat:entry?entry.fat:0};
+  // Pre-fill form with today's values
+  if(entry){
+    ['kcal','protein','carbs','fat'].forEach(k=>{const el=document.getElementById('food-'+k);if(el&&tot[k])el.value=tot[k];});
+  }
   const pct=Math.min(100,Math.round(tot.kcal/(db.profile.calGoal||2200)*100));
-  document.getElementById('food-totals').innerHTML=`<div style="display:flex;justify-content:space-between;margin-bottom:6px;"><span style="color:var(--muted);">Calories</span><span style="font-weight:500;">${tot.kcal} / ${db.profile.calGoal||2200} kcal</span></div><div class="prog-bar" style="height:7px;margin-bottom:14px;"><div class="prog-fill" style="width:${pct}%;background:var(--text);"></div></div><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;"><div class="metric"><div class="metric-label">Protein</div><div class="metric-val">${tot.protein}g</div></div><div class="metric"><div class="metric-label">Carbs</div><div class="metric-val">${tot.carbs}g</div></div><div class="metric"><div class="metric-label">Fat</div><div class="metric-val">${tot.fat}g</div></div></div>`;
-  document.getElementById('food-list').innerHTML=todayFood.length?todayFood.map(f=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:0.5px solid var(--border);"><div><div style="font-size:13px;font-weight:500;">${f.name}</div><div style="font-size:11px;color:var(--muted);">${f.meal_type} · P:${f.protein}g C:${f.carbs}g F:${f.fat}g</div></div><div style="display:flex;align-items:center;gap:10px;"><span style="font-weight:500;">${f.kcal} kcal</span><button onclick="deleteFood(${f.id})" style="background:none;border:none;cursor:pointer;color:var(--faint);font-size:15px;">×</button></div></div>`).join(''):'<p style="color:var(--muted);font-size:13px;">No entries today.</p>';
+  document.getElementById('food-totals').innerHTML='<div style="display:flex;justify-content:space-between;margin-bottom:6px;"><span style="color:var(--muted);">Calories</span><span style="font-weight:500;">'+tot.kcal+' / '+(db.profile.calGoal||2200)+' kcal</span></div><div class="prog-bar" style="height:7px;margin-bottom:14px;"><div class="prog-fill" style="width:'+pct+'%;background:var(--text);"></div></div><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;"><div class="metric"><div class="metric-label">Protein</div><div class="metric-val">'+tot.protein+'g</div></div><div class="metric"><div class="metric-label">Carbs</div><div class="metric-val">'+tot.carbs+'g</div></div><div class="metric"><div class="metric-label">Fat</div><div class="metric-val">'+tot.fat+'g</div></div></div>';
+
   if(macroChart){try{macroChart.destroy();}catch(e){}}
   const days=[...Array(14)].map((_,i)=>{const d=new Date();d.setDate(d.getDate()-13+i);return d.toISOString().split('T')[0];});
   const tc='rgba(0,0,0,0.35)',gc='rgba(0,0,0,0.06)';
   macroChart=new Chart(document.getElementById('chart-macros'),{type:'bar',data:{labels:days.map(d=>d.slice(5)),datasets:[{label:'Protein',data:days.map(d=>db.food.filter(f=>f.log_date===d).reduce((s,f)=>s+f.protein,0)),backgroundColor:'#2E7D32',stack:'a',borderRadius:2},{label:'Carbs',data:days.map(d=>db.food.filter(f=>f.log_date===d).reduce((s,f)=>s+f.carbs,0)),backgroundColor:'#1A56A0',stack:'a',borderRadius:2},{label:'Fat',data:days.map(d=>db.food.filter(f=>f.log_date===d).reduce((s,f)=>s+f.fat,0)),backgroundColor:'#92600A',stack:'a',borderRadius:2}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:true,labels:{font:{size:11},boxWidth:10}}},scales:{x:{ticks:{color:tc,font:{size:11}},grid:{display:false},border:{display:false},stacked:true},y:{ticks:{color:tc},grid:{color:gc},border:{display:false},stacked:true}}}});
 }
-async function deleteFood(id){const{error:dfErr}=await sb.from('food_log').delete().eq('id',id);if(dfErr){dbErr('Delete food',dfErr);return;}db.food=db.food.filter(f=>f.id!==id);renderFood();}
+
 
 // ── BODY ──────────────────────────────────────────────────────────
 async function logBody(){
