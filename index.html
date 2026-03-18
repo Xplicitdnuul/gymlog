@@ -449,7 +449,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.1.9';
+const APP_VERSION = '1.2.0';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -490,8 +490,10 @@ const sb = createClient(SUPA_URL, SUPA_KEY, {
 // the token is always fresh regardless of tab state or browser throttling
 setInterval(async () => {
   if(!currentUser) return;
+  console.log('Poll: checking session...');
   const { data, error } = await sb.auth.getSession();
   if(error || !data.session) {
+    console.warn('Poll: session expired or lost, signing out');
     currentUser = null;
     db = {...defaultDb};
     document.getElementById('app').style.display = 'none';
@@ -635,6 +637,7 @@ let db = {...defaultDb};
 
 async function loadUserData() {
   const uid = currentUser.id;
+  console.log('loadUserData start, uid:', uid);
   const [prof, lib, sess, food, body, goals, draft] = await Promise.all([
     sb.from('profiles').select('*').eq('id',uid).maybeSingle(),
     sb.from('library').select('*').eq('user_id',uid).order('name'),
@@ -645,6 +648,7 @@ async function loadUserData() {
     sb.from('sessions').select('*').eq('user_id',uid).eq('is_draft',true).order('created_at').limit(1),
   ]);
   if(prof.data){ const p=prof.data; db.profile={name:p.name||'',level:p.level||'intermediate',goal:p.goal||'hypertrophy',calGoal:p.cal_goal||2200}; try{if(p.rest)db.rest={...db.rest,...JSON.parse(p.rest)};}catch(e){} } else { const{error:autoErr}=await sb.from('profiles').upsert({id:uid,name:'',level:'intermediate',goal:'hypertrophy',cal_goal:2200,rest:JSON.stringify({strength:180,hyp:90,end:60,trans:120})}); if(autoErr) console.warn('Auto profile:',autoErr); }
+  console.log('loadUserData results - prof:', prof.error||prof.data?.name, 'lib:', lib.data?.length, 'sess:', sess.data?.length, 'lib error:', lib.error, 'sess error:', sess.error);
   db.library = (lib.data||[]).map(e=>({id:e.id,name:e.name,muscle:e.muscle}));
   db.sessions = (sess.data||[]).filter(s=>!s.is_draft).map(s=>({...s, sessionTitle:s.title||s.sessionTitle||'Session', exercises:JSON.parse(s.exercises||'[]'), muscles:JSON.parse(s.muscles||'[]')}));
   db.food = (food.data||[]).map(f=>({...f}));
@@ -678,6 +682,7 @@ async function loadUserData() {
     muscles: typeof w.muscles==='string'?JSON.parse(w.muscles||'[]'):(w.muscles||[]),
     exercises: typeof w.exercises==='string'?JSON.parse(w.exercises||'[]'):(w.exercises||[])
   }));
+  console.log('loadUserData complete - library:', db.library.length, 'sessions:', db.sessions.length, 'profile name:', db.profile.name);
 }
 
 async function saveProfile() {
