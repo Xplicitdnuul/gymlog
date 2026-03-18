@@ -449,7 +449,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.2.5';
+const APP_VERSION = '1.2.6';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -486,9 +486,6 @@ const sb = createClient(SUPA_URL, SUPA_KEY, {
 });
 
 // Proactive token refresh — runs every 4 minutes
-// Uses refreshSession() directly rather than getSession() to avoid
-// triggering onAuthStateChange with SIGNED_IN which would cause
-// a full data reload on every poll tick.
 setInterval(async () => {
   if(!currentUser) return;
   try {
@@ -497,7 +494,40 @@ setInterval(async () => {
   } catch(e) {
     console.warn('Poll: refresh error:', e.message);
   }
-}, 4 * 60 * 1000); // every 4 minutes
+}, 4 * 60 * 1000);
+
+// When network comes back after OS power suspension, re-validate the session
+// and reload data if needed. This is the primary cause of the idle break issue.
+window.addEventListener('online', async () => {
+  console.log('Network restored — re-validating session...');
+  if(!currentUser) return;
+  try {
+    const { data, error } = await sb.auth.getSession();
+    if(error || !data.session) {
+      console.warn('Session lost after network restore — signing out');
+      currentUser = null;
+      _dataLoadedForUid = null;
+      db = {...defaultDb};
+      document.getElementById('app').style.display = 'none';
+      document.getElementById('auth-screen').style.display = 'flex';
+      toast('Session expired. Please sign in again.', 'error');
+    } else {
+      // Session still valid — refresh token and reload data if needed
+      await sb.auth.refreshSession();
+      if(db.library.length === 0 || db.profile.name === '') {
+        console.log('Data missing after network restore — reloading...');
+        _dataLoadedForUid = null;
+        await loadUserData();
+        updateProfileUI();
+        updateNavBadge();
+        const activePage = document.querySelector('.page.active')?.id?.replace('page-','');
+        if(activePage) showPage(activePage);
+      }
+    }
+  } catch(e) {
+    console.warn('Network restore check failed:', e.message);
+  }
+});
 
 let currentUser = null;
 
