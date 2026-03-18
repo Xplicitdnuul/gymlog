@@ -556,7 +556,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.2.9';
+const APP_VERSION = '1.3.0';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -789,6 +789,13 @@ const defaultDb = { profile:{name:'',level:'intermediate',goal:'hypertrophy',cal
 let db = {...defaultDb};
 
 let _loadingData = false;
+
+// Safe JSON parse — if value is already an object/array, return it directly
+function safeJSON(val, fallback=[]) {
+  if(!val) return fallback;
+  if(typeof val === 'object') return val;
+  try { return JSON.parse(val); } catch(e) { return fallback; }
+}
 async function loadUserData() {
   if(_loadingData) { console.warn('loadUserData already running, skipping'); return; }
   _loadingData = true;
@@ -837,7 +844,7 @@ async function loadUserData() {
   }
 
   db.library = (lib.data||[]).map(e=>({id:e.id,name:e.name,muscle:e.muscle}));
-  db.sessions = (sess.data||[]).filter(s=>!s.is_draft).map(s=>({...s, sessionTitle:s.title||s.sessionTitle||'Session', exercises:JSON.parse(s.exercises||'[]'), muscles:JSON.parse(s.muscles||'[]')}));
+  db.sessions = (sess.data||[]).filter(s=>!s.is_draft).map(s=>({...s, sessionTitle:s.title||s.sessionTitle||'Session', exercises:safeJSON(s.exercises,[]), muscles:safeJSON(s.muscles,[])}));
   db.food = (food.data||[]).map(f=>({...f}));
   db.body = (body.data||[]).map(b=>({...b}));
   db.goals = (goals.data||[]).map(g=>({...g}));
@@ -852,8 +859,8 @@ async function loadUserData() {
     } else {
     db.activeSession={
       sessionTitle:d.title||'Session',
-      muscles:typeof d.muscles==='string'?JSON.parse(d.muscles||'[]'):(d.muscles||[]),
-      exercises:typeof d.exercises==='string'?JSON.parse(d.exercises||'[]'):(d.exercises||[]),
+      muscles:safeJSON(d.muscles,[]),
+      exercises:safeJSON(d.exercises,[]),
       sessionNote:d.note||'',
       date:d.date,
       draft_id:d.id,
@@ -866,8 +873,8 @@ async function loadUserData() {
     ...w,
     sessionTitle: w.title||w.sessionTitle||'Workout',
     savedAt: w.saved_at||w.savedAt||new Date().toISOString(),
-    muscles: typeof w.muscles==='string'?JSON.parse(w.muscles||'[]'):(w.muscles||[]),
-    exercises: typeof w.exercises==='string'?JSON.parse(w.exercises||'[]'):(w.exercises||[])
+    muscles: safeJSON(w.muscles,[]),
+    exercises: safeJSON(w.exercises,[])
   }));
   console.log('loadUserData complete - library:', db.library.length, 'sessions:', db.sessions.length, 'profile name:', db.profile.name);
   _loadingData = false;
@@ -942,7 +949,7 @@ async function refreshData(){
     sb.from('food_log').select('*').eq('user_id',uid).order('created_at'),
     sb.from('body_log').select('*').eq('user_id',uid).order('date'),
   ]);
-  if(sess.data) db.sessions=sess.data.filter(s=>!s.is_draft).map(s=>({...s,sessionTitle:s.title||s.sessionTitle||'Session',exercises:JSON.parse(s.exercises||'[]'),muscles:JSON.parse(s.muscles||'[]')}));
+  if(sess.data) db.sessions=sess.data.filter(s=>!s.is_draft).map(s=>({...s,sessionTitle:s.title||s.sessionTitle||'Session',exercises:safeJSON(s.exercises,[]),muscles:safeJSON(s.muscles,[])}));
   if(food.data) db.food=food.data;
   if(body.data) db.body=body.data;
   } catch(e){ console.error('refreshData error:',e); } finally { _refreshing=false; }
@@ -1063,8 +1070,8 @@ function renderSavedWorkouts(){
 function loadSavedWorkout(i){
   const w = db.savedWorkouts[i];
   if(!w){ toast('Workout not found.','error'); return; }
-  const exercises = typeof w.exercises === 'string' ? JSON.parse(w.exercises) : (w.exercises||[]);
-  const muscles = typeof w.muscles === 'string' ? JSON.parse(w.muscles) : (w.muscles||[]);
+  const exercises = safeJSON(w.exercises,[]);
+  const muscles = safeJSON(w.muscles,[]);
   db.activeSession = {
     sessionTitle: w.sessionTitle || w.title || 'Custom workout',
     exercises: JSON.parse(JSON.stringify(exercises)),
