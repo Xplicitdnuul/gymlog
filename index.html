@@ -437,7 +437,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.1.1';
 const storedVersion = localStorage.getItem('gymlog_version');
 if(storedVersion !== APP_VERSION) {
   localStorage.removeItem('sb-hpyosiqjvsjtaeijsjnu-auth-token');
@@ -449,8 +449,22 @@ const sb = createClient(SUPA_URL, SUPA_KEY, {
     storage: window.localStorage,
     autoRefreshToken: true,
     persistSession: true,
-    detectSessionInUrl: true,
-    lock: async (name, acquireTimeout, fn) => fn()
+    detectSessionInUrl: true
+  }
+});
+
+// When tab becomes visible again after idle, force session refresh
+document.addEventListener('visibilitychange', async () => {
+  if(document.visibilityState === 'visible') {
+    const { data, error } = await sb.auth.getSession();
+    if(error || !data.session) {
+      // Session truly expired - sign out cleanly instead of getting stuck
+      await sb.auth.signOut();
+      toast('Your session expired. Please sign in again.', 'error');
+    } else {
+      // Valid session - refresh the token silently
+      await sb.auth.refreshSession();
+    }
   }
 });
 
@@ -578,7 +592,7 @@ async function loadUserData() {
     sb.from('goals').select('*').eq('user_id',uid).order('created_at'),
   ]);
   if(prof.data){ const p=prof.data; db.profile={name:p.name||'',level:p.level||'intermediate',goal:p.goal||'hypertrophy',calGoal:p.cal_goal||2200}; try{if(p.rest)db.rest={...db.rest,...JSON.parse(p.rest)};}catch(e){} } else { const{error:autoErr}=await sb.from('profiles').upsert({id:uid,name:'',level:'intermediate',goal:'hypertrophy',cal_goal:2200,rest:JSON.stringify({strength:180,hyp:90,end:60,trans:120})}); if(autoErr) console.warn('Auto profile:',autoErr); }
-  db.library = (lib.data||[]).map(e=>({name:e.name,muscle:e.muscle}));
+  db.library = (lib.data||[]).map(e=>({id:e.id,name:e.name,muscle:e.muscle}));
   db.sessions = (sess.data||[]).map(s=>({...s, exercises:JSON.parse(s.exercises||'[]'), muscles:JSON.parse(s.muscles||'[]')}));
   db.food = (food.data||[]).map(f=>({...f}));
   db.body = (body.data||[]).map(b=>({...b}));
@@ -1056,11 +1070,15 @@ async function renderBuilder(){
   const pick = document.getElementById('builder-ex-pick');
   if(!pick) return;
   const grouped = {};
-  db.library.forEach(e=>{ if(!grouped[e.muscle]) grouped[e.muscle]=[]; grouped[e.muscle].push(e.name); });
+  db.library.forEach(e=>{
+    const primary = e.muscle.split(',')[0].trim();
+    if(!grouped[primary]) grouped[primary]=[];
+    grouped[primary].push({name:e.name, muscle:e.muscle});
+  });
   pick.innerHTML = '<option value="">Select from library...</option>'
     + Object.keys(grouped).sort().map(muscle=>
         '<optgroup label="'+muscle+'">'
-        + grouped[muscle].map(name=>'<option value="'+name+'" data-muscle="'+muscle+'">'+name+'</option>').join('')
+        + grouped[muscle].map(ex=>'<option value="'+ex.name+'" data-muscle="'+ex.muscle+'">'+ex.name+'</option>').join('')
         +'</optgroup>'
       ).join('');
   renderBuilderList();
@@ -1070,11 +1088,11 @@ function builderAddExercise(){
   const pick = document.getElementById('builder-ex-pick');
   const name = pick.value;
   if(!name){ toast('Select an exercise first.','error'); return; }
-  const opt = pick.querySelector('option[value="'+name+'"]');
-  const muscle = opt ? opt.dataset.muscle : 'General';
+  const opt = pick.options[pick.selectedIndex];
+  const muscle = opt ? (opt.dataset.muscle||opt.parentElement.label||'General') : 'General';
   const sets = parseInt(document.getElementById('builder-sets').value)||3;
   const reps = document.getElementById('builder-reps').value.trim()||'10 reps';
-  const isCardio = muscle === 'Cardio';
+  const isCardio = muscle.toLowerCase().includes('cardio');
   builderExercises.push({name, muscle, sets, reps, isRepeat:false, isCardio, tip:''});
   pick.value = '';
   document.getElementById('builder-reps').value = '';
@@ -1119,21 +1137,22 @@ function builderRemove(i){
 }
 
 async function builderSave(){
+  if(!currentUser){ toast('Not logged in.','error'); return; }
   const title = document.getElementById('builder-title').value.trim() || 'Custom workout';
   if(!builderExercises.length){ toast('Add at least one exercise first.','error'); return; }
-  const muscles = [...new Set(builderExercises.map(e=>e.muscle))];
+  // Flatten muscle tags to unique list
+  const muscles = [...new Set(builderExercises.flatMap(e=>e.muscle.split(',').map(m=>m.trim())))];
   const workout = {
     sessionTitle: title,
-    exercises: builderExercises,
+    exercises: JSON.parse(JSON.stringify(builderExercises)),
     muscles,
     coachNote: '',
     savedAt: new Date().toISOString()
   };
   if(!db.savedWorkouts) db.savedWorkouts = [];
-  const saved=await saveSavedWorkouts(workout);
+  const saved = await saveSavedWorkouts(workout);
   if(saved){
-    db.savedWorkouts.push({...workout,...saved,sessionTitle:saved.title,
-      muscles:workout.muscles,exercises:workout.exercises});
+    db.savedWorkouts.push({...workout, id:saved.id, sessionTitle:title, muscles, exercises:workout.exercises});
     toast('Workout "'+title+'" saved!','ok');
     builderClear();
     renderSavedWorkouts();
@@ -1151,12 +1170,23 @@ function builderClear(){
 async function importLib(){
   const raw=document.getElementById('lib-paste').value.trim();if(!raw)return;
   const lines=raw.split('\n').map(l=>l.trim()).filter(Boolean);
-  const parsed=lines.map(l=>{const p=l.split(':');return{name:p[0].trim(),muscle:p[1]?p[1].trim():'General'};});
+  const parsed=lines.map(l=>{
+    const colonIdx=l.indexOf(':');
+    const name=colonIdx>-1?l.slice(0,colonIdx).trim():l.trim();
+    const muscleRaw=colonIdx>-1?l.slice(colonIdx+1).trim():'General';
+    // Support multiple muscles separated by comma: "Exercise: Chest, Shoulders"
+    const muscles=muscleRaw.split(',').map(m=>m.trim()).filter(Boolean);
+    return {name, muscle:muscles.join(', ')};
+  });
   const newEx=parsed.filter(e=>!db.library.find(x=>x.name.toLowerCase()===e.name.toLowerCase()));
-  if(!newEx.length){alert('All exercises already in library.');return;}
+  if(!newEx.length){toast('All exercises already in library.','error');return;}
   const rows=newEx.map(e=>({user_id:currentUser.id,name:e.name,muscle:e.muscle}));
   const {data:libData,error:libErr}=await sb.from('library').insert(rows).select();
-  if(libErr){dbErr('Library insert',libErr);return;}if(libData){db.library=[...db.library,...libData.map(d=>({name:d.name,muscle:d.muscle}))].sort((a,b)=>a.name.localeCompare(b.name));toast(newEx.length+' exercises added.','ok');}
+  if(libErr){dbErr('Library insert',libErr);return;}
+  if(libData){
+    db.library=[...db.library,...libData.map(d=>({id:d.id,name:d.name,muscle:d.muscle}))].sort((a,b)=>a.name.localeCompare(b.name));
+    toast(newEx.length+' exercises added.','ok');
+  }
   document.getElementById('lib-paste').value='';renderLibrary();
 }
 async function clearLib(){
@@ -1168,15 +1198,73 @@ async function renderLibrary(){
   if(!currentUser) return;
   document.getElementById('lib-count').textContent='...';
   document.getElementById('lib-display').innerHTML='<p style="font-size:13px;color:var(--muted);">Loading...</p>';
-  const {data,error} = await sb.from('library').select('*').eq('user_id',currentUser.id).order('name');
-  if(error){ dbErr('Load library',error); return; }
-  db.library = (data||[]).map(e=>({name:e.name,muscle:e.muscle}));
+  const {data,error}=await sb.from('library').select('*').eq('user_id',currentUser.id).order('name');
+  if(error){dbErr('Load library',error);return;}
+  db.library=(data||[]).map(e=>({id:e.id,name:e.name,muscle:e.muscle}));
   document.getElementById('lib-count').textContent=db.library.length;
   if(!db.library.length){
     document.getElementById('lib-display').innerHTML='<p style="font-size:13px;color:var(--muted);">No exercises yet. Paste your list above and click Import.</p>';
     return;
   }
-  document.getElementById('lib-display').innerHTML=db.library.map(e=>'<span style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:20px;background:var(--bg);border:0.5px solid var(--border);font-size:12px;color:var(--muted);">'+e.name+' <span style="opacity:0.5;font-size:10px;">'+e.muscle+'</span></span>').join('');
+  // Group by primary muscle
+  const groups={};
+  db.library.forEach(e=>{
+    const primary=e.muscle.split(',')[0].trim();
+    if(!groups[primary]) groups[primary]=[];
+    groups[primary].push(e);
+  });
+  let html2='';
+  Object.keys(groups).sort().forEach(muscle=>{
+    html2+='<div style="margin-bottom:14px;">'
+      +'<div style="font-size:11px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:8px;">'+muscle+'</div>';
+    groups[muscle].forEach(e=>{
+      html2+='<div id="lib-row-'+e.id+'" style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:0.5px solid var(--border);">'
+        +'<div style="flex:1;">'
+        +'<div style="font-size:13px;font-weight:500;">'+e.name+'</div>'
+        +'<div style="font-size:11px;color:var(--muted);">'+e.muscle+'</div>'
+        +'</div>'
+        +'<button onclick="editExercise('+e.id+')" style="background:none;border:0.5px solid var(--border-md);border-radius:var(--radius-sm);padding:4px 10px;font-size:12px;color:var(--muted);cursor:pointer;margin-right:6px;">Edit</button>'
+        +'<button onclick="deleteExercise('+e.id+')" style="background:none;border:none;cursor:pointer;color:var(--faint);font-size:16px;">×</button>'
+        +'</div>';
+    });
+    html2+='</div>';
+  });
+  document.getElementById('lib-display').innerHTML=html2;
+}
+
+function editExercise(id){
+  const ex=db.library.find(e=>e.id===id); if(!ex) return;
+  const row=document.getElementById('lib-row-'+id); if(!row) return;
+  row.innerHTML='<div style="flex:1;display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:4px 0;">'
+    +'<div class="form-group"><label class="form-label">Exercise name</label>'
+    +'<input type="text" id="edit-name-'+id+'" value="'+ex.name+'"></div>'
+    +'<div class="form-group"><label class="form-label">Muscle groups (comma-separated)</label>'
+    +'<input type="text" id="edit-muscle-'+id+'" value="'+ex.muscle+'" placeholder="e.g. Chest, Shoulders"></div>'
+    +'</div>'
+    +'<div style="display:flex;gap:6px;align-items:center;padding-left:8px;">'
+    +'<button onclick="saveExercise('+id+')" class="btn btn-dark btn-sm">Save</button>'
+    +'<button onclick="renderLibrary()" class="btn btn-sm">Cancel</button>'
+    +'</div>';
+}
+
+async function saveExercise(id){
+  const name=document.getElementById('edit-name-'+id)?.value.trim();
+  const muscle=document.getElementById('edit-muscle-'+id)?.value.trim();
+  if(!name||!muscle){toast('Name and muscle group are required.','error');return;}
+  const {error}=await sb.from('library').update({name,muscle}).eq('id',id);
+  if(error){dbErr('Update exercise',error);return;}
+  const ex=db.library.find(e=>e.id===id);
+  if(ex){ex.name=name;ex.muscle=muscle;}
+  toast('Exercise updated.','ok');
+  renderLibrary();
+}
+
+async function deleteExercise(id){
+  if(!confirm('Delete this exercise?')) return;
+  const {error}=await sb.from('library').delete().eq('id',id);
+  if(error){dbErr('Delete exercise',error);return;}
+  db.library=db.library.filter(e=>e.id!==id);
+  renderLibrary();
 }
 
 // ── SETTINGS ──────────────────────────────────────────────────────
