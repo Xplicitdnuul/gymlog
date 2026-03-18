@@ -437,7 +437,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.0.8';
+const APP_VERSION = '1.0.9';
 const storedVersion = localStorage.getItem('gymlog_version');
 if(storedVersion !== APP_VERSION) {
   localStorage.removeItem('sb-hpyosiqjvsjtaeijsjnu-auth-token');
@@ -644,8 +644,22 @@ function showPage(id) {
   if(renders[id]) renders[id]();
 }
 
+
+async function refreshData(){
+  if(!currentUser) return;
+  const uid=currentUser.id;
+  const [sess, food, body] = await Promise.all([
+    sb.from('sessions').select('*').eq('user_id',uid).order('date'),
+    sb.from('food_log').select('*').eq('user_id',uid).order('created_at'),
+    sb.from('body_log').select('*').eq('user_id',uid).order('date'),
+  ]);
+  if(sess.data) db.sessions=sess.data.map(s=>({...s,exercises:JSON.parse(s.exercises||'[]'),muscles:JSON.parse(s.muscles||'[]')}));
+  if(food.data) db.food=food.data;
+  if(body.data) db.body=body.data;
+}
 // ── OVERVIEW ──────────────────────────────────────────────────────
-function renderOverview() {
+async function renderOverview() {
+  await refreshData();
   document.getElementById('overview-date').textContent=new Date().toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
   const today=new Date().toISOString().split('T')[0];
   const todayFood=db.food.filter(f=>f.log_date===today);
@@ -930,7 +944,8 @@ function discardSession(){db.activeSession=null;showPage('overview');}
 
 // ── PROGRESS ──────────────────────────────────────────────────────
 let progressCharts={};
-function renderProgress(){
+async function renderProgress(){
+  await refreshData();
   document.getElementById('progress-filters').innerHTML=['All',...MUSCLES_W,...MUSCLES_C].map(m=>`<button class="filter-pill${m===db.progressFilter?' sel':''}" onclick="setProgressFilter('${m}')">${m}</button>`).join('');
   renderProgressCharts();
 }
