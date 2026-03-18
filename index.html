@@ -167,6 +167,31 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 .draft-pulse { animation:pulse 2s infinite; }
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
 .draft-banner { background:var(--amber-bg); border:0.5px solid #FFC107; border-radius:var(--radius-sm); padding:10px 14px; margin-bottom:14px; font-size:13px; color:var(--amber); display:flex; align-items:center; justify-content:space-between; }
+
+.cal-cell { aspect-ratio:1; border-radius:2px; }
+.cal-0 { background:var(--bg); }
+.cal-1 { background:#C0DD97; }
+.cal-2 { background:#97C459; }
+.cal-3 { background:#639922; }
+.cal-4 { background:#3B6D11; }
+.muscle-cell { background:var(--bg); border-radius:var(--radius-sm); padding:9px 10px; }
+.muscle-cell.hot { background:#EAF3DE; }
+.muscle-cell.warm { background:#EDF7EE; }
+.muscle-cell.stale { background:#FEF6E6; }
+.muscle-name { font-size:12px; font-weight:500; color:var(--text); }
+.muscle-days { font-size:10px; color:var(--faint); margin-top:1px; }
+.muscle-vol { font-size:10px; color:var(--muted); margin-top:1px; }
+.goal-prog-row { padding:9px 0; border-bottom:0.5px solid var(--border); }
+.goal-prog-row:last-child { border-bottom:none; }
+.cmp-row { display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:0.5px solid var(--border); font-size:13px; }
+.cmp-row:last-child { border-bottom:none; }
+.cmp-label { width:110px; color:var(--muted); flex-shrink:0; font-size:12px; }
+.cmp-bars { flex:1; display:flex; flex-direction:column; gap:3px; }
+.cmp-bar { height:5px; border-radius:3px; }
+.pr-entry { display:flex; align-items:center; justify-content:space-between; padding:9px 0; border-bottom:0.5px solid var(--border); }
+.pr-entry:last-child { border-bottom:none; }
+.pr-badge { font-size:10px; font-weight:500; padding:2px 7px; border-radius:20px; background:#EAF3DE; color:#27500A; }
+.card.hidden-card > *:not(:first-child) { display:none !important; }
 </style>
 </head>
 <body>
@@ -306,10 +331,92 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 
     <div id="page-progress" class="page">
       <div class="page-title">Progress</div>
-      <div class="page-sub">Filter by muscle group to see relevant charts</div>
-      <div class="card-title">Filter by muscle group</div>
-      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:18px;" id="progress-filters"></div>
-      <div id="progress-content"></div>
+      <div class="page-sub" id="progress-sub">Your training at a glance</div>
+
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:20px;" id="period-filters">
+        <button class="filter-pill sel" onclick="setPeriod(this,30)">30 days</button>
+        <button class="filter-pill" onclick="setPeriod(this,90)">3 months</button>
+        <button class="filter-pill" onclick="setPeriod(this,180)">6 months</button>
+        <button class="filter-pill" onclick="setPeriod(this,0)">All time</button>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;" id="progress-metrics"></div>
+
+      <div class="card" id="card-calendar">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+          <div class="card-title" style="margin-bottom:0;">Training calendar</div>
+          <button class="btn btn-sm" onclick="toggleCard('card-calendar')">hide</button>
+        </div>
+        <div id="cal-grid" style="display:grid;grid-template-columns:repeat(26,1fr);gap:2px;"></div>
+        <div style="display:flex;gap:10px;margin-top:8px;font-size:11px;color:var(--muted);align-items:center;">
+          <span>Less</span>
+          <div style="display:flex;gap:3px;">
+            <div style="width:10px;height:10px;border-radius:2px;background:var(--bg);"></div>
+            <div style="width:10px;height:10px;border-radius:2px;background:#C0DD97;"></div>
+            <div style="width:10px;height:10px;border-radius:2px;background:#97C459;"></div>
+            <div style="width:10px;height:10px;border-radius:2px;background:#639922;"></div>
+            <div style="width:10px;height:10px;border-radius:2px;background:#3B6D11;"></div>
+          </div>
+          <span>More</span>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
+        <div class="card" id="card-heatmap">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+            <div class="card-title" style="margin-bottom:0;">Muscle group heatmap</div>
+            <button class="btn btn-sm" onclick="toggleCard('card-heatmap')">hide</button>
+          </div>
+          <div id="muscle-heatmap"></div>
+        </div>
+        <div class="card" id="card-goals">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+            <div class="card-title" style="margin-bottom:0;">Goal progress</div>
+            <button class="btn btn-sm" onclick="toggleCard('card-goals')">hide</button>
+          </div>
+          <div id="progress-goals"></div>
+        </div>
+      </div>
+
+      <div class="card" id="card-volume">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+          <div class="card-title" style="margin-bottom:0;">Weekly volume (reps × kg)</div>
+          <button class="btn btn-sm" onclick="toggleCard('card-volume')">hide</button>
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;" id="volume-muscle-filter"></div>
+        <div style="position:relative;width:100%;height:180px;"><canvas id="chart-volume"></canvas></div>
+      </div>
+
+      <div class="card" id="card-strength">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+          <div class="card-title" style="margin-bottom:0;">Strength progress</div>
+          <button class="btn btn-sm" onclick="toggleCard('card-strength')">hide</button>
+        </div>
+        <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;">
+          <button class="filter-pill sel" onclick="setStrengthMode(this,'weight')">Max weight</button>
+          <button class="filter-pill" onclick="setStrengthMode(this,'volume')">Volume per session</button>
+        </div>
+        <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap;" id="strength-ex-filter"></div>
+        <div style="position:relative;width:100%;height:200px;"><canvas id="chart-strength"></canvas></div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
+        <div class="card" id="card-compare">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+            <div class="card-title" style="margin-bottom:0;">This period vs previous</div>
+            <button class="btn btn-sm" onclick="toggleCard('card-compare')">hide</button>
+          </div>
+          <div id="compare-content"></div>
+        </div>
+        <div class="card" id="card-prs">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+            <div class="card-title" style="margin-bottom:0;">Personal records</div>
+            <button class="btn btn-sm" onclick="toggleCard('card-prs')">hide</button>
+          </div>
+          <div id="pr-content"></div>
+        </div>
+      </div>
+
     </div>
 
     <div id="page-food" class="page">
@@ -449,7 +556,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.2.8';
+const APP_VERSION = '1.2.9';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -1339,36 +1446,301 @@ async function discardSession(){
 }
 
 // ── PROGRESS ──────────────────────────────────────────────────────
-let progressCharts={};
-async function renderProgress(){
-  await refreshData();
-  document.getElementById('progress-filters').innerHTML=['All',...MUSCLES_W,...MUSCLES_C].map(m=>`<button class="filter-pill${m===db.progressFilter?' sel':''}" onclick="setProgressFilter('${m}')">${m}</button>`).join('');
-  renderProgressCharts();
+let progressCharts = {};
+let progressPeriod = 30;
+let strengthMode = 'weight';
+let strengthExercises = [];
+let volumeMuscles = [];
+
+function setPeriod(btn, days) {
+  document.querySelectorAll('#period-filters .filter-pill').forEach(p => p.classList.remove('sel'));
+  btn.classList.add('sel');
+  progressPeriod = days;
+  renderProgress();
 }
-function setProgressFilter(m){db.progressFilter=m;document.querySelectorAll('.filter-pill').forEach(p=>p.classList.toggle('sel',p.textContent===m));renderProgressCharts();}
-function renderProgressCharts(){
-  Object.values(progressCharts).forEach(c=>{try{c.destroy();}catch(e){}});progressCharts={};
-  const f=db.progressFilter,el=document.getElementById('progress-content');
-  if(!db.sessions.length){el.innerHTML='<div class="card"><p style="color:var(--muted);font-size:13px;">No sessions logged yet.</p></div>';return;}
-  const sessions=f==='All'?db.sessions:db.sessions.filter(s=>s.muscles&&s.muscles.includes(f));
-  if(!sessions.length){el.innerHTML='<div class="card"><p style="color:var(--muted);font-size:13px;">No sessions logged for this muscle group yet.</p></div>';return;}
-  const exNames=new Set();
-  sessions.forEach(s=>s.exercises&&s.exercises.forEach(ex=>{if(ex.loggedSets&&ex.loggedSets.sets&&ex.loggedSets.sets.length&&(f==='All'||ex.muscle===f))exNames.add(ex.name);}));
-  let html=`<div class="card"><div class="card-title">Sessions logged (${sessions.length} total)</div><div class="chart-wrap" style="height:160px;"><canvas id="chart-sessions-pg"></canvas></div></div>`;
-  [...exNames].forEach(name=>{html+=`<div class="card"><div class="card-title">${name} — weight over time</div><div class="chart-wrap" style="height:160px;"><canvas id="chart-ex-${name.replace(/[^a-z0-9]/gi,'_')}"></canvas></div></div>`;});
-  el.innerHTML=html;
-  const tc='rgba(0,0,0,0.35)',gc='rgba(0,0,0,0.06)';
-  const wk={};sessions.forEach(s=>{const d=new Date(s.date),k=`${d.getFullYear()}-W${String(Math.ceil((d.getDate())/7)).padStart(2,'0')}`;wk[k]=(wk[k]||0)+1;});
-  const wkL=Object.keys(wk).slice(-12);
-  progressCharts['sessions']=new Chart(document.getElementById('chart-sessions-pg'),{type:'bar',data:{labels:wkL,datasets:[{data:wkL.map(k=>wk[k]),backgroundColor:'#1A1A18',borderRadius:3,barPercentage:0.55}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{color:tc,font:{size:11}},grid:{display:false},border:{display:false}},y:{ticks:{color:tc,stepSize:1},grid:{color:gc},border:{display:false},min:0}}}});
-  [...exNames].forEach(name=>{
-    const pts=[];
-    sessions.forEach(s=>{const ex=s.exercises&&s.exercises.find(e=>e.name===name&&e.loggedSets&&e.loggedSets.sets&&e.loggedSets.sets.length);if(ex){const maxKg=Math.max(...ex.loggedSets.sets.filter(st=>st.kg).map(st=>st.kg));if(maxKg>0)pts.push({x:fmt(s.date),y:maxKg});}});
-    const cid='chart-ex-'+name.replace(/[^a-z0-9]/gi,'_');
-    if(!document.getElementById(cid)||!pts.length) return;
-    progressCharts[name]=new Chart(document.getElementById(cid),{type:'line',data:{labels:pts.map(p=>p.x),datasets:[{data:pts.map(p=>p.y),borderColor:'#1A56A0',backgroundColor:'transparent',tension:0.3,pointRadius:4,pointBackgroundColor:'#1A56A0'}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{color:tc,font:{size:11}},grid:{display:false},border:{display:false}},y:{ticks:{color:tc,callback:v=>v+'kg'},grid:{color:gc},border:{display:false}}}}});
+
+function setStrengthMode(btn, mode) {
+  document.querySelectorAll('#card-strength .filter-pill').forEach(p => {
+    if(p.textContent === 'Max weight' || p.textContent === 'Volume per session') p.classList.remove('sel');
+  });
+  btn.classList.add('sel');
+  strengthMode = mode;
+  renderStrengthChart();
+}
+
+function toggleCard(id) {
+  const card = document.getElementById(id);
+  card.classList.toggle('hidden-card');
+  const btn = card.querySelector('.btn-sm');
+  btn.textContent = card.classList.contains('hidden-card') ? 'show' : 'hide';
+}
+
+function getFilteredSessions() {
+  if(!progressPeriod) return db.sessions;
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - progressPeriod);
+  return db.sessions.filter(s => new Date(s.date) >= cutoff);
+}
+
+function getPrevPeriodSessions() {
+  if(!progressPeriod) return [];
+  const now = new Date();
+  const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - progressPeriod);
+  const prev = new Date(); prev.setDate(prev.getDate() - progressPeriod * 2);
+  return db.sessions.filter(s => {
+    const d = new Date(s.date);
+    return d >= prev && d < cutoff;
   });
 }
+
+function calcVolume(exercises) {
+  let v = 0;
+  (exercises||[]).forEach(ex => {
+    if(ex.isCardio) return;
+    const sets = ex.loggedSets?.sets || ex.draftSets || [];
+    sets.forEach(st => {
+      if(st && st.kg && st.reps) v += st.kg * st.reps;
+    });
+  });
+  return Math.round(v);
+}
+
+async function renderProgress() {
+  await refreshData();
+  const sessions = getFilteredSessions();
+  const prev = getPrevPeriodSessions();
+
+  // ── METRICS ──
+  const totalVol = sessions.reduce((s, sess) => s + calcVolume(sess.exercises), 0);
+  const prevVol = prev.reduce((s, sess) => s + calcVolume(sess.exercises), 0);
+  const avgLen = sessions.length ? Math.round(sessions.reduce((s, sess) => {
+    const exCount = (sess.exercises||[]).length;
+    return s + exCount * 8;
+  }, 0) / sessions.length) : 0;
+  const overloadCount = sessions.reduce((s, sess) => {
+    return s + (sess.exercises||[]).filter(ex => {
+      if(!ex.loggedSets?.sets?.length) return false;
+      const tgt = ex.loggedSets.targetReps || 0;
+      return tgt > 0 && ex.loggedSets.sets.every(st => st.reps >= tgt);
+    }).length;
+  }, 0);
+
+  const volDelta = prevVol ? Math.round((totalVol - prevVol) / prevVol * 100) : 0;
+  const sessDelta = prev.length ? sessions.length - prev.length : 0;
+
+  document.getElementById('progress-metrics').innerHTML = `
+    <div class="metric"><div class="metric-label">Sessions</div><div class="metric-val">${sessions.length}</div>
+      <div class="metric-sub" style="color:${sessDelta >= 0 ? '#2E7D32' : '#B71C1C'}">${sessDelta >= 0 ? '↑' : '↓'} ${Math.abs(sessDelta)} vs prev period</div></div>
+    <div class="metric"><div class="metric-label">Total volume</div><div class="metric-val">${totalVol > 1000 ? (totalVol/1000).toFixed(1) + 'k' : totalVol}</div>
+      <div class="metric-sub" style="color:${volDelta >= 0 ? '#2E7D32' : '#B71C1C'}">${volDelta >= 0 ? '↑' : '↓'} ${Math.abs(volDelta)}% vs prev</div></div>
+    <div class="metric"><div class="metric-label">Overload events</div><div class="metric-val">${overloadCount}</div><div class="metric-sub" style="color:var(--faint);">exercises stepped up</div></div>
+    <div class="metric"><div class="metric-label">Unique exercises</div><div class="metric-val">${new Set(sessions.flatMap(s => (s.exercises||[]).map(e => e.name))).size}</div><div class="metric-sub" style="color:var(--faint);">in period</div></div>
+  `;
+
+  // ── CALENDAR ──
+  const calEl = document.getElementById('cal-grid');
+  const dateMap = {};
+  sessions.forEach(s => {
+    const d = new Date(s.date).toISOString().split('T')[0];
+    dateMap[d] = (dateMap[d] || 0) + 1;
+  });
+  calEl.innerHTML = '';
+  for(let i = 181; i >= 0; i--) {
+    const d = new Date(); d.setDate(d.getDate() - i);
+    const key = d.toISOString().split('T')[0];
+    const count = dateMap[key] || 0;
+    const heat = count === 0 ? 0 : count === 1 ? 1 : count === 2 ? 2 : count === 3 ? 3 : 4;
+    calEl.innerHTML += `<div class="cal-cell cal-${heat}" title="${key}: ${count} session${count !== 1 ? 's' : ''}"></div>`;
+  }
+
+  // ── MUSCLE HEATMAP ──
+  const muscleLastTrained = {};
+  const muscleVolume = {};
+  db.sessions.forEach(s => {
+    (s.muscles || []).forEach(m => {
+      const d = new Date(s.date);
+      if(!muscleLastTrained[m] || d > muscleLastTrained[m]) muscleLastTrained[m] = d;
+    });
+    (s.exercises || []).forEach(ex => {
+      const v = calcVolume([ex]);
+      muscleVolume[ex.muscle] = (muscleVolume[ex.muscle] || 0) + v;
+    });
+  });
+  const allMuscles = [...new Set([...Object.keys(muscleLastTrained), ...MUSCLES_W])];
+  const heatEl = document.getElementById('muscle-heatmap');
+  heatEl.innerHTML = '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:7px;">' +
+    MUSCLES_W.map(m => {
+      const last = muscleLastTrained[m];
+      const days = last ? Math.floor((Date.now() - last) / 864e5) : 999;
+      const cls = !last ? '' : days <= 4 ? 'hot' : days <= 10 ? 'warm' : days <= 18 ? '' : 'stale';
+      const vol = muscleVolume[m] ? Math.round(muscleVolume[m] / 1000 * 10) / 10 + 'k' : '—';
+      return `<div class="muscle-cell ${cls}">
+        <div class="muscle-name">${m}</div>
+        <div class="muscle-days">${last ? days + 'd ago' : 'never'}</div>
+        <div class="muscle-vol">${vol} vol</div>
+      </div>`;
+    }).join('') + '</div>' +
+    '<div style="display:flex;gap:10px;margin-top:8px;font-size:11px;color:var(--faint);flex-wrap:wrap;">' +
+    '<span style="display:flex;align-items:center;gap:3px;"><span style="width:8px;height:8px;border-radius:2px;background:#EAF3DE;display:inline-block;"></span>Recent (≤4d)</span>' +
+    '<span style="display:flex;align-items:center;gap:3px;"><span style="width:8px;height:8px;border-radius:2px;background:#EDF7EE;display:inline-block;"></span>1–10d</span>' +
+    '<span style="display:flex;align-items:center;gap:3px;"><span style="width:8px;height:8px;border-radius:2px;background:#FEF6E6;display:inline-block;"></span>Overdue</span>' +
+    '</div>';
+
+  // ── GOALS ──
+  const goalEl = document.getElementById('progress-goals');
+  if(!db.goals.length) {
+    goalEl.innerHTML = '<p style="font-size:13px;color:var(--muted);">No goals set. Add them in Settings.</p>';
+  } else {
+    goalEl.innerHTML = db.goals.map(g => `
+      <div class="goal-prog-row">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
+          <span style="font-size:13px;font-weight:500;">${g.text}</span>
+          <span style="font-size:12px;font-weight:500;color:${(g.pct||0) >= 80 ? '#2E7D32' : (g.pct||0) >= 50 ? '#92600A' : '#1A56A0'}">${g.pct||0}%</span>
+        </div>
+        <div class="prog-bar" style="height:6px;"><div class="prog-fill" style="width:${g.pct||0}%;background:${(g.pct||0) >= 80 ? '#2E7D32' : (g.pct||0) >= 50 ? '#92600A' : '#1A56A0'};"></div></div>
+        <div style="font-size:11px;color:var(--faint);margin-top:3px;">${g.current_best || 'No baseline set'}</div>
+      </div>`).join('');
+  }
+
+  // ── VOLUME MUSCLE FILTER ──
+  const volMuscles = [...new Set(sessions.flatMap(s => s.muscles || []).filter(m => MUSCLES_W.includes(m)))];
+  if(!volumeMuscles.length) volumeMuscles = volMuscles.slice(0, 4);
+  document.getElementById('volume-muscle-filter').innerHTML =
+    volMuscles.map(m => `<button class="filter-pill${volumeMuscles.includes(m) ? ' sel' : ''}" onclick="toggleVolumeMuscle(this,'${m}')">${m}</button>`).join('');
+  renderVolumeChart(sessions);
+
+  // ── STRENGTH EXERCISE FILTER ──
+  const exNames = [...new Set(sessions.flatMap(s => (s.exercises||[]).filter(e => !e.isCardio && e.loggedSets?.sets?.some(st => st.kg)).map(e => e.name)))];
+  if(!strengthExercises.length) strengthExercises = exNames.slice(0, 3);
+  document.getElementById('strength-ex-filter').innerHTML =
+    exNames.map(n => `<button class="filter-pill${strengthExercises.includes(n) ? ' sel' : ''}" onclick="toggleStrengthEx(this,'${n}')">${n}</button>`).join('');
+  renderStrengthChart(sessions);
+
+  // ── COMPARE ──
+  const cmpEl = document.getElementById('compare-content');
+  const label = progressPeriod ? `vs prev ${progressPeriod}d` : 'vs all previous';
+  const totalVolPrev = prevVol;
+  const cmpItems = [
+    { label: 'Sessions', cur: sessions.length, prv: prev.length, unit: '' },
+    { label: 'Volume (kg)', cur: totalVol, prv: totalVolPrev, unit: '' },
+    { label: 'Cardio sessions', cur: sessions.filter(s => (s.muscles||[]).some(m => MUSCLES_C.includes(m))).length, prv: prev.filter(s => (s.muscles||[]).some(m => MUSCLES_C.includes(m))).length, unit: '' },
+    { label: 'Overload events', cur: overloadCount, prv: prev.reduce((s, sess) => s + (sess.exercises||[]).filter(ex => { if(!ex.loggedSets?.sets?.length) return false; const tgt = ex.loggedSets.targetReps||0; return tgt > 0 && ex.loggedSets.sets.every(st => st.reps >= tgt); }).length, 0), unit: '' },
+  ];
+  const maxVal = Math.max(...cmpItems.map(i => Math.max(i.cur, i.prv)), 1);
+  cmpEl.innerHTML = cmpItems.map(i => `
+    <div class="cmp-row">
+      <div class="cmp-label">${i.label}</div>
+      <div class="cmp-bars">
+        <div class="cmp-bar" style="width:${Math.round(i.cur/maxVal*100)}%;background:#1A56A0;"></div>
+        <div class="cmp-bar" style="width:${Math.round(i.prv/maxVal*100)}%;background:#B5D4F4;"></div>
+      </div>
+      <div style="font-size:12px;color:var(--muted);min-width:80px;text-align:right;">${i.cur} vs ${i.prv}</div>
+    </div>`).join('') +
+    '<div style="display:flex;gap:12px;margin-top:8px;font-size:11px;color:var(--faint);">' +
+    '<span style="display:flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;border-radius:2px;background:#1A56A0;display:inline-block;"></span>This period</span>' +
+    '<span style="display:flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;border-radius:2px;background:#B5D4F4;display:inline-block;"></span>Previous</span>' +
+    '</div>';
+
+  // ── PERSONAL RECORDS ──
+  const prMap = {};
+  db.sessions.forEach(s => {
+    (s.exercises||[]).forEach(ex => {
+      if(ex.isCardio || !ex.loggedSets?.sets?.length) return;
+      const maxKg = Math.max(...ex.loggedSets.sets.filter(st => st.kg).map(st => st.kg));
+      if(!maxKg) return;
+      if(!prMap[ex.name] || maxKg > prMap[ex.name].kg) {
+        prMap[ex.name] = { kg: maxKg, date: s.date, sets: ex.loggedSets.sets.length, reps: Math.max(...ex.loggedSets.sets.map(st => st.reps||0)) };
+      }
+    });
+  });
+  const prs = Object.entries(prMap).sort((a,b) => new Date(b[1].date) - new Date(a[1].date)).slice(0, 6);
+  document.getElementById('pr-content').innerHTML = prs.length ? prs.map(([name, pr]) => `
+    <div class="pr-entry">
+      <div><div style="font-size:13px;font-weight:500;">${name}</div>
+        <div style="font-size:11px;color:var(--faint);">${pr.kg}kg × ${pr.sets} × ${pr.reps} reps</div></div>
+      <div style="text-align:right;"><span class="pr-badge">PR</span>
+        <div style="font-size:11px;color:var(--faint);margin-top:3px;">${fmt(pr.date)}</div></div>
+    </div>`).join('') :
+    '<p style="font-size:13px;color:var(--muted);">No logged sets yet.</p>';
+}
+
+function toggleVolumeMuscle(btn, m) {
+  btn.classList.toggle('sel');
+  volumeMuscles = volumeMuscles.includes(m) ? volumeMuscles.filter(x => x !== m) : [...volumeMuscles, m];
+  renderVolumeChart(getFilteredSessions());
+}
+
+function toggleStrengthEx(btn, n) {
+  btn.classList.toggle('sel');
+  strengthExercises = strengthExercises.includes(n) ? strengthExercises.filter(x => x !== n) : [...strengthExercises, n];
+  renderStrengthChart(getFilteredSessions());
+}
+
+function renderVolumeChart(sessions) {
+  if(progressCharts.volume) { try { progressCharts.volume.destroy(); } catch(e) {} }
+  const tc = 'rgba(0,0,0,0.3)', gc = 'rgba(0,0,0,0.06)';
+  const weeks = [];
+  for(let i = 11; i >= 0; i--) {
+    const d = new Date(); d.setDate(d.getDate() - i * 7);
+    weeks.push(d.toISOString().split('T')[0].slice(0, 7) + '-W' + String(Math.ceil(d.getDate()/7)).padStart(2,'0'));
+  }
+  const colors = ['#1A56A0','#2E7D32','#92600A','#7B61C4','#B71C1C','#0F6E56'];
+  const datasets = volumeMuscles.map((muscle, ci) => {
+    const data = weeks.map(wk => {
+      return sessions.filter(s => {
+        const d = new Date(s.date);
+        const sw = d.toISOString().split('T')[0].slice(0, 7) + '-W' + String(Math.ceil(d.getDate()/7)).padStart(2,'0');
+        return sw === wk && (s.muscles||[]).includes(muscle);
+      }).reduce((sum, s) => {
+        return sum + (s.exercises||[]).filter(e => e.muscle === muscle || (e.muscle||'').includes(muscle)).reduce((vs, ex) => vs + calcVolume([ex]), 0);
+      }, 0);
+    });
+    return { label: muscle, data, backgroundColor: colors[ci % colors.length], borderRadius: 2, barPercentage: 0.7 };
+  });
+  const wkLabels = weeks.map(w => w.slice(5, 7) + '/' + w.slice(0, 4).slice(2));
+  progressCharts.volume = new Chart(document.getElementById('chart-volume'), {
+    type: 'bar',
+    data: { labels: wkLabels, datasets },
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: true, position: 'top', align: 'start', labels: { font: { size: 11 }, boxWidth: 8, padding: 10 } } }, scales: { x: { ticks: { color: tc, font: { size: 11 } }, grid: { display: false }, border: { display: false }, stacked: true }, y: { ticks: { color: tc, callback: v => v > 1000 ? (v/1000).toFixed(1)+'k' : v }, grid: { color: gc }, border: { display: false }, stacked: true } } }
+  });
+}
+
+function renderStrengthChart(sessions) {
+  sessions = sessions || getFilteredSessions();
+  if(progressCharts.strength) { try { progressCharts.strength.destroy(); } catch(e) {} }
+  const tc = 'rgba(0,0,0,0.3)', gc = 'rgba(0,0,0,0.06)';
+  const colors = ['#1A56A0','#2E7D32','#92600A','#7B61C4','#B71C1C','#0F6E56'];
+  const datasets = strengthExercises.map((name, ci) => {
+    const pts = [];
+    sessions.forEach(s => {
+      const ex = (s.exercises||[]).find(e => e.name === name && e.loggedSets?.sets?.length);
+      if(!ex) return;
+      if(strengthMode === 'weight') {
+        const maxKg = Math.max(...ex.loggedSets.sets.filter(st => st.kg).map(st => st.kg));
+        if(maxKg > 0) pts.push({ x: fmt(s.date), y: maxKg });
+      } else {
+        const vol = calcVolume([ex]);
+        if(vol > 0) pts.push({ x: fmt(s.date), y: vol });
+      }
+    });
+    return { label: name, data: pts.map(p => p.y), labels: pts.map(p => p.x), borderColor: colors[ci % colors.length], backgroundColor: 'transparent', tension: 0.3, pointRadius: 4, pointBackgroundColor: colors[ci % colors.length] };
+  });
+  const allLabels = [...new Set(datasets.flatMap(d => d.labels || []))].sort();
+  const alignedDatasets = datasets.map(d => ({
+    ...d,
+    data: allLabels.map(lbl => {
+      const idx = (d.labels||[]).indexOf(lbl);
+      return idx > -1 ? d.data[idx] : null;
+    }),
+    spanGaps: true
+  }));
+  progressCharts.strength = new Chart(document.getElementById('chart-strength'), {
+    type: 'line',
+    data: { labels: allLabels, datasets: alignedDatasets },
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: true, position: 'top', align: 'start', labels: { font: { size: 11 }, boxWidth: 8, padding: 10 } } }, scales: { x: { ticks: { color: tc, font: { size: 11 }, maxRotation: 45 }, grid: { display: false }, border: { display: false } }, y: { ticks: { color: tc, callback: v => strengthMode === 'weight' ? v + ' kg' : v > 1000 ? (v/1000).toFixed(1)+'k' : v }, grid: { color: gc }, border: { display: false } } } }
+  });
+}
+
 
 // ── FOOD ──────────────────────────────────────────────────────────
 async function logFood(){
