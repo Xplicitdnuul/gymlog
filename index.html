@@ -449,7 +449,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.1.5';
+const APP_VERSION = '1.1.7';
 const storedVersion = localStorage.getItem('gymlog_version');
 if(storedVersion !== APP_VERSION) {
   localStorage.removeItem('sb-hpyosiqjvsjtaeijsjnu-auth-token');
@@ -620,6 +620,11 @@ async function loadUserData() {
   const {data:draftData} = await sb.from('sessions').select('*').eq('user_id',uid).eq('is_draft',true).order('created_at',{ascending:false}).limit(1);
   if(draftData&&draftData.length){
     const d=draftData[0];
+    // Clean up drafts older than 7 days automatically
+    const draftAge=(Date.now()-new Date(d.created_at||d.date).getTime())/(1000*60*60*24);
+    if(draftAge>7){
+      await sb.from('sessions').delete().eq('id',d.id);
+    } else {
     db.activeSession={
       sessionTitle:d.title||'Session',
       muscles:typeof d.muscles==='string'?JSON.parse(d.muscles||'[]'):(d.muscles||[]),
@@ -629,6 +634,7 @@ async function loadUserData() {
       draft_id:d.id,
       is_draft:true
     };
+    } // end age check
   }
   const sw = await sb.from('saved_workouts').select('*').eq('user_id',uid).order('saved_at');
   db.savedWorkouts = (sw.data||[]).map(w=>({
@@ -1060,13 +1066,20 @@ function renderLog() {
       banner='<div class="banner banner-gray" style="margin-bottom:10px;">First time logging this exercise — enter your starting numbers below.</div>';
     }
 
-    // Set rows with pre-fill from last session (set-for-set)
+    // Set rows — prefer draft data if resuming, else pre-fill from last session
     let setRows='';
     for(let i=0;i<numSets;i++){
+      const draftSet=ex.draftSets?ex.draftSets[i]:null;
       const lastSet=prev&&prev.sets?prev.sets[i]:null;
-      const prefillKg=lastSet&&lastSet.kg?lastSet.kg:'';
-      const prefillReps=lastSet&&lastSet.reps?lastSet.reps:'';
-      const prevText=lastSet?('prev: '+(lastSet.kg?lastSet.kg+'kg ':'BW ')+lastSet.reps+' reps'):'';
+      // Draft takes priority — user's current input beats last session
+      const prefillKg=draftSet&&draftSet.kg?draftSet.kg:(lastSet&&lastSet.kg?lastSet.kg:'');
+      const prefillReps=draftSet&&draftSet.reps?draftSet.reps:(lastSet&&lastSet.reps?lastSet.reps:'');
+      // Only show "prev:" hint if we're NOT showing draft data in that field
+      const showingDraftKg=draftSet&&draftSet.kg;
+      const showingDraftReps=draftSet&&draftSet.reps;
+      const prevKgText=!showingDraftKg&&lastSet&&lastSet.kg?lastSet.kg+'kg':'';
+      const prevRepsText=!showingDraftReps&&lastSet&&lastSet.reps?lastSet.reps+' reps':'';
+      const prevText=prevKgText||prevRepsText?'prev: '+(prevKgText?prevKgText+' ':'')+prevRepsText:'';
       setRows+='<div class="set-row">';
       setRows+='<span class="set-num">Set '+(i+1)+'</span>';
       setRows+='<input class="set-inp set-kg" type="number" id="ex-'+ei+'-kg-'+i+'" placeholder="kg" value="'+prefillKg+'" step="0.5" min="0" oninput="autosaveDraft()">';
@@ -1088,7 +1101,8 @@ function renderLog() {
     html2+='<div style="font-size:12px;color:var(--muted);margin-bottom:8px;">'+(ex.isCardio?ex.muscle+' &middot; '+ex.reps:ex.muscle+' &middot; target '+numSets+' sets &times; '+ex.reps)+'</div>';
     html2+=banner;
     if(ex.isCardio){
-      html2+='<div class="set-row"><span class="set-num">Time</span><input class="set-inp" type="number" id="ex-'+ei+'-kg-0" placeholder="min" style="width:80px;" oninput="autosaveDraft()"></div>';
+      const cardioDraft=ex.draftSets&&ex.draftSets[0]?ex.draftSets[0].kg:'';
+      html2+='<div class="set-row"><span class="set-num">Time</span><input class="set-inp" type="number" id="ex-'+ei+'-kg-0" placeholder="min" value="'+cardioDraft+'" style="width:80px;" oninput="autosaveDraft()"></div>';
     } else {
       html2+='<div style="display:flex;gap:8px;margin-bottom:4px;"><span style="font-size:10px;color:var(--faint);width:36px;"></span><span style="font-size:10px;color:var(--faint);width:72px;">kg</span><span style="font-size:10px;color:var(--faint);width:68px;">reps</span></div>';
       html2+=setRows;
@@ -1099,7 +1113,7 @@ function renderLog() {
   });
 
   html2+='</div>';
-  html2+='<div class="card"><div class="card-title">Session notes</div><textarea id="session-note" rows="3" style="font-size:13px;font-style:italic;" placeholder="How did it feel overall?" oninput="autosaveDraft()">'+( s.sessionNote||'')+'</textarea></div>';
+  html2+='<div class="card"><div class="card-title">Session notes</div><textarea id="session-note" rows="3" style="font-size:13px;font-style:italic;" placeholder="How did it feel overall?" oninput="autosaveDraft()">'+(s.sessionNote||'')+'</textarea></div>';
   html2+='<div style="display:flex;gap:10px;"><button class="btn btn-dark" onclick="saveSession()">Save session</button><button class="btn" onclick="discardSession()">Discard</button></div>';
   el.innerHTML=html2;
   updateNavBadge();
@@ -1149,6 +1163,8 @@ async function autosaveDraft(){
   // Debounce — save 1s after last keystroke
   clearTimeout(_draftSaveTimer);
   _draftSaveTimer=setTimeout(async()=>{
+    // Guard: abort if session was saved or discarded while timer was pending
+    if(!db.activeSession || db.activeSession !== s) return;
     if(s.draft_id){
       await sb.from('sessions').update({exercises:JSON.stringify(s.exercises),note:s.sessionNote,is_draft:true}).eq('id',s.draft_id);
     } else {
@@ -1160,6 +1176,7 @@ async function autosaveDraft(){
 
 
 async function saveSession(){
+  clearTimeout(_draftSaveTimer);
   const s=db.activeSession;if(!s)return;
   s.exercises.forEach((ex,ei)=>{
     const sets=[];
@@ -1190,6 +1207,7 @@ async function saveSession(){
   toast('Session saved!','ok');showPage('overview');
 }
 async function discardSession(){
+  clearTimeout(_draftSaveTimer);
   if(!confirm('Discard this session?')) return;
   const s=db.activeSession;
   if(s&&s.draft_id){
