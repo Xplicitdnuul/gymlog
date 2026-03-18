@@ -437,7 +437,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.0.10';
+const APP_VERSION = '1.1.0';
 const storedVersion = localStorage.getItem('gymlog_version');
 if(storedVersion !== APP_VERSION) {
   localStorage.removeItem('sb-hpyosiqjvsjtaeijsjnu-auth-token');
@@ -641,12 +641,15 @@ function showPage(id) {
   document.querySelectorAll('.nav-item')[navMap[id]].classList.add('active');
   const renders={overview:renderOverview,planner:renderPlanner,log:renderLog,progress:renderProgress,food:renderFood,body:renderBody,builder:renderBuilder,library:renderLibrary,settings:renderSettings};
   if(window.innerWidth<=768) closeSidebar();
-  if(renders[id]) renders[id]();
+  if(renders[id]) Promise.resolve(renders[id]()).catch(e=>console.error('Page render error:',e));
 }
 
 
+let _refreshing = false;
 async function refreshData(){
-  if(!currentUser) return;
+  if(!currentUser || _refreshing) return;
+  _refreshing = true;
+  try {
   const uid=currentUser.id;
   const [sess, food, body] = await Promise.all([
     sb.from('sessions').select('*').eq('user_id',uid).order('date'),
@@ -656,6 +659,7 @@ async function refreshData(){
   if(sess.data) db.sessions=sess.data.map(s=>({...s,exercises:JSON.parse(s.exercises||'[]'),muscles:JSON.parse(s.muscles||'[]')}));
   if(food.data) db.food=food.data;
   if(body.data) db.body=body.data;
+  } catch(e){ console.error('refreshData error:',e); } finally { _refreshing=false; }
 }
 // ── OVERVIEW ──────────────────────────────────────────────────────
 async function renderOverview() {
@@ -938,7 +942,7 @@ async function saveSession(){
   if(sessErr){dbErr('Save session',sessErr);return;}
   db.sessions.push({...s,...sessData,exercises:s.exercises,muscles:s.muscles});
   db.activeSession=null;db.pendingSession=null;
-  alert('Session saved!');showPage('overview');
+  toast('Session saved!','ok');showPage('overview');
 }
 function discardSession(){db.activeSession=null;showPage('overview');}
 
