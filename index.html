@@ -437,7 +437,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.0.7';
+const APP_VERSION = '1.0.8';
 const storedVersion = localStorage.getItem('gymlog_version');
 if(storedVersion !== APP_VERSION) {
   localStorage.removeItem('sb-hpyosiqjvsjtaeijsjnu-auth-token');
@@ -665,7 +665,11 @@ function renderOverview() {
 }
 
 // ── PLANNER ───────────────────────────────────────────────────────
-function renderPlanner() {
+async function renderPlanner() {
+  if(!currentUser) return;
+  // Re-fetch library to ensure swap dropdowns are populated on mobile
+  const {data:libData} = await sb.from('library').select('*').eq('user_id',currentUser.id).order('name');
+  if(libData) db.library = libData.map(e=>({name:e.name,muscle:e.muscle}));
   document.getElementById('planner-date').textContent=new Date().toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long'});
   const goalMuscles=getGoalMuscles();
   document.getElementById('planner-weights').innerHTML=MUSCLES_W.map(m=>{
@@ -1024,7 +1028,11 @@ async function deleteBody(id){const{error:dbErr2}=await sb.from('body_log').dele
 // ── MANUAL WORKOUT BUILDER ────────────────────────────────────────
 let builderExercises = [];
 
-function renderBuilder(){
+async function renderBuilder(){
+  if(!currentUser) return;
+  // Always re-fetch library from Supabase
+  const {data} = await sb.from('library').select('*').eq('user_id',currentUser.id).order('name');
+  if(data) db.library = data.map(e=>({name:e.name,muscle:e.muscle}));
   // Populate exercise picker from library
   const pick = document.getElementById('builder-ex-pick');
   if(!pick) return;
@@ -1137,9 +1145,19 @@ async function clearLib(){
   const{error:clErr}=await sb.from('library').delete().eq('user_id',currentUser.id);if(clErr){dbErr('Clear library',clErr);return;}
   db.library=[];renderLibrary();
 }
-function renderLibrary(){
+async function renderLibrary(){
+  if(!currentUser) return;
+  document.getElementById('lib-count').textContent='...';
+  document.getElementById('lib-display').innerHTML='<p style="font-size:13px;color:var(--muted);">Loading...</p>';
+  const {data,error} = await sb.from('library').select('*').eq('user_id',currentUser.id).order('name');
+  if(error){ dbErr('Load library',error); return; }
+  db.library = (data||[]).map(e=>({name:e.name,muscle:e.muscle}));
   document.getElementById('lib-count').textContent=db.library.length;
-  document.getElementById('lib-display').innerHTML=db.library.map((e,i)=>`<span style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:20px;background:var(--bg);border:0.5px solid var(--border);font-size:12px;color:var(--muted);">${e.name} <span style="opacity:0.5;font-size:10px;">${e.muscle}</span></span>`).join('');
+  if(!db.library.length){
+    document.getElementById('lib-display').innerHTML='<p style="font-size:13px;color:var(--muted);">No exercises yet. Paste your list above and click Import.</p>';
+    return;
+  }
+  document.getElementById('lib-display').innerHTML=db.library.map(e=>'<span style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:20px;background:var(--bg);border:0.5px solid var(--border);font-size:12px;color:var(--muted);">'+e.name+' <span style="opacity:0.5;font-size:10px;">'+e.muscle+'</span></span>').join('');
 }
 
 // ── SETTINGS ──────────────────────────────────────────────────────
