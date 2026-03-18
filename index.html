@@ -155,6 +155,18 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 .overlay.show { display:block; }
 .hamburger { display:none; position:fixed; top:14px; left:14px; z-index:300; background:var(--surface); border:0.5px solid var(--border-md); border-radius:var(--radius-sm); padding:7px 10px; cursor:pointer; font-size:18px; line-height:1; }
 @media (max-width:768px) { .hamburger { display:block; } .app { flex-direction:column; } }
+
+.set-row { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+.set-num { font-size:11px; color:var(--faint); width:36px; flex-shrink:0; }
+.set-kg { width:72px; }
+.set-reps { width:68px; }
+.set-prev { font-size:11px; color:var(--faint); white-space:nowrap; }
+.set-prev.improved { color:var(--green); }
+.cue-toggle { font-size:12px; color:var(--blue); cursor:pointer; margin-top:6px; display:inline-block; background:none; border:none; padding:0; font-family:var(--font); }
+.cue-body { font-size:12px; color:var(--muted); line-height:1.6; margin-top:5px; padding:8px 12px; background:var(--blue-bg); border-radius:var(--radius-sm); display:none; }
+.draft-pulse { animation:pulse 2s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+.draft-banner { background:var(--amber-bg); border:0.5px solid #FFC107; border-radius:var(--radius-sm); padding:10px 14px; margin-bottom:14px; font-size:13px; color:var(--amber); display:flex; align-items:center; justify-content:space-between; }
 </style>
 </head>
 <body>
@@ -561,6 +573,7 @@ sb.auth.onAuthStateChange(async (event,session) => {
     try {
       await loadUserData();
       updateProfileUI();
+      updateNavBadge();
       renderOverview();
     } catch(e) {
       console.warn('Session load error, signing out cleanly:', e);
@@ -588,20 +601,35 @@ let db = {...defaultDb};
 
 async function loadUserData() {
   const uid = currentUser.id;
-  const [prof, lib, sess, food, body, goals] = await Promise.all([
+  const [prof, lib, sess, food, body, goals, draft] = await Promise.all([
     sb.from('profiles').select('*').eq('id',uid).maybeSingle(),
     sb.from('library').select('*').eq('user_id',uid).order('name'),
     sb.from('sessions').select('*').eq('user_id',uid).order('date'),
     sb.from('food_log').select('*').eq('user_id',uid).order('created_at'),
     sb.from('body_log').select('*').eq('user_id',uid).order('date'),
     sb.from('goals').select('*').eq('user_id',uid).order('created_at'),
+    sb.from('sessions').select('*').eq('user_id',uid).eq('is_draft',true).order('created_at').limit(1),
   ]);
   if(prof.data){ const p=prof.data; db.profile={name:p.name||'',level:p.level||'intermediate',goal:p.goal||'hypertrophy',calGoal:p.cal_goal||2200}; try{if(p.rest)db.rest={...db.rest,...JSON.parse(p.rest)};}catch(e){} } else { const{error:autoErr}=await sb.from('profiles').upsert({id:uid,name:'',level:'intermediate',goal:'hypertrophy',cal_goal:2200,rest:JSON.stringify({strength:180,hyp:90,end:60,trans:120})}); if(autoErr) console.warn('Auto profile:',autoErr); }
   db.library = (lib.data||[]).map(e=>({id:e.id,name:e.name,muscle:e.muscle}));
-  db.sessions = (sess.data||[]).map(s=>({...s, exercises:JSON.parse(s.exercises||'[]'), muscles:JSON.parse(s.muscles||'[]')}));
+  db.sessions = (sess.data||[]).filter(s=>!s.is_draft).map(s=>({...s, exercises:JSON.parse(s.exercises||'[]'), muscles:JSON.parse(s.muscles||'[]')}));
   db.food = (food.data||[]).map(f=>({...f}));
   db.body = (body.data||[]).map(b=>({...b}));
   db.goals = (goals.data||[]).map(g=>({...g}));
+  // Restore any in-progress draft session
+  const {data:draftData} = await sb.from('sessions').select('*').eq('user_id',uid).eq('is_draft',true).order('created_at',{ascending:false}).limit(1);
+  if(draftData&&draftData.length){
+    const d=draftData[0];
+    db.activeSession={
+      sessionTitle:d.title||'Session',
+      muscles:typeof d.muscles==='string'?JSON.parse(d.muscles||'[]'):(d.muscles||[]),
+      exercises:typeof d.exercises==='string'?JSON.parse(d.exercises||'[]'):(d.exercises||[]),
+      sessionNote:d.note||'',
+      date:d.date,
+      draft_id:d.id,
+      is_draft:true
+    };
+  }
   const sw = await sb.from('saved_workouts').select('*').eq('user_id',uid).order('saved_at');
   db.savedWorkouts = (sw.data||[]).map(w=>({
     ...w,
@@ -656,6 +684,7 @@ function updateProfileUI() {
 }
 
 // ── NAV ───────────────────────────────────────────────────────────
+function goToPlanner(){showPage("planner");}
 function showPage(id) {
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
@@ -679,7 +708,7 @@ async function refreshData(){
     sb.from('food_log').select('*').eq('user_id',uid).order('created_at'),
     sb.from('body_log').select('*').eq('user_id',uid).order('date'),
   ]);
-  if(sess.data) db.sessions=sess.data.map(s=>({...s,exercises:JSON.parse(s.exercises||'[]'),muscles:JSON.parse(s.muscles||'[]')}));
+  if(sess.data) db.sessions=sess.data.filter(s=>!s.is_draft).map(s=>({...s,exercises:JSON.parse(s.exercises||'[]'),muscles:JSON.parse(s.muscles||'[]')}));
   if(food.data) db.food=food.data;
   if(body.data) db.body=body.data;
   } catch(e){ console.error('refreshData error:',e); } finally { _refreshing=false; }
@@ -914,60 +943,236 @@ async function saveForLater(){
 
 function startSession(){if(!db.pendingSession)return;db.activeSession=JSON.parse(JSON.stringify(db.pendingSession));showPage('log');}
 
+const FORM_CUES = {
+  "bench press": "Retract your shoulder blades and keep them pinned to the bench. Bar path should touch lower chest. Drive feet into the floor.",
+  "incline bench press": "Set bench to 30-45 degrees. Keep elbows at 45-60 degrees from torso. Lower bar to upper chest with control.",
+  "dumbbell fly": "Slight bend in elbows throughout. Think hugging a barrel. Lower until chest feels a full stretch.",
+  "cable fly": "Keep a slight elbow bend and lead with your elbows. Squeeze at the centre at peak contraction.",
+  "push-up": "Body forms a straight plank. Lower chest to just above floor. Do not let hips sag.",
+  "dip": "Lean slightly forward to target chest. Keep elbows behind you. Lower until shoulders are below elbows.",
+  "pull-up": "Start from a dead hang. Drive elbows down and back. Think elbows to hips. Lower with full control.",
+  "chin-up": "Supinated grip, palms facing you. Curl yourself up leading with your chest. Full hang at bottom.",
+  "lat pulldown": "Slight lean back. Pull bar to upper chest driving elbows down. Control the return.",
+  "seated cable row": "Sit tall. Pull to your navel squeezing shoulder blades together. Do not round forward on the return.",
+  "bent over row": "Hinge at hips, back flat. Pull bar to lower chest. Use your back, not momentum.",
+  "deadlift": "Bar over mid-foot. Push the floor away rather than pulling the bar up. Keep bar close to body throughout.",
+  "romanian deadlift": "Soft knee bend throughout. Push hips back. Feel the hamstring stretch. Bar stays close to legs.",
+  "overhead press": "Brace core and glutes hard. Bar starts at collarbone. Press in a slight arc over your head at the top.",
+  "lateral raise": "Slight bend in elbows. Lead with elbows not hands. Stop at shoulder height, going higher targets the trap not the delt.",
+  "face pull": "Pull to eye level, thumbs pointing back. Think hands behind ears. External rotation is the goal.",
+  "front raise": "Slight elbow bend. Raise to shoulder height only. Control the descent, do not swing.",
+  "arnold press": "Start with palms facing you, rotate out as you press. Controlled rotation throughout.",
+  "barbell curl": "Elbows pinned to sides. Full extension at bottom, squeeze hard at top. Do not swing.",
+  "dumbbell curl": "Supinate as you curl. Full range, do not cut bottom or top short.",
+  "hammer curl": "Neutral grip throughout. Wrists stay straight. Targets the brachialis.",
+  "preacher curl": "Do not lock out at bottom, keep slight bend to protect the elbow. Full squeeze at the top.",
+  "tricep pushdown": "Elbows glued to sides. Only forearms move. Fully extend at the bottom and squeeze.",
+  "skull crusher": "Upper arms vertical and still. Lower bar just behind your head. Control the return.",
+  "close grip bench press": "Hands shoulder-width. Elbows tuck in, do not flare them. Full range of motion.",
+  "overhead tricep extension": "Upper arms stay vertical next to your head. Extend fully. Keep core tight.",
+  "squat": "Chest up, brace hard. Break at hips and knees together. Hips below knees at depth. Drive through heels.",
+  "leg press": "Do not lock out knees at top. Controlled descent. Push through heels not toes.",
+  "leg extension": "Full range. Squeeze hard at the top. Slow and controlled, no momentum.",
+  "bulgarian split squat": "Back foot elevated. Front knee tracks over toes. Tall torso. Most weight on front foot.",
+  "lunge": "Front knee stays over ankle. Back knee lightly touches floor. Drive through front heel to return.",
+  "leg curl": "Do not let hips rise off the pad. Full range, extend completely before each rep.",
+  "hip thrust": "Upper back on bench, bar over hips. Drive up until thighs are parallel. Squeeze glutes hard at top.",
+  "glute bridge": "Feet flat hip-width apart. Drive hips up, squeeze glutes. Do not arch lower back at the top.",
+  "standing calf raise": "Full range all the way up, all the way down for a full stretch. Pause at the bottom.",
+  "seated calf raise": "Targets the soleus. Same full range principle. Slow and controlled throughout.",
+  "plank": "Straight line head to heels. Do not let hips sag or pike. Squeeze glutes, abs, and quads.",
+  "crunch": "Hands behind ears not pulling neck. Curl shoulders off floor. Lower back stays down.",
+  "leg raise": "Lower back pressed into floor throughout. Lower legs slowly without letting them touch down.",
+  "ab wheel": "Roll out only as far as you can maintain a flat back. Pull back using your abs not your arms.",
+  "spinning": "Keep cadence 80-100 rpm. For intervals push hard for 20 seconds and recover for 10. Always work against resistance.",
+  "running": "Midfoot strike not heel. Slight forward lean from the ankles. Arms bent at 90 degrees, swing forward and back.",
+  "incline walking": "Do not hold the rails as it negates the incline benefit. Lean slightly forward naturally. Drive through heels.",
+};
+
+function getFormCue(name) {
+  const key = name.toLowerCase().trim();
+  if(FORM_CUES[key]) return FORM_CUES[key];
+  // Try partial match
+  for(const k of Object.keys(FORM_CUES)) {
+    if(key.includes(k) || k.includes(key)) return FORM_CUES[k];
+  }
+  return null;
+}
 // ── LOG ───────────────────────────────────────────────────────────
 function renderLog() {
   const el=document.getElementById('log-content');
-  if(!db.activeSession){el.innerHTML=`<div class="card"><p style="color:var(--muted);">No active session. <a href="#" onclick="showPage('planner')" style="color:var(--text);">Plan a session first.</a></p></div>`;return;}
+  if(!db.activeSession){
+    el.innerHTML='<div class="card"><p style="color:var(--muted);">No active session.</p><div style="margin-top:10px;"><button class="btn btn-dark btn-sm" onclick="goToPlanner()">Plan a session</button></div></div>';
+    updateNavBadge();
+    return;
+  }
   const s=db.activeSession;
-  let html=`<div class="card"><div style="font-size:16px;font-weight:500;margin-bottom:2px;">${s.sessionTitle||'Session'}</div><div style="font-size:13px;color:var(--muted);margin-bottom:16px;">${s.muscles?s.muscles.join(', '):''}</div>`;
+  const isDraft=s.is_draft||false;
+  let html2='<div class="card">';
+  html2+='<div style="font-size:16px;font-weight:500;margin-bottom:2px;">'+( s.sessionTitle||'Session')+'</div>';
+  html2+='<div style="font-size:13px;color:var(--muted);margin-bottom:12px;">'+(s.muscles?s.muscles.join(', '):'')+'</div>';
+  if(isDraft) html2+='<div class="draft-banner"><span>Autosaved draft — your progress is safe.</span></div>';
+
   s.exercises.forEach((ex,ei)=>{
     const prev=getPrevData(ex.name);
+    const numSets=ex.sets||3;
+    const cue=getFormCue(ex.name);
+
+    // Overload banner
     let banner='';
     if(prev&&prev.sets&&prev.sets.length){
-      const tgt=prev.targetReps||0,allHit=prev.sets.every(st=>st.reps>=tgt),anyMissed=prev.sets.some(st=>st.reps<tgt&&tgt>0);
-      const setPills=prev.sets.map(st=>`<span class="set-pill${tgt>0&&st.reps<tgt?' faded':''}">${st.kg?st.kg+'kg · ':''}${st.reps} reps</span>`).join(' ');
-      if(allHit&&prev.sets[0]?.kg){const nk=Math.round(prev.sets[0].kg*1.025*2)/2;banner=`<div class="banner banner-green"><b>Increase weight</b> — you hit all targets last session<br><small>${setPills}</small><br>Suggestion: try <b>${nk} kg</b> today</div>`;}
-      else if(anyMissed){banner=`<div class="banner banner-amber"><b>Hold steady</b> — some sets fell short last time<br><small>${setPills}</small></div>`;}
-      else{banner=`<div class="banner banner-green"><b>Keep going</b> — last session: <small>${setPills}</small></div>`;}
-      if(prev.note) banner+=`<div style="font-size:12px;color:var(--muted);font-style:italic;margin-bottom:6px;">Your note: "${prev.note}"</div>`;
+      const tgt=prev.targetReps||0;
+      const allHit=prev.sets.every(st=>st.reps>=tgt);
+      if(allHit&&prev.sets[0]?.kg){
+        const nk=Math.round(prev.sets[0].kg*1.025*2)/2;
+        banner='<div class="banner banner-green" style="margin-bottom:10px;"><b>Increase weight</b> — you hit all targets last session. Try <b>'+nk+' kg</b> today.</div>';
+      } else if(prev.sets.some(st=>tgt>0&&st.reps<tgt)){
+        banner='<div class="banner banner-amber" style="margin-bottom:10px;"><b>Hold steady</b> — some sets fell short last time.</div>';
+      }
+      if(prev.note) banner+='<div style="font-size:12px;color:var(--muted);font-style:italic;margin-bottom:8px;">Last note: &ldquo;'+prev.note+'&rdquo;</div>';
     } else {
-      banner=`<div class="banner banner-gray">First time logging this exercise — record your starting numbers below.</div>`;
+      banner='<div class="banner banner-gray" style="margin-bottom:10px;">First time logging this exercise — enter your starting numbers below.</div>';
     }
-    const sc=ex.sets||3;
-    html+=`<div class="ex-block">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;"><span style="font-size:14px;font-weight:500;">${ex.name}</span><span class="${ex.isCardio?'tag-cardio':ex.isRepeat?'tag-repeat':'tag-new'}">${ex.isCardio?'cardio':ex.isRepeat?'repeated':'fresh pick'}</span></div>
-      <div style="font-size:12px;color:var(--muted);margin-bottom:8px;">${ex.muscle}${!ex.isCardio?' · target '+ex.sets+' × '+ex.reps:' · '+ex.reps}</div>
-      ${banner}
-      <div class="set-inputs">${Array.from({length:sc},(_,i)=>`<div class="set-box"><div class="set-lbl">Set ${i+1}</div><input class="set-inp" type="text" id="ex-${ei}-set-${i}" placeholder="${ex.isCardio?'min':'kg · reps'}"></div>`).join('')}</div>
-      <input class="note-inp" type="text" id="ex-${ei}-note" placeholder="Note for this exercise (optional)...">
-    </div>`;
+
+    // Set rows with pre-fill from last session (set-for-set)
+    let setRows='';
+    for(let i=0;i<numSets;i++){
+      const lastSet=prev&&prev.sets?prev.sets[i]:null;
+      const prefillKg=lastSet&&lastSet.kg?lastSet.kg:'';
+      const prefillReps=lastSet&&lastSet.reps?lastSet.reps:'';
+      const prevText=lastSet?('prev: '+(lastSet.kg?lastSet.kg+'kg ':'BW ')+lastSet.reps+' reps'):'';
+      setRows+='<div class="set-row">';
+      setRows+='<span class="set-num">Set '+(i+1)+'</span>';
+      setRows+='<input class="set-inp set-kg" type="number" id="ex-'+ei+'-kg-'+i+'" placeholder="kg" value="'+prefillKg+'" step="0.5" min="0" oninput="autosaveDraft()">';
+      setRows+='<input class="set-inp set-reps" type="number" id="ex-'+ei+'-reps-'+i+'" placeholder="reps" value="'+prefillReps+'" min="0" oninput="autosaveDraft()">';
+      if(prevText) setRows+='<span class="set-prev">'+prevText+'</span>';
+      setRows+='</div>';
+    }
+
+    // Form cue
+    const cueHtml=cue
+      ?'<button class="cue-toggle" onclick="toggleCue('+('cue-'+ei)+')">▸ Form cue</button><div class="cue-body" id="cue-'+ei+'">'+cue+'</div>'
+      :'';
+
+    html2+='<div class="ex-block">';
+    html2+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">';
+    html2+='<span style="font-size:14px;font-weight:500;">'+ex.name+'</span>';
+    html2+='<span class="'+(ex.isCardio?'tag-cardio':ex.isRepeat?'tag-repeat':'tag-new')+'">'+(ex.isCardio?'cardio':ex.isRepeat?'repeated':'fresh pick')+'</span>';
+    html2+='</div>';
+    html2+='<div style="font-size:12px;color:var(--muted);margin-bottom:8px;">'+(ex.isCardio?ex.muscle+' &middot; '+ex.reps:ex.muscle+' &middot; target '+numSets+' sets &times; '+ex.reps)+'</div>';
+    html2+=banner;
+    if(ex.isCardio){
+      html2+='<div class="set-row"><span class="set-num">Time</span><input class="set-inp" type="number" id="ex-'+ei+'-kg-0" placeholder="min" style="width:80px;" oninput="autosaveDraft()"></div>';
+    } else {
+      html2+='<div style="display:flex;gap:8px;margin-bottom:4px;"><span style="font-size:10px;color:var(--faint);width:36px;"></span><span style="font-size:10px;color:var(--faint);width:72px;">kg</span><span style="font-size:10px;color:var(--faint);width:68px;">reps</span></div>';
+      html2+=setRows;
+    }
+    html2+=cueHtml;
+    html2+='<input class="note-inp" type="text" id="ex-'+ei+'-note" placeholder="Note for this exercise..." value="'+( ex.savedNote||'')+'" oninput="autosaveDraft()">';
+    html2+='</div>';
   });
-  html+=`</div><div class="card"><div class="card-title">Session notes</div><textarea id="session-note" rows="3" style="font-size:13px;font-style:italic;" placeholder="How did it feel overall?"></textarea></div>
-  <div style="display:flex;gap:10px;"><button class="btn btn-dark" onclick="saveSession()">Save session</button><button class="btn" onclick="discardSession()">Discard</button></div>`;
-  el.innerHTML=html;
+
+  html2+='</div>';
+  html2+='<div class="card"><div class="card-title">Session notes</div><textarea id="session-note" rows="3" style="font-size:13px;font-style:italic;" placeholder="How did it feel overall?" oninput="autosaveDraft()">'+( s.sessionNote||'')+'</textarea></div>';
+  html2+='<div style="display:flex;gap:10px;"><button class="btn btn-dark" onclick="saveSession()">Save session</button><button class="btn" onclick="discardSession()">Discard</button></div>';
+  el.innerHTML=html2;
+  updateNavBadge();
 }
 
-function getPrevData(name){
-  for(let i=db.sessions.length-1;i>=0;i--){const s=db.sessions[i];if(!s.exercises)continue;const ex=s.exercises.find(e=>e.name===name&&e.loggedSets);if(ex)return ex.loggedSets;}
-  return null;
+function toggleCue(id){
+  const el=document.getElementById(id); if(!el) return;
+  const btn=el.previousElementSibling;
+  const open=el.style.display==='block';
+  el.style.display=open?'none':'block';
+  if(btn) btn.textContent=(open?'▸':'▾')+' Form cue';
 }
+
+function updateNavBadge(){
+  const badge=document.getElementById('nav-log-badge');
+  const navItem=document.getElementById('nav-log');
+  if(!badge) return;
+  if(db.activeSession){
+    badge.style.display='inline-block';
+    badge.classList.add('draft-pulse');
+    if(navItem) navItem.title='Workout in progress';
+  } else {
+    badge.style.display='none';
+    badge.classList.remove('draft-pulse');
+    if(navItem) navItem.title='';
+  }
+}
+
+let _draftSaveTimer=null;
+async function autosaveDraft(){
+  if(!db.activeSession||!currentUser) return;
+  // Collect current inputs into activeSession
+  const s=db.activeSession;
+  s.exercises.forEach((ex,ei)=>{
+    const sets=[];
+    const numSets=ex.sets||3;
+    for(let i=0;i<numSets;i++){
+      const kg=parseFloat(document.getElementById('ex-'+ei+'-kg-'+i)?.value)||null;
+      const reps=parseInt(document.getElementById('ex-'+ei+'-reps-'+i)?.value)||null;
+      sets.push({kg,reps});
+    }
+    ex.draftSets=sets;
+    ex.savedNote=document.getElementById('ex-'+ei+'-note')?.value||'';
+  });
+  s.sessionNote=document.getElementById('session-note')?.value||'';
+  s.is_draft=true;
+  // Debounce — save 1s after last keystroke
+  clearTimeout(_draftSaveTimer);
+  _draftSaveTimer=setTimeout(async()=>{
+    if(s.draft_id){
+      await sb.from('sessions').update({exercises:JSON.stringify(s.exercises),note:s.sessionNote,is_draft:true}).eq('id',s.draft_id);
+    } else {
+      const {data}=await sb.from('sessions').insert({user_id:currentUser.id,date:s.date||new Date().toISOString(),title:s.sessionTitle,muscles:JSON.stringify(s.muscles||[]),exercises:JSON.stringify(s.exercises||[]),note:s.sessionNote,is_draft:true}).select().single();
+      if(data) s.draft_id=data.id;
+    }
+  }, 1000);
+}
+
 
 async function saveSession(){
   const s=db.activeSession;if(!s)return;
   s.exercises.forEach((ex,ei)=>{
     const sets=[];
-    for(let i=0;i<(ex.sets||3);i++){const v=document.getElementById(`ex-${ei}-set-${i}`)?.value||'';if(v){const p=v.split('·').map(x=>x.trim());const kg=p.length>1?parseFloat(p[0]):null;const reps=parseInt(p.length>1?p[1]:p[0])||0;sets.push({kg,reps,raw:v});}}
-    const note=document.getElementById(`ex-${ei}-note`)?.value||'';
+    const numSets=ex.sets||3;
+    for(let i=0;i<numSets;i++){
+      const kg=parseFloat(document.getElementById('ex-'+ei+'-kg-'+i)?.value)||null;
+      const reps=parseInt(document.getElementById('ex-'+ei+'-reps-'+i)?.value)||null;
+      if(kg||reps) sets.push({kg,reps});
+    }
+    const note=document.getElementById('ex-'+ei+'-note')?.value||'';
     ex.loggedSets={sets,note,kg:sets[0]?.kg,targetReps:parseInt(ex.reps)||0};
+    delete ex.draftSets;
   });
   s.sessionNote=document.getElementById('session-note')?.value||'';
-  const {data:sessData,error:sessErr}=await sb.from('sessions').insert({user_id:currentUser.id,date:s.date||new Date().toISOString(),title:s.sessionTitle,muscles:JSON.stringify(s.muscles||[]),exercises:JSON.stringify(s.exercises||[]),note:s.sessionNote}).select().single();
-  if(sessErr){dbErr('Save session',sessErr);return;}
-  db.sessions.push({...s,...sessData,exercises:s.exercises,muscles:s.muscles});
+  s.is_draft=false;
+  if(s.draft_id){
+    // Update existing draft row to finalise it
+    const {data:sessData,error:sessErr}=await sb.from('sessions').update({exercises:JSON.stringify(s.exercises),note:s.sessionNote,is_draft:false}).eq('id',s.draft_id).select().single();
+    if(sessErr){dbErr('Save session',sessErr);return;}
+    db.sessions.push({...s,...sessData,exercises:s.exercises,muscles:s.muscles});
+  } else {
+    const {data:sessData,error:sessErr}=await sb.from('sessions').insert({user_id:currentUser.id,date:s.date||new Date().toISOString(),title:s.sessionTitle,muscles:JSON.stringify(s.muscles||[]),exercises:JSON.stringify(s.exercises||[]),note:s.sessionNote,is_draft:false}).select().single();
+    if(sessErr){dbErr('Save session',sessErr);return;}
+    db.sessions.push({...s,...sessData,exercises:s.exercises,muscles:s.muscles});
+  }
   db.activeSession=null;db.pendingSession=null;
+  updateNavBadge();
   toast('Session saved!','ok');showPage('overview');
 }
-function discardSession(){db.activeSession=null;showPage('overview');}
+async function discardSession(){
+  if(!confirm('Discard this session?')) return;
+  const s=db.activeSession;
+  if(s&&s.draft_id){
+    await sb.from('sessions').delete().eq('id',s.draft_id);
+  }
+  db.activeSession=null;
+  updateNavBadge();
+  showPage('overview');
+}
 
 // ── PROGRESS ──────────────────────────────────────────────────────
 let progressCharts={};
