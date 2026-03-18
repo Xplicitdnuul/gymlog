@@ -449,7 +449,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.2.2';
+const APP_VERSION = '1.2.3';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -606,6 +606,12 @@ sb.auth.onAuthStateChange(async (event, session) => {
     if(_dataLoadedForUid !== session.user.id) {
       _dataLoadedForUid = session.user.id;
       try {
+        // Small delay when restoring from a cookie session (page refresh).
+        // Ensures Supabase client has fully attached auth headers before querying.
+        if(event === 'SIGNED_IN' && !document.getElementById('login-email').value) {
+          console.log('Cookie restore detected — waiting 300ms for client to be ready...');
+          await new Promise(r => setTimeout(r, 300));
+        }
         await loadUserData();
         updateProfileUI();
         updateNavBadge();
