@@ -613,7 +613,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.3.1';
+const APP_VERSION = '1.3.2';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -1111,19 +1111,160 @@ function updateEstimate(){
     :'Select muscle groups to see an estimate.';
 }
 
+// ── SAVED WORKOUT EDITOR ──────────────────────────────────────────
+let editingWorkoutId = null;
+let editingWorkoutExercises = [];
+
 function renderSavedWorkouts(){
   const el=document.getElementById('saved-workouts-list'); if(!el) return;
-  if(!db.savedWorkouts||!db.savedWorkouts.length){el.innerHTML='<p style="font-size:13px;color:var(--muted);">No saved workouts yet. Generate a session and save it for later.</p>';return;}
-  el.innerHTML=db.savedWorkouts.map((w,i)=>
+  if(!db.savedWorkouts||!db.savedWorkouts.length){
+    el.innerHTML='<p style="font-size:13px;color:var(--muted);">No saved workouts yet. Generate a session and save it for later.</p>';
+    return;
+  }
+  el.innerHTML = db.savedWorkouts.map((w,i) =>
     '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:0.5px solid var(--border);">'
-    +'<div><div style="font-size:13px;font-weight:500;">'+w.sessionTitle+'</div>'
-    +'<div style="font-size:11px;color:var(--muted);">'+(w.muscles?w.muscles.join(', '):'')+' &middot; '+(w.exercises?w.exercises.length:0)+' exercises &middot; saved '+fmt(w.savedAt)+'</div></div>'
-    +'<div style="display:flex;gap:8px;">'
-    +'<button class="btn btn-dark btn-sm" onclick="loadSavedWorkout('+i+')">Load &amp; log</button>'
-    +'<button class="btn btn-sm" onclick="deleteSavedWorkout('+i+')">Delete</button>'
+    +'<div><div style="font-size:13px;font-weight:500;">'+(w.sessionTitle||w.title||'Workout')+'</div>'
+    +'<div style="font-size:11px;color:var(--muted);">'+(w.muscles?w.muscles.join(', '):'')
+    +' &middot; '+(w.exercises?w.exercises.length:0)+' exercises'
+    +(w.savedAt?' &middot; saved '+fmt(w.savedAt):'')+'</div></div>'
+    +'<div style="display:flex;gap:6px;">'
+    +'<button class="btn btn-dark btn-sm" data-i="'+i+'" onclick="loadSavedWorkout(parseInt(this.dataset.i))">Load &amp; log</button>'
+    +'<button class="btn btn-sm" data-i="'+i+'" onclick="openWorkoutEditor(parseInt(this.dataset.i))">Edit</button>'
+    +'<button data-i="'+i+'" onclick="deleteSavedWorkout(parseInt(this.dataset.i))" style="background:none;border:none;cursor:pointer;color:var(--color-text-tertiary);font-size:16px;">\u00d7</button>'
     +'</div></div>'
-  ).join('');
+  ).join('') + '<div id="workout-editor-container"></div>';
 }
+
+function openWorkoutEditor(i) {
+  const w = db.savedWorkouts[i];
+  if(!w) return;
+  editingWorkoutId = w.id;
+  editingWorkoutExercises = safeJSON(w.exercises, []).map(e => Object.assign({}, e));
+  renderWorkoutEditor(w, i);
+  document.getElementById('workout-editor-container').scrollIntoView({behavior:'smooth'});
+}
+
+function renderWorkoutEditor(w, idx) {
+  const container = document.getElementById('workout-editor-container');
+  if(!container) return;
+
+  // Build library options grouped by muscle
+  const libOptions = db.library.map(e =>
+    '<option value="'+e.name.replace(/"/g,'&quot;')+'" data-muscle="'+e.muscle.replace(/"/g,'&quot;')+'">'+e.name+' ('+e.muscle+')</option>'
+  ).join('');
+
+  const exRows = editingWorkoutExercises.map((ex, ei) => {
+    const isCardio = ex.isCardio || false;
+    return '<div style="padding:12px;background:var(--color-background-secondary);border-radius:var(--border-radius-md);margin-bottom:8px;">'
+      // Exercise name row
+      +'<div style="display:grid;grid-template-columns:1fr auto;gap:8px;margin-bottom:8px;">'
+      +'<div class="form-group"><label class="form-label">Exercise</label>'
+      +'<select data-ei="'+ei+'" onchange="weUpdateExercise(parseInt(this.dataset.ei),this.value,this.options[this.selectedIndex].dataset.muscle)">'
+      +'<option value="'+ex.name.replace(/"/g,'&quot;')+'">'+ex.name+'</option>'
+      +libOptions
+      +'</select></div>'
+      +'<button data-ei="'+ei+'" onclick="weRemoveExercise(parseInt(this.dataset.ei))" style="background:none;border:none;cursor:pointer;color:var(--color-text-tertiary);font-size:18px;align-self:flex-end;padding-bottom:6px;">\u00d7</button>'
+      +'</div>'
+      // Sets / reps row
+      +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">'
+      +'<div class="form-group"><label class="form-label">Sets</label>'
+      +'<select data-ei="'+ei+'" onchange="weUpdateSets(parseInt(this.dataset.ei),parseInt(this.value))">'
+      +[1,2,3,4,5].map(n=>'<option value="'+n+'"'+(ex.sets===n?' selected':'')+'>'+n+' sets</option>').join('')
+      +'</select></div>'
+      +'<div class="form-group"><label class="form-label">Reps / duration</label>'
+      +'<input type="text" value="'+(ex.reps||'').replace(/"/g,'&quot;')+'" data-ei="'+ei+'" onchange="weUpdateReps(parseInt(this.dataset.ei),this.value)" placeholder="10 reps"></div>'
+      +'<div class="form-group"><label class="form-label">Type</label>'
+      +'<select data-ei="'+ei+'" onchange="weUpdateCardio(parseInt(this.dataset.ei),this.value===\'cardio\')">'
+      +'<option value="weights"'+(isCardio?'':' selected')+'>Weights</option>'
+      +'<option value="cardio"'+(isCardio?' selected':'')+'>Cardio</option>'
+      +'</select></div>'
+      +'</div>'
+      +'</div>';
+  }).join('');
+
+  container.innerHTML = '<div class="card" style="border:2px solid var(--color-border-info);margin-top:14px;">'
+    +'<div style="font-size:15px;font-weight:500;margin-bottom:14px;">Editing: '+(w.sessionTitle||w.title||'Workout')+'</div>'
+    // Workout name
+    +'<div class="form-group" style="margin-bottom:14px;">'
+    +'<label class="form-label">Workout name</label>'
+    +'<input type="text" id="we-title" value="'+(w.sessionTitle||w.title||'').replace(/"/g,'&quot;')+'" placeholder="e.g. Push day A">'
+    +'</div>'
+    // Exercises
+    +'<div style="font-size:11px;font-weight:500;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:10px;">Exercises</div>'
+    + exRows
+    // Add exercise
+    +'<button class="btn btn-sm" style="margin-top:4px;" onclick="weAddExercise()">+ Add exercise</button>'
+    +'<div class="divider"></div>'
+    +'<div style="display:flex;gap:8px;">'
+    +'<button class="btn btn-dark btn-sm" onclick="weSave('+idx+')">Save changes</button>'
+    +'<button class="btn btn-sm" onclick="weCancelEdit()">Cancel</button>'
+    +'</div>'
+    +'</div>';
+}
+
+function weUpdateExercise(ei, name, muscle) {
+  editingWorkoutExercises[ei].name = name;
+  if(muscle) editingWorkoutExercises[ei].muscle = muscle;
+}
+function weUpdateSets(ei, sets) { editingWorkoutExercises[ei].sets = sets; }
+function weUpdateReps(ei, reps) { editingWorkoutExercises[ei].reps = reps; }
+function weUpdateCardio(ei, isCardio) { editingWorkoutExercises[ei].isCardio = isCardio; }
+
+function weRemoveExercise(ei) {
+  editingWorkoutExercises.splice(ei, 1);
+  const w = db.savedWorkouts.find(w => String(w.id) === String(editingWorkoutId));
+  if(w) renderWorkoutEditor(w, db.savedWorkouts.indexOf(w));
+}
+
+function weAddExercise() {
+  const first = db.library[0];
+  editingWorkoutExercises.push({
+    name: first ? first.name : 'New exercise',
+    muscle: first ? first.muscle : 'General',
+    sets: 3,
+    reps: '10 reps',
+    isCardio: false,
+    isRepeat: false,
+    tip: ''
+  });
+  const w = db.savedWorkouts.find(w => String(w.id) === String(editingWorkoutId));
+  if(w) renderWorkoutEditor(w, db.savedWorkouts.indexOf(w));
+}
+
+async function weSave(idx) {
+  const title = document.getElementById('we-title')?.value.trim();
+  if(!title) { toast('Enter a workout name.', 'error'); return; }
+  if(!editingWorkoutExercises.length) { toast('Add at least one exercise.', 'error'); return; }
+
+  const muscles = [...new Set(editingWorkoutExercises.map(e => e.muscle).filter(Boolean))];
+  const exercises = editingWorkoutExercises;
+
+  const {error} = await sb.from('saved_workouts').update({
+    title,
+    muscles: JSON.stringify(muscles),
+    exercises: JSON.stringify(exercises)
+  }).eq('id', editingWorkoutId);
+
+  if(error) { dbErr('Update workout', error); return; }
+
+  // Update local state
+  const w = db.savedWorkouts[idx];
+  w.sessionTitle = title;
+  w.title = title;
+  w.muscles = muscles;
+  w.exercises = exercises;
+
+  toast('Workout updated!', 'ok');
+  weCancelEdit();
+}
+
+function weCancelEdit() {
+  editingWorkoutId = null;
+  editingWorkoutExercises = [];
+  const container = document.getElementById('workout-editor-container');
+  if(container) container.innerHTML = '';
+}
+
 
 function loadSavedWorkout(i){
   const w = db.savedWorkouts[i];
