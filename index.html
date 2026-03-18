@@ -449,7 +449,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.2.7';
+const APP_VERSION = '1.2.8';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -560,9 +560,17 @@ async function signIn() {
   const password=document.getElementById('login-password').value;
   if(!email||!password){showAuthError('Please enter your email and password.');return;}
   setAuthLoading(true);
-  const {error}=await sb.auth.signInWithPassword({email,password});
+  const {data,error}=await sb.auth.signInWithPassword({email,password});
+  if(error){
+    setAuthLoading(false);
+    showAuthError(error.message);
+    dbErr('Sign in',error);
+    document.getElementById('auth-login').style.display='block';
+    return;
+  }
+  // Explicitly init app after sign in rather than waiting for onAuthStateChange
+  await initApp();
   setAuthLoading(false);
-  if(error){showAuthError(error.message);dbErr('Sign in',error);document.getElementById('auth-login').style.display='block';}
 }
 
 async function signUp() {
@@ -574,11 +582,19 @@ async function signUp() {
   if(password.length<6){showAuthError('Password must be at least 6 characters.');return;}
   setAuthLoading(true);
   const {data,error}=await sb.auth.signUp({email,password,options:{data:{name}}});
-  setAuthLoading(false);
-  if(error){showAuthError(error.message);dbErr('Sign up',error);document.getElementById('auth-signup').style.display='block';return;}
-  if(data.user){
-    const {error:spErr}=await sb.from('profiles').upsert({id:data.user.id,name,level:'intermediate',goal:'hypertrophy',cal_goal:2200,rest:JSON.stringify({strength:180,hyp:90,end:60,trans:120})});if(spErr)console.warn('Profile create:',spErr);
+  if(error){
+    setAuthLoading(false);
+    showAuthError(error.message);
+    dbErr('Sign up',error);
+    document.getElementById('auth-signup').style.display='block';
+    return;
   }
+  if(data.user){
+    const {error:spErr}=await sb.from('profiles').upsert({id:data.user.id,name,level:'intermediate',goal:'hypertrophy',cal_goal:2200,rest:JSON.stringify({strength:180,hyp:90,end:60,trans:120})});
+    if(spErr) console.warn('Profile create:',spErr);
+  }
+  await initApp();
+  setAuthLoading(false);
 }
 
 
@@ -602,52 +618,59 @@ async function signOut() {
   currentUser=null; db={...defaultDb};
 }
 
-let _dataLoadedForUid = null;
-
-sb.auth.onAuthStateChange(async (event, session) => {
+// onAuthStateChange handles UI transitions only — NOT data loading.
+// Data loading is handled explicitly in initApp() below.
+sb.auth.onAuthStateChange((event, session) => {
   console.log('Auth event:', event);
-
   if(event === 'SIGNED_OUT' || event === 'USER_DELETED') {
     currentUser = null;
-    _dataLoadedForUid = null;
     db = {...defaultDb};
     document.getElementById('auth-screen').style.display = 'flex';
     document.getElementById('app').style.display = 'none';
-    return;
+  }
+});
+
+// initApp: called once on page load.
+// Waits for the Supabase client to fully initialise from the cookie,
+// then loads data. This is more reliable than onAuthStateChange for
+// the page-refresh scenario because we control the timing ourselves.
+async function initApp() {
+  console.log('initApp: waiting for Supabase to initialise...');
+
+  // getSession() resolves only after the Supabase client has fully read
+  // and validated the cookie — so by the time it returns, auth headers
+  // are guaranteed to be attached to all subsequent queries.
+  const { data: { session }, error } = await sb.auth.getSession();
+
+  if(error) {
+    console.warn('initApp: getSession error:', error.message);
   }
 
   if(session?.user) {
+    console.log('initApp: session found, loading data...');
     currentUser = session.user;
     document.getElementById('auth-screen').style.display = 'none';
     document.getElementById('app').style.display = 'flex';
     updateProfileUI();
-
-    // Only load data once per user session.
-    // _dataLoadedForUid tracks which uid we've already loaded for.
-    // TOKEN_REFRESHED + subsequent SIGNED_IN events must not re-trigger a load.
-    if(_dataLoadedForUid !== session.user.id) {
-      _dataLoadedForUid = session.user.id;
-      try {
-        // Small delay when restoring from a cookie session (page refresh).
-        // Ensures Supabase client has fully attached auth headers before querying.
-        if(event === 'SIGNED_IN' && !document.getElementById('login-email').value) {
-          console.log('Cookie restore detected — waiting 300ms for client to be ready...');
-          await new Promise(r => setTimeout(r, 300));
-        }
-        await loadUserData();
-        updateProfileUI();
-        updateNavBadge();
-        renderOverview();
-      } catch(e) {
-        console.warn('Session load error:', e);
-        _dataLoadedForUid = null; // allow retry on next event
-        toast('Some data failed to load. Try refreshing.', 'error');
-      }
-    } else {
-      console.log('Auth event:', event, '— data already loaded for this user, skipping reload');
+    try {
+      await loadUserData();
+      updateProfileUI();
+      updateNavBadge();
+      renderOverview();
+      console.log('initApp: data loaded successfully');
+    } catch(e) {
+      console.warn('initApp: data load error:', e);
+      toast('Some data failed to load. Please refresh.', 'error');
     }
+  } else {
+    console.log('initApp: no session found, showing login');
+    document.getElementById('auth-screen').style.display = 'flex';
+    document.getElementById('app').style.display = 'none';
   }
-});
+}
+
+// Call initApp immediately on script load
+initApp();
 
 // On page load, verify the existing session is still valid
 // Session restoration is handled entirely by onAuthStateChange above.
