@@ -437,7 +437,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.0.9';
+const APP_VERSION = '1.0.10';
 const storedVersion = localStorage.getItem('gymlog_version');
 if(storedVersion !== APP_VERSION) {
   localStorage.removeItem('sb-hpyosiqjvsjtaeijsjnu-auth-token');
