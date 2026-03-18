@@ -449,7 +449,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.1.8';
+const APP_VERSION = '1.1.9';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -588,37 +588,46 @@ async function signOut() {
   currentUser=null; db={...defaultDb};
 }
 
-sb.auth.onAuthStateChange(async (event,session) => {
-  if(session?.user){
-    currentUser=session.user;
-    document.getElementById('auth-screen').style.display='none';
-    document.getElementById('app').style.display='flex';
-    // Show sidebar immediately with email fallback, then update once data loads
+sb.auth.onAuthStateChange(async (event, session) => {
+  console.log('Auth event:', event);
+
+  if(event === 'SIGNED_OUT' || event === 'USER_DELETED') {
+    currentUser = null;
+    db = {...defaultDb};
+    document.getElementById('auth-screen').style.display = 'flex';
+    document.getElementById('app').style.display = 'none';
+    return;
+  }
+
+  if(session?.user) {
+    const isNewLoad = !currentUser || currentUser.id !== session.user.id;
+    currentUser = session.user;
+    document.getElementById('auth-screen').style.display = 'none';
+    document.getElementById('app').style.display = 'flex';
     updateProfileUI();
-    try {
-      await loadUserData();
-      updateProfileUI();
-      updateNavBadge();
-      renderOverview();
-    } catch(e) {
-      console.warn('Session load error, signing out cleanly:', e);
-      await sb.auth.signOut();
+
+    // Only reload all data on initial load or when a different user signs in.
+    // TOKEN_REFRESHED events fire every 4 minutes — no need to reload data then.
+    if(isNewLoad || event === 'INITIAL_SESSION' || event === 'SIGNED_IN') {
+      try {
+        await loadUserData();
+        updateProfileUI();
+        updateNavBadge();
+        renderOverview();
+      } catch(e) {
+        console.warn('Session load error:', e);
+        // Don't sign out on load error — show what we have
+        // and let the user retry by navigating
+        toast('Some data failed to load. Try refreshing.', 'error');
+      }
     }
-  } else {
-    currentUser=null;
-    db={...defaultDb};
-    document.getElementById('auth-screen').style.display='flex';
-    document.getElementById('app').style.display='none';
   }
 });
 
 // On page load, verify the existing session is still valid
-window.addEventListener('load', async () => {
-  const { data: { session }, error } = await sb.auth.getSession();
-  if(error || !session) {
-    await sb.auth.signOut();
-  }
-});
+// Session restoration is handled entirely by onAuthStateChange above.
+// No additional load handler needed — Supabase fires onAuthStateChange
+// with INITIAL_SESSION event automatically when a cookie session is found.
 
 // ── DATA LAYER ───────────────────────────────────────────────────
 const defaultDb = { profile:{name:'',level:'intermediate',goal:'hypertrophy',calGoal:2200}, library:[], sessions:[], food:[], body:[], goals:[], rest:{strength:180,hyp:90,end:60,trans:120}, selectedMuscles:[], selectedTime:'60', selectedTimeCardio:'15', muscleSettings:{}, progressFilter:'All', activeSession:null, pendingSession:null, savedWorkouts:[] };
