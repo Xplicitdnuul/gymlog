@@ -192,6 +192,23 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 .pr-entry:last-child { border-bottom:none; }
 .pr-badge { font-size:10px; font-weight:500; padding:2px 7px; border-radius:20px; background:#EAF3DE; color:#27500A; }
 .card.hidden-card > *:not(:first-child) { display:none !important; }
+
+.day-strip{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;margin-bottom:14px;}
+.day-chip{flex-shrink:0;width:54px;display:flex;flex-direction:column;align-items:center;gap:3px;}
+.day-dot{width:36px;height:36px;border-radius:50%;border:0.5px solid var(--color-border-secondary);background:var(--color-background-secondary);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:500;color:var(--color-text-secondary);}
+.day-dot.done{background:var(--color-text-primary);color:var(--color-background-primary);border-color:var(--color-text-primary);}
+.day-dot.current{background:#185FA5;color:white;border-color:#185FA5;}
+.day-dot.rest{border-style:dashed;}
+.day-chip-lbl{font-size:10px;color:var(--color-text-tertiary);text-align:center;line-height:1.3;}
+.prog-row{display:flex;align-items:center;justify-content:space-between;padding:11px 0;border-bottom:0.5px solid var(--color-border-tertiary);}
+.prog-row:last-child{border-bottom:none;}
+.active-prog-banner{border:2px solid var(--color-border-info);border-radius:var(--border-radius-lg);padding:1rem 1.25rem;margin-bottom:14px;background:var(--color-background-primary);}
+.day-build-row{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:0.5px solid var(--color-border-tertiary);}
+.day-build-row:last-child{border-bottom:none;}
+.day-num-badge{width:24px;height:24px;border-radius:50%;background:var(--color-background-secondary);border:0.5px solid var(--color-border-tertiary);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:500;color:var(--color-text-secondary);flex-shrink:0;}
+.sug-row{padding:12px 0;border-bottom:0.5px solid var(--color-border-tertiary);}
+.sug-row:last-child{border-bottom:none;}
+.sug-added{opacity:0.45;}
 </style>
 </head>
 <body>
@@ -235,6 +252,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
       <div class="nav-item" onclick="showPage('food')"><span class="nav-icon">◎</span> Nutrition</div>
       <div class="nav-item" onclick="showPage('body')"><span class="nav-icon">◉</span> Body</div>
       <div class="nav-item" onclick="showPage('builder')"><span class="nav-icon">✎</span> Build workout</div>
+    <div class="nav-item" onclick="showPage('programme')"><span class="nav-icon">◫</span> Programme</div>
     <div class="nav-item" onclick="showPage('library')"><span class="nav-icon">≡</span> Exercise library</div>
       <div class="nav-item" onclick="showPage('settings')"><span class="nav-icon">⚙</span> Settings</div>
     </nav>
@@ -495,9 +513,46 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
       </div>
     </div>
 
+    <div id="page-programme" class="page">
+      <div class="page-title">Programme</div>
+      <div class="page-sub">Plan your training sequence in advance</div>
+      <div id="active-programme-section"></div>
+      <div class="card">
+        <div class="card-title">My programmes</div>
+        <div id="programme-list"></div>
+        <div class="divider"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn btn-dark btn-sm" onclick="showProgrammeBuilder()">+ Build manually</button>
+          <button class="btn btn-sm" id="prog-gen-btn" onclick="generateProgramme()">Generate with AI ↗</button>
+          <span id="prog-gen-status" style="font-size:13px;color:var(--muted);align-self:center;"></span>
+        </div>
+      </div>
+      <div id="programme-builder" style="display:none;">
+        <div class="card">
+          <div class="card-title">Build a programme</div>
+          <div class="form-group" style="margin-bottom:14px;">
+            <label class="form-label">Programme name</label>
+            <input type="text" id="prog-name" placeholder="e.g. Push / Pull / Legs">
+          </div>
+          <div class="card-title">Day sequence</div>
+          <div id="prog-day-list"></div>
+          <div style="display:flex;gap:8px;margin-top:12px;">
+            <button class="btn btn-sm" onclick="addProgDay(false)">+ Add workout day</button>
+            <button class="btn btn-sm" onclick="addProgDay(true)">+ Add rest day</button>
+          </div>
+          <div class="divider"></div>
+          <div style="display:flex;gap:8px;">
+            <button class="btn btn-dark btn-sm" onclick="saveProgramme()">Save programme</button>
+            <button class="btn btn-sm" onclick="cancelProgrammeBuilder()">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div id="page-library" class="page">
       <div class="page-title">Exercise library</div>
       <div class="page-sub">The AI only ever picks exercises from this list</div>
+      <div id="suggestion-panel" style="display:none;"></div>
       <div class="card">
         <div class="card-title">Import exercises</div>
         <p style="font-size:13px;color:var(--muted);margin-bottom:10px;">One per line. Tag muscle group with a colon: <em>Lateral raise: Shoulders</em></p>
@@ -505,6 +560,8 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
         <div style="display:flex;gap:10px;margin-top:10px;">
           <button class="btn btn-dark btn-sm" onclick="importLib()">Import</button>
           <button class="btn btn-sm" onclick="clearLib()">Clear all</button>
+          <button class="btn btn-sm" id="sug-btn" onclick="getExerciseSuggestions()">Get AI suggestions ↗</button>
+          <span id="sug-status" style="font-size:13px;color:var(--muted);align-self:center;"></span>
         </div>
       </div>
       <div class="card"><div class="card-title">Library — <span id="lib-count">0</span> exercises</div><div id="lib-display" style="display:flex;flex-wrap:wrap;gap:7px;"></div></div>
@@ -556,7 +613,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '1.3.1';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -877,6 +934,7 @@ async function loadUserData() {
     exercises: safeJSON(w.exercises,[])
   }));
   console.log('loadUserData complete - library:', db.library.length, 'sessions:', db.sessions.length, 'profile name:', db.profile.name);
+  await loadProgrammes();
   _loadingData = false;
 }
 
@@ -930,9 +988,9 @@ function showPage(id) {
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   document.getElementById('page-'+id).classList.add('active');
-  const navMap={overview:0,planner:1,log:2,progress:3,food:4,body:5,builder:6,library:7,settings:8};
+  const navMap={overview:0,planner:1,log:2,progress:3,food:4,body:5,builder:6,programme:7,library:8,settings:9};
   document.querySelectorAll('.nav-item')[navMap[id]].classList.add('active');
-  const renders={overview:renderOverview,planner:renderPlanner,log:renderLog,progress:renderProgress,food:renderFood,body:renderBody,builder:renderBuilder,library:renderLibrary,settings:renderSettings};
+  const renders={overview:renderOverview,planner:renderPlanner,log:renderLog,progress:renderProgress,food:renderFood,body:renderBody,builder:renderBuilder,programme:renderProgramme,library:renderLibrary,settings:renderSettings};
   if(window.innerWidth<=768) closeSidebar();
   if(renders[id]) Promise.resolve(renders[id]()).catch(e=>console.error('Page render error:',e));
 }
@@ -1922,6 +1980,361 @@ function builderClear(){
   if(t) t.value = '';
   renderBuilderList();
 }
+
+// ── PROGRAMME ─────────────────────────────────────────────────────
+let programmes = [];
+let activeProgrammeId = null;
+let progDays = [];
+let editingProgrammeId = null;
+
+async function loadProgrammes() {
+  try {
+    const {data} = await sb.from('programmes').select('*').eq('user_id', currentUser.id).order('created_at');
+    programmes = data || [];
+    activeProgrammeId = localStorage.getItem('gymlog_active_prog_' + currentUser.id);
+  } catch(e) { programmes = []; }
+}
+
+function renderProgramme() {
+  loadProgrammes().then(() => {
+    renderActiveProgramme();
+    renderProgrammeList();
+  });
+}
+
+function renderActiveProgramme() {
+  const el = document.getElementById('active-programme-section');
+  const prog = programmes.find(p => String(p.id) === String(activeProgrammeId));
+  if(!prog) { el.innerHTML = ''; return; }
+  const days = safeJSON(prog.days, []);
+  const currentDay = prog.current_day || 0;
+  const nextDay = days[currentDay];
+
+  const dotHtml = days.map((d, i) => {
+    const isDone = i < currentDay;
+    const isCurrent = i === currentDay;
+    const isRest = d.type === 'rest';
+    const cls = isDone ? 'done' : isCurrent ? 'current' : isRest ? 'rest' : '';
+    const lbl = isRest ? 'Rest' : (d.workoutTitle || ('Day ' + (i+1)));
+    const shortLbl = lbl.length > 8 ? lbl.slice(0,7) + '\u2026' : lbl;
+    const num = isRest ? 'R' : (i+1);
+    return '<div class="day-chip"><div class="day-dot ' + cls + '">' + num + '</div><div class="day-chip-lbl">' + shortLbl + '</div></div>';
+  }).join('');
+
+  const muscleTagsHtml = (nextDay && nextDay.muscles) ?
+    nextDay.muscles.map(m => '<span class="tag tag-blue" style="margin-right:4px;">' + m + '</span>').join('') : '';
+
+  const isRestDay = nextDay && nextDay.type === 'rest';
+  const nextUpHtml = nextDay ? (
+    '<div style="background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:12px 14px;margin-bottom:14px;">'
+    + '<div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:3px;">Up next \u2014 Day ' + (currentDay+1) + '</div>'
+    + '<div style="font-size:15px;font-weight:500;margin-bottom:8px;">' + (nextDay.workoutTitle || 'Rest day') + '</div>'
+    + '<div style="margin-bottom:10px;">' + muscleTagsHtml + '</div>'
+    + (isRestDay
+        ? '<button class="btn btn-sm" onclick="skipProgrammeDay()">Mark rest day done \u2192</button>'
+        : '<div style="display:flex;gap:8px;"><button class="btn btn-dark btn-sm" onclick="startProgrammeDay()">Start this session</button><button class="btn btn-sm" onclick="skipProgrammeDay()">Skip day</button></div>')
+    + '</div>'
+  ) : '';
+
+  el.innerHTML = '<div class="active-prog-banner">'
+    + '<div style="font-size:11px;font-weight:500;color:var(--color-text-info);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:8px;">Active programme</div>'
+    + '<div style="font-size:17px;font-weight:500;margin-bottom:3px;">' + prog.name + '</div>'
+    + '<div style="font-size:13px;color:var(--color-text-secondary);margin-bottom:14px;">Day ' + (currentDay+1) + ' of ' + days.length + ' \u00b7 loops automatically</div>'
+    + '<div class="day-strip">' + dotHtml + '</div>'
+    + nextUpHtml
+    + '<div style="display:flex;gap:8px;"><button class="btn btn-sm" onclick="editProgramme(' + prog.id + ')">Edit</button><button class="btn btn-sm" onclick="deactivateProgramme()">Deactivate</button></div>'
+    + '</div>';
+}
+
+function renderProgrammeList() {
+  const el = document.getElementById('programme-list');
+  if(!programmes.length) {
+    el.innerHTML = '<p style="font-size:13px;color:var(--color-text-secondary);margin-bottom:4px;">No programmes yet. Build one or generate with AI.</p>';
+    return;
+  }
+  el.innerHTML = programmes.map(p => {
+    const days = safeJSON(p.days, []);
+    const muscles = [...new Set(days.filter(d => d.muscles).flatMap(d => d.muscles))].slice(0,4).join(', ');
+    const isActive = String(p.id) === String(activeProgrammeId);
+    return '<div class="prog-row">'
+      + '<div><div style="font-size:13px;font-weight:500;">' + p.name + '</div>'
+      + '<div style="font-size:12px;color:var(--color-text-secondary);margin-top:2px;">' + days.length + ' days \u00b7 ' + (muscles || 'no muscles set') + '</div></div>'
+      + '<div style="display:flex;align-items:center;gap:8px;">'
+      + (isActive ? '<span class="tag tag-green">Active</span>' : '<button class="btn btn-sm" data-pid="' + p.id + '" onclick="activateProgramme(this.dataset.pid)">Activate</button>')
+      + '<button class="btn btn-sm" data-pid="' + p.id + '" onclick="editProgramme(this.dataset.pid)">Edit</button>'
+      + '<button data-pid="' + p.id + '" onclick="deleteProgramme(this.dataset.pid)" style="background:none;border:none;cursor:pointer;color:var(--color-text-tertiary);font-size:16px;">\u00d7</button>'
+      + '</div></div>';
+  }).join('');
+}
+
+function activateProgramme(id) {
+  activeProgrammeId = id;
+  localStorage.setItem('gymlog_active_prog_' + currentUser.id, id);
+  renderActiveProgramme();
+  renderProgrammeList();
+}
+
+function deactivateProgramme() {
+  activeProgrammeId = null;
+  localStorage.removeItem('gymlog_active_prog_' + currentUser.id);
+  renderActiveProgramme();
+  renderProgrammeList();
+}
+
+function startProgrammeDay() {
+  const prog = programmes.find(p => String(p.id) === String(activeProgrammeId));
+  if(!prog) return;
+  const days = safeJSON(prog.days, []);
+  const day = days[prog.current_day || 0];
+  if(!day || day.type === 'rest') return;
+  const saved = db.savedWorkouts.find(w => (w.sessionTitle || w.title) === day.workoutTitle);
+  if(!saved) { toast('Saved workout not found: ' + day.workoutTitle, 'error'); return; }
+  const idx = db.savedWorkouts.indexOf(saved);
+  loadSavedWorkout(idx);
+  advanceProgrammeDay(prog);
+}
+
+async function skipProgrammeDay() {
+  const prog = programmes.find(p => String(p.id) === String(activeProgrammeId));
+  if(!prog) return;
+  await advanceProgrammeDay(prog);
+}
+
+async function advanceProgrammeDay(prog) {
+  const days = safeJSON(prog.days, []);
+  const next = ((prog.current_day || 0) + 1) % days.length;
+  prog.current_day = next;
+  await sb.from('programmes').update({current_day: next}).eq('id', prog.id);
+  renderActiveProgramme();
+}
+
+function showProgrammeBuilder(prog) {
+  editingProgrammeId = prog ? prog.id : null;
+  progDays = prog ? safeJSON(prog.days, []).map(d => Object.assign({}, d)) : [];
+  document.getElementById('prog-name').value = prog ? prog.name : '';
+  document.getElementById('programme-builder').style.display = 'block';
+  renderProgDayList();
+  document.getElementById('programme-builder').scrollIntoView({behavior: 'smooth'});
+}
+
+function cancelProgrammeBuilder() {
+  document.getElementById('programme-builder').style.display = 'none';
+  progDays = [];
+  editingProgrammeId = null;
+}
+
+function addProgDay(isRest) {
+  if(isRest) {
+    progDays.push({type: 'rest', workoutTitle: 'Rest day', muscles: []});
+  } else {
+    progDays.push({type: 'workout', workoutTitle: '', muscles: []});
+  }
+  renderProgDayList();
+}
+
+function renderProgDayList() {
+  const el = document.getElementById('prog-day-list');
+  if(!progDays.length) {
+    el.innerHTML = '<p style="font-size:13px;color:var(--color-text-secondary);padding:8px 0;">No days added yet.</p>';
+    return;
+  }
+  const workoutOptions = db.savedWorkouts.map(w => {
+    const t = w.sessionTitle || w.title || '';
+    return '<option value="' + t.replace(/"/g, '&quot;') + '">' + t + '</option>';
+  }).join('');
+
+  el.innerHTML = progDays.map((d, i) => {
+    const isRest = d.type === 'rest';
+    const badgeExtra = isRest ? 'background:#FAEEDA;border-color:#EF9F27;color:#633806;' : '';
+    const selectHtml = isRest
+      ? '<span style="font-size:13px;color:var(--color-text-secondary);flex:1;">Rest day</span>'
+      : '<select style="flex:1;padding:6px 10px;font-size:13px;border:0.5px solid var(--color-border-secondary);border-radius:var(--border-radius-md);background:var(--color-background-primary);color:var(--color-text-primary);font-family:var(--font-sans);" data-idx="' + i + '" onchange="setProgDayWorkout(parseInt(this.dataset.idx),this.value)">'
+        + '<option value="">Select saved workout...</option>'
+        + workoutOptions.replace('value="' + (d.workoutTitle || '').replace(/"/g, '&quot;') + '"', 'value="' + (d.workoutTitle || '').replace(/"/g, '&quot;') + '" selected')
+        + '</select>';
+    return '<div class="day-build-row">'
+      + '<div class="day-num-badge" style="' + badgeExtra + '">' + (isRest ? 'R' : (i+1)) + '</div>'
+      + selectHtml
+      + '<button data-idx="' + i + '" onclick="removeProgDay(parseInt(this.dataset.idx))" style="background:none;border:none;cursor:pointer;color:var(--color-text-tertiary);font-size:16px;">\u00d7</button>'
+      + '</div>';
+  }).join('');
+}
+
+function setProgDayWorkout(i, title) {
+  const sw = db.savedWorkouts.find(w => (w.sessionTitle || w.title) === title);
+  progDays[i].workoutTitle = title;
+  progDays[i].muscles = sw ? safeJSON(sw.muscles, []) : [];
+}
+
+function removeProgDay(i) {
+  progDays.splice(i, 1);
+  renderProgDayList();
+}
+
+async function saveProgramme() {
+  const name = document.getElementById('prog-name').value.trim();
+  if(!name) { toast('Enter a programme name.', 'error'); return; }
+  if(!progDays.length) { toast('Add at least one day.', 'error'); return; }
+  const daysJson = JSON.stringify(progDays);
+  if(editingProgrammeId) {
+    const {error} = await sb.from('programmes').update({name, days: daysJson}).eq('id', editingProgrammeId);
+    if(error) { dbErr('Save programme', error); return; }
+    const p = programmes.find(p => String(p.id) === String(editingProgrammeId));
+    if(p) { p.name = name; p.days = progDays; }
+  } else {
+    const {data, error} = await sb.from('programmes').insert({user_id: currentUser.id, name, days: daysJson, current_day: 0}).select().single();
+    if(error) { dbErr('Save programme', error); return; }
+    if(data) programmes.push(Object.assign({}, data, {days: progDays}));
+  }
+  toast('Programme saved!', 'ok');
+  cancelProgrammeBuilder();
+  renderProgrammeList();
+}
+
+function editProgramme(id) {
+  const prog = programmes.find(p => String(p.id) === String(id));
+  if(prog) showProgrammeBuilder(prog);
+}
+
+async function deleteProgramme(id) {
+  if(!confirm('Delete this programme?')) return;
+  const {error} = await sb.from('programmes').delete().eq('id', id);
+  if(error) { dbErr('Delete programme', error); return; }
+  programmes = programmes.filter(p => String(p.id) !== String(id));
+  if(String(activeProgrammeId) === String(id)) deactivateProgramme();
+  renderProgrammeList();
+}
+
+async function generateProgramme() {
+  if(!db.savedWorkouts.length) { toast('Save some workouts first.', 'error'); return; }
+  const btn = document.getElementById('prog-gen-btn');
+  const status = document.getElementById('prog-gen-status');
+  btn.disabled = true;
+  status.innerHTML = '<span class="loading"><span></span><span></span><span></span></span>';
+  const wkList = db.savedWorkouts.map(w => (w.sessionTitle||w.title) + ': ' + safeJSON(w.muscles,[]).join(', ')).join('\n');
+  const goalTxt = db.goals.map(g => g.text).join(', ') || 'General fitness';
+  const lines = [
+    'You are a personal trainer AI. Create a weekly training programme using ONLY these saved workouts:',
+    wkList,
+    'User goals: ' + goalTxt,
+    'Create a balanced programme that loops weekly. Include rest days where appropriate.',
+    'Use ONLY the exact workout names from the list above.',
+    'Return ONLY valid JSON, no markdown, no extra text:',
+    '{"name":"Programme name","days":[{"type":"workout","workoutTitle":"exact name from list","muscles":["Chest"]},{"type":"rest","workoutTitle":"Rest day","muscles":[]}]}'
+  ];
+  try {
+    const res = await fetch('/api/chat', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({model:'claude-haiku-4-5-20251001', max_tokens:1000, messages:[{role:'user', content:lines.join('\n')}]})});
+    const data = await res.json();
+    const txt = data.content.map(b => b.text||'').join('').replace(/```json|```/g,'').trim();
+    const prog = JSON.parse(txt);
+    document.getElementById('prog-name').value = prog.name || '';
+    progDays = prog.days || [];
+    document.getElementById('programme-builder').style.display = 'block';
+    renderProgDayList();
+    document.getElementById('programme-builder').scrollIntoView({behavior:'smooth'});
+    status.textContent = '';
+    toast('Programme generated. Review and save.', 'ok');
+  } catch(e) { status.textContent = 'Error. Try again.'; console.error(e); }
+  btn.disabled = false;
+}
+
+// ── EXERCISE SUGGESTIONS ──────────────────────────────────────────
+let exerciseSuggestions = [];
+let addedSuggestions = new Set();
+let sugMuscleFilter = 'All';
+
+async function getExerciseSuggestions() {
+  if(!db.library.length) { toast('Add exercises to your library first.', 'error'); return; }
+  const btn = document.getElementById('sug-btn');
+  const status = document.getElementById('sug-status');
+  btn.disabled = true;
+  status.innerHTML = '<span class="loading"><span></span><span></span><span></span></span>';
+  addedSuggestions = new Set();
+  sugMuscleFilter = 'All';
+  const libTxt = db.library.map(e => e.name + ' (' + e.muscle + ')').join(', ');
+  const lines = [
+    'You are a personal trainer AI. Analyse this exercise library and suggest exactly 20 exercises the user is missing.',
+    'Current library: ' + libTxt,
+    'Rules:',
+    '- Do NOT suggest any exercise already in the library',
+    '- Identify gaps: missing muscle groups, movement patterns, useful variations',
+    '- Explain briefly why each suggestion complements what they have',
+    '- Cover a variety of muscle groups across the 20 suggestions',
+    '- Suggest exactly 20 exercises',
+    'Return ONLY valid JSON, no markdown:',
+    '{"suggestions":[{"name":"Exercise name","muscle":"Primary muscle group","reason":"One sentence why","basedOn":"Their existing exercise(s) this relates to"}]}'
+  ];
+  try {
+    const res = await fetch('/api/chat', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({model:'claude-haiku-4-5-20251001', max_tokens:2000, messages:[{role:'user', content:lines.join('\n')}]})});
+    const data = await res.json();
+    const txt = data.content.map(b => b.text||'').join('').replace(/```json|```/g,'').trim();
+    const parsed = JSON.parse(txt);
+    exerciseSuggestions = parsed.suggestions || [];
+    status.textContent = '';
+    renderSuggestionPanel();
+    const panel = document.getElementById('suggestion-panel');
+    panel.style.display = 'block';
+    panel.scrollIntoView({behavior:'smooth'});
+  } catch(e) { status.textContent = 'Error. Try again.'; console.error(e); }
+  btn.disabled = false;
+}
+
+function renderSuggestionPanel() {
+  const panel = document.getElementById('suggestion-panel');
+  const muscles = ['All', ...new Set(exerciseSuggestions.map(s => s.muscle))];
+  const filtered = sugMuscleFilter === 'All' ? exerciseSuggestions : exerciseSuggestions.filter(s => s.muscle === sugMuscleFilter);
+
+  const pillsHtml = muscles.map(m => {
+    const sel = sugMuscleFilter === m;
+    return '<button class="filter-pill' + (sel ? ' sel' : '') + '" data-m="' + m + '" onclick="setSugFilter(this.dataset.m)">' + m + '</button>';
+  }).join('');
+
+  const rowsHtml = filtered.map((s, i) => {
+    const isAdded = addedSuggestions.has(s.name);
+    const addBtn = isAdded
+      ? '<button class="btn btn-sm" disabled style="opacity:0.5;">Added</button>'
+      : '<button class="btn btn-sm" style="background:#2E7D32;color:white;border-color:#2E7D32;" data-name="' + s.name.replace(/"/g,'&quot;') + '" data-muscle="' + s.muscle.replace(/"/g,'&quot;') + '" onclick="addSuggestion(this.dataset.name,this.dataset.muscle)">+ Add</button>';
+    return '<div class="sug-row' + (isAdded ? ' sug-added' : '') + '">'
+      + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;">'
+      + '<div style="display:flex;align-items:center;gap:8px;"><span style="font-size:14px;font-weight:500;">' + s.name + '</span><span class="tag tag-blue">' + s.muscle + '</span></div>'
+      + addBtn + '</div>'
+      + '<div style="font-size:12px;color:var(--color-text-secondary);margin-bottom:4px;line-height:1.5;">' + s.reason + '</div>'
+      + '<div style="font-size:11px;color:var(--color-text-tertiary);">Based on: <span style="color:var(--color-text-secondary);font-weight:500;">' + s.basedOn + '</span></div>'
+      + '</div>';
+  }).join('');
+
+  panel.innerHTML = '<div class="card">'
+    + '<div class="card-title">AI exercise suggestions \u2014 ' + exerciseSuggestions.length + ' ideas</div>'
+    + '<div style="background:#EBF2FB;border:0.5px solid #90BEF5;border-radius:var(--border-radius-md);padding:10px 13px;font-size:13px;color:#0C447C;margin-bottom:14px;line-height:1.55;">Based on your ' + db.library.length + ' exercises. Click any suggestion to add it directly to your library.</div>'
+    + '<div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:14px;">' + pillsHtml + '</div>'
+    + rowsHtml
+    + '<div class="divider"></div>'
+    + '<div style="display:flex;gap:8px;align-items:center;">'
+    + '<button class="btn btn-sm" onclick="getExerciseSuggestions()">Regenerate \u2197</button>'
+    + '<button class="btn btn-sm" onclick="document.getElementById(\'suggestion-panel\').style.display=\'none\'">Close</button>'
+    + '<span style="font-size:12px;color:var(--color-text-tertiary);">' + exerciseSuggestions.length + ' suggestions \u00b7 ' + addedSuggestions.size + ' added</span>'
+    + '</div></div>';
+}
+
+function setSugFilter(m) {
+  sugMuscleFilter = m;
+  renderSuggestionPanel();
+}
+
+async function addSuggestion(name, muscle) {
+  if(db.library.find(e => e.name.toLowerCase() === name.toLowerCase())) {
+    toast(name + ' is already in your library.', 'error'); return;
+  }
+  const {data, error} = await sb.from('library').insert({user_id: currentUser.id, name, muscle}).select().single();
+  if(error) { dbErr('Add suggestion', error); return; }
+  if(data) db.library.push({id: data.id, name, muscle});
+  addedSuggestions.add(name);
+  toast(name + ' added to library.', 'ok');
+  renderSuggestionPanel();
+}
+
 
 // ── LIBRARY ───────────────────────────────────────────────────────
 async function importLib(){
