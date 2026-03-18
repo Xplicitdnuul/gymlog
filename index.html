@@ -140,6 +140,21 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 #toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); background:#1A1A18; color:white; padding:10px 20px; border-radius:8px; font-size:13px; font-family:var(--font); z-index:9999; display:none; max-width:80vw; text-align:center; }
 #toast.error { background:#B71C1C; }
 #toast.ok { background:#2E7D32; }
+
+/* MOBILE */
+@media (max-width: 768px) {
+  .sidebar { position:fixed; left:-220px; top:0; height:100vh; z-index:200; transition:left 0.22s ease; }
+  .sidebar.open { left:0; }
+  .main { margin-left:0 !important; }
+  .page { padding:20px 16px 80px; }
+  .metric-grid { grid-template-columns:1fr 1fr; }
+  .form-2,.form-3,.form-4 { grid-template-columns:1fr; }
+  #muscle-settings-list > div { grid-template-columns:1fr 1fr !important; }
+}
+.overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.35); z-index:199; }
+.overlay.show { display:block; }
+.hamburger { display:none; position:fixed; top:14px; left:14px; z-index:300; background:var(--surface); border:0.5px solid var(--border-md); border-radius:var(--radius-sm); padding:7px 10px; cursor:pointer; font-size:18px; line-height:1; }
+@media (max-width:768px) { .hamburger { display:block; } .app { flex-direction:column; } }
 </style>
 </head>
 <body>
@@ -171,6 +186,8 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 
 <!-- APP -->
 <div class="app" id="app">
+  <button class="hamburger" onclick="toggleSidebar()" id="hamburger">☰</button>
+  <div class="overlay" id="overlay" onclick="closeSidebar()"></div>
   <aside class="sidebar">
     <div class="logo">Gym<span>log</span></div>
     <nav>
@@ -180,7 +197,8 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
       <div class="nav-item" onclick="showPage('progress')"><span class="nav-icon">↗</span> Progress</div>
       <div class="nav-item" onclick="showPage('food')"><span class="nav-icon">◎</span> Nutrition</div>
       <div class="nav-item" onclick="showPage('body')"><span class="nav-icon">◉</span> Body</div>
-      <div class="nav-item" onclick="showPage('library')"><span class="nav-icon">≡</span> Exercise library</div>
+      <div class="nav-item" onclick="showPage('builder')"><span class="nav-icon">✎</span> Build workout</div>
+    <div class="nav-item" onclick="showPage('library')"><span class="nav-icon">≡</span> Exercise library</div>
       <div class="nav-item" onclick="showPage('settings')"><span class="nav-icon">⚙</span> Settings</div>
     </nav>
     <div class="sidebar-bottom">
@@ -332,6 +350,32 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
       <div class="card"><div class="card-title">History</div><div id="body-history"></div></div>
     </div>
 
+    <div id="page-builder" class="page">
+      <div class="page-title">Build a workout</div>
+      <div class="page-sub">Pick exercises from your library and save the workout</div>
+
+      <div class="card">
+        <div class="card-title">Workout name</div>
+        <input type="text" id="builder-title" placeholder="e.g. Push day A, Leg day, Full body..." style="margin-bottom:0;">
+      </div>
+
+      <div class="card">
+        <div class="card-title">Add exercises</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:10px;align-items:end;margin-bottom:10px;" id="builder-add-row">
+          <div class="form-group"><label class="form-label">Exercise</label><select id="builder-ex-pick"><option value="">Select from library...</option></select></div>
+          <div class="form-group"><label class="form-label">Sets</label><select id="builder-sets"><option value="2">2</option><option value="3" selected>3</option><option value="4">4</option><option value="5">5</option></select></div>
+          <div class="form-group"><label class="form-label">Reps / duration</label><input type="text" id="builder-reps" placeholder="10 reps, 30 min..."></div>
+          <button class="btn btn-dark" style="align-self:end;" onclick="builderAddExercise()">Add</button>
+        </div>
+        <div id="builder-ex-list"></div>
+      </div>
+
+      <div style="display:flex;gap:10px;">
+        <button class="btn btn-dark" onclick="builderSave()">Save workout</button>
+        <button class="btn" onclick="builderClear()">Clear</button>
+      </div>
+    </div>
+
     <div id="page-library" class="page">
       <div class="page-title">Exercise library</div>
       <div class="page-sub">The AI only ever picks exercises from this list</div>
@@ -393,7 +437,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.0.5';
+const APP_VERSION = '1.0.6';
 const storedVersion = localStorage.getItem('gymlog_version');
 if(storedVersion !== APP_VERSION) {
   localStorage.removeItem('sb-hpyosiqjvsjtaeijsjnu-auth-token');
@@ -470,6 +514,20 @@ async function signUp() {
   }
 }
 
+
+function toggleSidebar(){
+  const sb=document.querySelector('.sidebar');
+  const ov=document.getElementById('overlay');
+  const hb=document.getElementById('hamburger');
+  sb.classList.toggle('open');
+  ov.classList.toggle('show');
+  hb.textContent=sb.classList.contains('open')?'✕':'☰';
+}
+function closeSidebar(){
+  document.querySelector('.sidebar').classList.remove('open');
+  document.getElementById('overlay').classList.remove('show');
+  document.getElementById('hamburger').textContent='☰';
+}
 async function signOut() {
   await sb.auth.signOut();
   document.getElementById('app').style.display='none';
@@ -573,9 +631,10 @@ function showPage(id) {
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   document.getElementById('page-'+id).classList.add('active');
-  const navMap={overview:0,planner:1,log:2,progress:3,food:4,body:5,library:6,settings:7};
+  const navMap={overview:0,planner:1,log:2,progress:3,food:4,body:5,builder:6,library:7,settings:8};
   document.querySelectorAll('.nav-item')[navMap[id]].classList.add('active');
-  const renders={overview:renderOverview,planner:renderPlanner,log:renderLog,progress:renderProgress,food:renderFood,body:renderBody,library:renderLibrary,settings:renderSettings};
+  const renders={overview:renderOverview,planner:renderPlanner,log:renderLog,progress:renderProgress,food:renderFood,body:renderBody,builder:renderBuilder,library:renderLibrary,settings:renderSettings};
+  if(window.innerWidth<=768) closeSidebar();
   if(renders[id]) renders[id]();
 }
 
@@ -932,6 +991,102 @@ function renderBody(){
   document.getElementById('body-history').innerHTML=db.body.length?`<table class="tbl"><tr><th>Date</th><th>Weight</th><th>Body fat</th><th>Waist</th><th>Chest</th><th>Bicep</th><th></th></tr>`+[...db.body].reverse().map((b,i)=>`<tr><td>${fmt(b.date)}</td><td>${b.weight}kg</td><td>${b.fat?b.fat+'%':'—'}</td><td>${b.waist?b.waist+'cm':'—'}</td><td>${b.chest?b.chest+'cm':'—'}</td><td>${b.bicep?b.bicep+'cm':'—'}</td><td><button onclick="deleteBody(${b.id})" style="background:none;border:none;cursor:pointer;color:var(--faint);font-size:14px;">×</button></td></tr>`).join('')+'</table>':'<p style="color:var(--muted);font-size:13px;">No measurements logged yet.</p>';
 }
 async function deleteBody(id){const{error:dbErr2}=await sb.from('body_log').delete().eq('id',id);if(dbErr2){dbErr('Delete body',dbErr2);return;}db.body=db.body.filter(b=>b.id!==id);renderBody();}
+
+
+// ── MANUAL WORKOUT BUILDER ────────────────────────────────────────
+let builderExercises = [];
+
+function renderBuilder(){
+  // Populate exercise picker from library
+  const pick = document.getElementById('builder-ex-pick');
+  if(!pick) return;
+  const grouped = {};
+  db.library.forEach(e=>{ if(!grouped[e.muscle]) grouped[e.muscle]=[]; grouped[e.muscle].push(e.name); });
+  pick.innerHTML = '<option value="">Select from library...</option>'
+    + Object.keys(grouped).sort().map(muscle=>
+        '<optgroup label="'+muscle+'">'
+        + grouped[muscle].map(name=>'<option value="'+name+'" data-muscle="'+muscle+'">'+name+'</option>').join('')
+        +'</optgroup>'
+      ).join('');
+  renderBuilderList();
+}
+
+function builderAddExercise(){
+  const pick = document.getElementById('builder-ex-pick');
+  const name = pick.value;
+  if(!name){ toast('Select an exercise first.','error'); return; }
+  const opt = pick.querySelector('option[value="'+name+'"]');
+  const muscle = opt ? opt.dataset.muscle : 'General';
+  const sets = parseInt(document.getElementById('builder-sets').value)||3;
+  const reps = document.getElementById('builder-reps').value.trim()||'10 reps';
+  const isCardio = muscle === 'Cardio';
+  builderExercises.push({name, muscle, sets, reps, isRepeat:false, isCardio, tip:''});
+  pick.value = '';
+  document.getElementById('builder-reps').value = '';
+  renderBuilderList();
+}
+
+function renderBuilderList(){
+  const el = document.getElementById('builder-ex-list');
+  if(!el) return;
+  if(!builderExercises.length){
+    el.innerHTML = '<p style="font-size:13px;color:var(--muted);padding:10px 0;">No exercises added yet.</p>';
+    return;
+  }
+  el.innerHTML = builderExercises.map((ex,i)=>
+    '<div style="display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:0.5px solid var(--border);">'
+    +'<div>'
+    +'<div style="font-size:13px;font-weight:500;">'+ex.name+'</div>'
+    +'<div style="font-size:11px;color:var(--muted);">'+ex.muscle+' &middot; '+ex.sets+' sets &times; '+ex.reps+'</div>'
+    +'</div>'
+    +'<div style="display:flex;gap:8px;align-items:center;">'
+    +'<button onclick="builderMoveUp('+i+')" style="background:none;border:0.5px solid var(--border);border-radius:4px;padding:2px 7px;cursor:pointer;color:var(--muted);">↑</button>'
+    +'<button onclick="builderMoveDown('+i+')" style="background:none;border:0.5px solid var(--border);border-radius:4px;padding:2px 7px;cursor:pointer;color:var(--muted);">↓</button>'
+    +'<button onclick="builderRemove('+i+')" style="background:none;border:none;cursor:pointer;color:var(--faint);font-size:16px;">×</button>'
+    +'</div>'
+    +'</div>'
+  ).join('');
+}
+
+function builderMoveUp(i){
+  if(i===0) return;
+  [builderExercises[i-1],builderExercises[i]]=[builderExercises[i],builderExercises[i-1]];
+  renderBuilderList();
+}
+function builderMoveDown(i){
+  if(i>=builderExercises.length-1) return;
+  [builderExercises[i+1],builderExercises[i]]=[builderExercises[i],builderExercises[i+1]];
+  renderBuilderList();
+}
+function builderRemove(i){
+  builderExercises.splice(i,1);
+  renderBuilderList();
+}
+
+function builderSave(){
+  const title = document.getElementById('builder-title').value.trim() || 'Custom workout';
+  if(!builderExercises.length){ toast('Add at least one exercise first.','error'); return; }
+  const muscles = [...new Set(builderExercises.map(e=>e.muscle))];
+  const workout = {
+    sessionTitle: title,
+    exercises: builderExercises,
+    muscles,
+    coachNote: '',
+    savedAt: new Date().toISOString()
+  };
+  if(!db.savedWorkouts) db.savedWorkouts = [];
+  db.savedWorkouts.push(workout);
+  saveSavedWorkouts();
+  toast('Workout "'+title+'" saved!','ok');
+  builderClear();
+}
+
+function builderClear(){
+  builderExercises = [];
+  const t = document.getElementById('builder-title');
+  if(t) t.value = '';
+  renderBuilderList();
+}
 
 // ── LIBRARY ───────────────────────────────────────────────────────
 async function importLib(){
