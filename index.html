@@ -449,7 +449,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.2.3';
+const APP_VERSION = '1.2.4';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -642,16 +642,27 @@ async function loadUserData() {
   _loadingData = true;
   const uid = currentUser.id;
   console.log('loadUserData start, uid:', uid);
-  const [prof, lib, sess, food, body, goals, draft] = await Promise.all([
-    sb.from('profiles').select('*').eq('id',uid).maybeSingle(),
-    sb.from('library').select('*').eq('user_id',uid).order('name'),
-    sb.from('sessions').select('*').eq('user_id',uid).order('date'),
-    sb.from('food_log').select('*').eq('user_id',uid).order('created_at'),
-    sb.from('body_log').select('*').eq('user_id',uid).order('date'),
-    sb.from('goals').select('*').eq('user_id',uid).order('created_at'),
-    sb.from('sessions').select('*').eq('user_id',uid).eq('is_draft',true).order('created_at').limit(1),
-  ]);
-  if(prof.data){ const p=prof.data; db.profile={name:p.name||'',level:p.level||'intermediate',goal:p.goal||'hypertrophy',calGoal:p.cal_goal||2200}; try{if(p.rest)db.rest={...db.rest,...JSON.parse(p.rest)};}catch(e){} } else { const{error:autoErr}=await sb.from('profiles').upsert({id:uid,name:'',level:'intermediate',goal:'hypertrophy',cal_goal:2200,rest:JSON.stringify({strength:180,hyp:90,end:60,trans:120})}); if(autoErr) console.warn('Auto profile:',autoErr); }
+  console.log('querying profiles...');
+  const prof = await sb.from('profiles').select('*').eq('id',uid).maybeSingle();
+  console.log('profiles done');
+  console.log('querying library...');
+  const lib = await sb.from('library').select('*').eq('user_id',uid).order('name');
+  console.log('library done');
+  console.log('querying sessions...');
+  const sess = await sb.from('sessions').select('*').eq('user_id',uid).order('date');
+  console.log('sessions done');
+  console.log('querying food_log...');
+  const food = await sb.from('food_log').select('*').eq('user_id',uid).order('created_at');
+  console.log('food_log done');
+  console.log('querying body_log...');
+  const body = await sb.from('body_log').select('*').eq('user_id',uid).order('date');
+  console.log('body_log done');
+  console.log('querying goals...');
+  const goals = await sb.from('goals').select('*').eq('user_id',uid).order('created_at');
+  console.log('goals done');
+  console.log('querying draft...');
+  const draft = await sb.from('sessions').select('*').eq('user_id',uid).eq('is_draft',true).order('created_at').limit(1);
+  console.log('draft done');
   console.log('loadUserData results - prof:', prof.error||prof.data?.name, 'lib:', lib.data?.length, 'sess:', sess.data?.length, 'lib error:', lib.error, 'sess error:', sess.error);
   db.library = (lib.data||[]).map(e=>({id:e.id,name:e.name,muscle:e.muscle}));
   db.sessions = (sess.data||[]).filter(s=>!s.is_draft).map(s=>({...s, sessionTitle:s.title||s.sessionTitle||'Session', exercises:JSON.parse(s.exercises||'[]'), muscles:JSON.parse(s.muscles||'[]')}));
