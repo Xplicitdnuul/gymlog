@@ -449,7 +449,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.1.3';
+const APP_VERSION = '1.1.5';
 const storedVersion = localStorage.getItem('gymlog_version');
 if(storedVersion !== APP_VERSION) {
   localStorage.removeItem('sb-hpyosiqjvsjtaeijsjnu-auth-token');
@@ -612,7 +612,7 @@ async function loadUserData() {
   ]);
   if(prof.data){ const p=prof.data; db.profile={name:p.name||'',level:p.level||'intermediate',goal:p.goal||'hypertrophy',calGoal:p.cal_goal||2200}; try{if(p.rest)db.rest={...db.rest,...JSON.parse(p.rest)};}catch(e){} } else { const{error:autoErr}=await sb.from('profiles').upsert({id:uid,name:'',level:'intermediate',goal:'hypertrophy',cal_goal:2200,rest:JSON.stringify({strength:180,hyp:90,end:60,trans:120})}); if(autoErr) console.warn('Auto profile:',autoErr); }
   db.library = (lib.data||[]).map(e=>({id:e.id,name:e.name,muscle:e.muscle}));
-  db.sessions = (sess.data||[]).filter(s=>!s.is_draft).map(s=>({...s, exercises:JSON.parse(s.exercises||'[]'), muscles:JSON.parse(s.muscles||'[]')}));
+  db.sessions = (sess.data||[]).filter(s=>!s.is_draft).map(s=>({...s, sessionTitle:s.title||s.sessionTitle||'Session', exercises:JSON.parse(s.exercises||'[]'), muscles:JSON.parse(s.muscles||'[]')}));
   db.food = (food.data||[]).map(f=>({...f}));
   db.body = (body.data||[]).map(b=>({...b}));
   db.goals = (goals.data||[]).map(g=>({...g}));
@@ -633,9 +633,10 @@ async function loadUserData() {
   const sw = await sb.from('saved_workouts').select('*').eq('user_id',uid).order('saved_at');
   db.savedWorkouts = (sw.data||[]).map(w=>({
     ...w,
-    sessionTitle: w.title,
-    muscles: typeof w.muscles==='string'?JSON.parse(w.muscles):w.muscles,
-    exercises: typeof w.exercises==='string'?JSON.parse(w.exercises):w.exercises
+    sessionTitle: w.title||w.sessionTitle||'Workout',
+    savedAt: w.saved_at||w.savedAt||new Date().toISOString(),
+    muscles: typeof w.muscles==='string'?JSON.parse(w.muscles||'[]'):(w.muscles||[]),
+    exercises: typeof w.exercises==='string'?JSON.parse(w.exercises||'[]'):(w.exercises||[])
   }));
 }
 
@@ -708,7 +709,7 @@ async function refreshData(){
     sb.from('food_log').select('*').eq('user_id',uid).order('created_at'),
     sb.from('body_log').select('*').eq('user_id',uid).order('date'),
   ]);
-  if(sess.data) db.sessions=sess.data.filter(s=>!s.is_draft).map(s=>({...s,exercises:JSON.parse(s.exercises||'[]'),muscles:JSON.parse(s.muscles||'[]')}));
+  if(sess.data) db.sessions=sess.data.filter(s=>!s.is_draft).map(s=>({...s,sessionTitle:s.title||s.sessionTitle||'Session',exercises:JSON.parse(s.exercises||'[]'),muscles:JSON.parse(s.muscles||'[]')}));
   if(food.data) db.food=food.data;
   if(body.data) db.body=body.data;
   } catch(e){ console.error('refreshData error:',e); } finally { _refreshing=false; }
@@ -826,7 +827,22 @@ function renderSavedWorkouts(){
   ).join('');
 }
 
-function loadSavedWorkout(i){db.activeSession=JSON.parse(JSON.stringify(db.savedWorkouts[i]));showPage('log');}
+function loadSavedWorkout(i){
+  const w = db.savedWorkouts[i];
+  if(!w){ toast('Workout not found.','error'); return; }
+  const exercises = typeof w.exercises === 'string' ? JSON.parse(w.exercises) : (w.exercises||[]);
+  const muscles = typeof w.muscles === 'string' ? JSON.parse(w.muscles) : (w.muscles||[]);
+  db.activeSession = {
+    sessionTitle: w.sessionTitle || w.title || 'Custom workout',
+    exercises: JSON.parse(JSON.stringify(exercises)),
+    muscles: JSON.parse(JSON.stringify(muscles)),
+    coachNote: w.coachNote||'',
+    date: new Date().toISOString(),
+    is_draft: false
+  };
+  updateNavBadge();
+  showPage('log');
+}
 async function deleteSavedWorkout(i){
   if(!confirm('Delete this saved workout?')) return;
   const w=db.savedWorkouts[i];
@@ -998,7 +1014,17 @@ function getFormCue(name) {
   }
   return null;
 }
-// ── LOG ───────────────────────────────────────────────────────────
+// ── LOG ──
+
+function getPrevData(name){
+  for(let i=db.sessions.length-1;i>=0;i--){
+    const s=db.sessions[i];
+    if(!s.exercises) continue;
+    const ex=s.exercises.find(e=>e.name===name&&e.loggedSets&&e.loggedSets.sets&&e.loggedSets.sets.length);
+    if(ex) return ex.loggedSets;
+  }
+  return null;
+}
 function renderLog() {
   const el=document.getElementById('log-content');
   if(!db.activeSession){
