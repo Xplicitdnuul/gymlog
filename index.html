@@ -205,7 +205,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
         <div class="avatar" id="avatar-initials">?</div>
         <div>
-          <div style="font-size:13px;font-weight:500;" id="sidebar-name">Loading...</div>
+          <div style="font-size:13px;font-weight:500;" id="sidebar-name">Signing in...</div>
           <div style="font-size:11px;color:var(--muted);" id="sidebar-level">—</div>
         </div>
       </div>
@@ -437,7 +437,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.1.1';
+const APP_VERSION = '1.1.2';
 const storedVersion = localStorage.getItem('gymlog_version');
 if(storedVersion !== APP_VERSION) {
   localStorage.removeItem('sb-hpyosiqjvsjtaeijsjnu-auth-token');
@@ -464,6 +464,8 @@ document.addEventListener('visibilitychange', async () => {
     } else {
       // Valid session - refresh the token silently
       await sb.auth.refreshSession();
+      // Ensure profile UI is rendered in case it got stuck
+      if(currentUser) updateProfileUI();
     }
   }
 });
@@ -554,9 +556,12 @@ sb.auth.onAuthStateChange(async (event,session) => {
     currentUser=session.user;
     document.getElementById('auth-screen').style.display='none';
     document.getElementById('app').style.display='flex';
+    // Show sidebar immediately with email fallback, then update once data loads
+    updateProfileUI();
     try {
       await loadUserData();
-      renderOverview(); updateProfileUI();
+      updateProfileUI();
+      renderOverview();
     } catch(e) {
       console.warn('Session load error, signing out cleanly:', e);
       await sb.auth.signOut();
@@ -640,10 +645,14 @@ function getGoalMuscles() {
     if(t.includes('run')||t.includes('5k')||t.includes('10k'))return['Running'];return[];});
 }
 function updateProfileUI() {
-  const n=db.profile.name||'You';
-  document.getElementById('avatar-initials').textContent=n.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase()||'?';
-  document.getElementById('sidebar-name').textContent=n;
-  document.getElementById('sidebar-level').textContent=db.profile.level||'—';
+  const n=db.profile.name||currentUser?.email?.split('@')[0]||'You';
+  const initials=n.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase()||'?';
+  const av=document.getElementById('avatar-initials');
+  const sn=document.getElementById('sidebar-name');
+  const sl=document.getElementById('sidebar-level');
+  if(av) av.textContent=initials;
+  if(sn) sn.textContent=n;
+  if(sl) sl.textContent=db.profile.level||'—';
 }
 
 // ── NAV ───────────────────────────────────────────────────────────
