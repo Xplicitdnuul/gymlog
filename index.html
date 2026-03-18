@@ -437,7 +437,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.0.6';
+const APP_VERSION = '1.0.7';
 const storedVersion = localStorage.getItem('gymlog_version');
 if(storedVersion !== APP_VERSION) {
   localStorage.removeItem('sb-hpyosiqjvsjtaeijsjnu-auth-token');
@@ -583,7 +583,13 @@ async function loadUserData() {
   db.food = (food.data||[]).map(f=>({...f}));
   db.body = (body.data||[]).map(b=>({...b}));
   db.goals = (goals.data||[]).map(g=>({...g}));
-  try { db.savedWorkouts = JSON.parse(localStorage.getItem('gymlog_saved_workouts')||'[]'); } catch(e){ db.savedWorkouts=[]; }
+  const sw = await sb.from('saved_workouts').select('*').eq('user_id',uid).order('saved_at');
+  db.savedWorkouts = (sw.data||[]).map(w=>({
+    ...w,
+    sessionTitle: w.title,
+    muscles: typeof w.muscles==='string'?JSON.parse(w.muscles):w.muscles,
+    exercises: typeof w.exercises==='string'?JSON.parse(w.exercises):w.exercises
+  }));
 }
 
 async function saveProfile() {
@@ -747,8 +753,27 @@ function renderSavedWorkouts(){
 }
 
 function loadSavedWorkout(i){db.activeSession=JSON.parse(JSON.stringify(db.savedWorkouts[i]));showPage('log');}
-function deleteSavedWorkout(i){if(!confirm('Delete this saved workout?'))return;db.savedWorkouts.splice(i,1);saveSavedWorkouts();renderSavedWorkouts();}
-function saveSavedWorkouts(){localStorage.setItem('gymlog_saved_workouts',JSON.stringify(db.savedWorkouts||[]));}
+async function deleteSavedWorkout(i){
+  if(!confirm('Delete this saved workout?')) return;
+  const w=db.savedWorkouts[i];
+  if(w.id){
+    const {error}=await sb.from('saved_workouts').delete().eq('id',w.id);
+    if(error){dbErr('Delete workout',error);return;}
+  }
+  db.savedWorkouts.splice(i,1);
+  renderSavedWorkouts();
+}
+async function saveSavedWorkouts(workout){
+  const {data,error}=await sb.from('saved_workouts').insert({
+    user_id:currentUser.id,
+    title:workout.sessionTitle,
+    muscles:JSON.stringify(workout.muscles||[]),
+    exercises:JSON.stringify(workout.exercises||[]),
+    saved_at:workout.savedAt||new Date().toISOString()
+  }).select().single();
+  if(error){dbErr('Save workout',error);return null;}
+  return data;
+}
 
 async function generateSession() {
   if(!db.selectedMuscles.length){alert('Pick at least one muscle group.');return;}
@@ -830,13 +855,16 @@ function swapExercise(idx, newName){
   renderPlannerResult(db.pendingSession);
 }
 
-function saveForLater(){
+async function saveForLater(){
   if(!db.pendingSession) return;
   const w={...db.pendingSession, savedAt:new Date().toISOString()};
-  db.savedWorkouts.push(w);
-  saveSavedWorkouts();
-  toast('Workout saved!','ok');
-  renderSavedWorkouts();
+  const saved=await saveSavedWorkouts(w);
+  if(saved){
+    db.savedWorkouts.push({...w,...saved,sessionTitle:saved.title,
+      muscles:w.muscles,exercises:w.exercises});
+    toast('Workout saved!','ok');
+    renderSavedWorkouts();
+  }
 }
 
 function startSession(){if(!db.pendingSession)return;db.activeSession=JSON.parse(JSON.stringify(db.pendingSession));showPage('log');}
@@ -1063,7 +1091,7 @@ function builderRemove(i){
   renderBuilderList();
 }
 
-function builderSave(){
+async function builderSave(){
   const title = document.getElementById('builder-title').value.trim() || 'Custom workout';
   if(!builderExercises.length){ toast('Add at least one exercise first.','error'); return; }
   const muscles = [...new Set(builderExercises.map(e=>e.muscle))];
@@ -1075,10 +1103,14 @@ function builderSave(){
     savedAt: new Date().toISOString()
   };
   if(!db.savedWorkouts) db.savedWorkouts = [];
-  db.savedWorkouts.push(workout);
-  saveSavedWorkouts();
-  toast('Workout "'+title+'" saved!','ok');
-  builderClear();
+  const saved=await saveSavedWorkouts(workout);
+  if(saved){
+    db.savedWorkouts.push({...workout,...saved,sessionTitle:saved.title,
+      muscles:workout.muscles,exercises:workout.exercises});
+    toast('Workout "'+title+'" saved!','ok');
+    builderClear();
+    renderSavedWorkouts();
+  }
 }
 
 function builderClear(){
