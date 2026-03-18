@@ -449,7 +449,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.2.1';
+const APP_VERSION = '1.2.2';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -580,11 +580,14 @@ async function signOut() {
   currentUser=null; db={...defaultDb};
 }
 
+let _dataLoadedForUid = null;
+
 sb.auth.onAuthStateChange(async (event, session) => {
   console.log('Auth event:', event);
 
   if(event === 'SIGNED_OUT' || event === 'USER_DELETED') {
     currentUser = null;
+    _dataLoadedForUid = null;
     db = {...defaultDb};
     document.getElementById('auth-screen').style.display = 'flex';
     document.getElementById('app').style.display = 'none';
@@ -592,15 +595,16 @@ sb.auth.onAuthStateChange(async (event, session) => {
   }
 
   if(session?.user) {
-    const isNewLoad = !currentUser || currentUser.id !== session.user.id;
     currentUser = session.user;
     document.getElementById('auth-screen').style.display = 'none';
     document.getElementById('app').style.display = 'flex';
     updateProfileUI();
 
-    // Only reload all data on initial load or when a different user signs in.
-    // TOKEN_REFRESHED events fire every 4 minutes — no need to reload data then.
-    if((isNewLoad || event === 'INITIAL_SESSION' || event === 'SIGNED_IN') && event !== 'TOKEN_REFRESHED') {
+    // Only load data once per user session.
+    // _dataLoadedForUid tracks which uid we've already loaded for.
+    // TOKEN_REFRESHED + subsequent SIGNED_IN events must not re-trigger a load.
+    if(_dataLoadedForUid !== session.user.id) {
+      _dataLoadedForUid = session.user.id;
       try {
         await loadUserData();
         updateProfileUI();
@@ -608,10 +612,11 @@ sb.auth.onAuthStateChange(async (event, session) => {
         renderOverview();
       } catch(e) {
         console.warn('Session load error:', e);
-        // Don't sign out on load error — show what we have
-        // and let the user retry by navigating
+        _dataLoadedForUid = null; // allow retry on next event
         toast('Some data failed to load. Try refreshing.', 'error');
       }
+    } else {
+      console.log('Auth event:', event, '— data already loaded for this user, skipping reload');
     }
   }
 });
