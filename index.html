@@ -449,38 +449,63 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.1.7';
+const APP_VERSION = '1.1.8';
+// Version tracking — no longer need to clear localStorage auth tokens
+// since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
 if(storedVersion !== APP_VERSION) {
-  localStorage.removeItem('sb-hpyosiqjvsjtaeijsjnu-auth-token');
   localStorage.setItem('gymlog_version', APP_VERSION);
 }
 const createClient = supabase.createClient;
+// Cookie storage adapter — more reliable than localStorage
+// especially on mobile Safari and backgrounded tabs
+const cookieStorage = {
+  getItem: (key) => {
+    const match = document.cookie.match(new RegExp('(^| )' + encodeURIComponent(key) + '=([^;]+)'));
+    if(!match) return null;
+    try { return decodeURIComponent(match[2]); } catch(e) { return null; }
+  },
+  setItem: (key, value) => {
+    const maxAge = 60 * 60 * 24 * 7; // 7 days
+    document.cookie = encodeURIComponent(key) + '=' + encodeURIComponent(value)
+      + '; path=/; max-age=' + maxAge + '; SameSite=Lax; Secure';
+  },
+  removeItem: (key) => {
+    document.cookie = encodeURIComponent(key) + '=; path=/; max-age=0; SameSite=Lax; Secure';
+  }
+};
+
 const sb = createClient(SUPA_URL, SUPA_KEY, {
   auth: {
-    storage: window.localStorage,
+    storage: cookieStorage,
     autoRefreshToken: true,
     persistSession: true,
-    detectSessionInUrl: true
+    detectSessionInUrl: false,
+    storageKey: 'gymlog_session'
   }
 });
 
-// When tab becomes visible again after idle, force session refresh
-document.addEventListener('visibilitychange', async () => {
-  if(document.visibilityState === 'visible') {
-    const { data, error } = await sb.auth.getSession();
-    if(error || !data.session) {
-      // Session truly expired - sign out cleanly instead of getting stuck
-      await sb.auth.signOut();
-      toast('Your session expired. Please sign in again.', 'error');
-    } else {
-      // Valid session - refresh the token silently
+// Proactive token refresh — poll every 4 minutes
+// Supabase tokens last 1h by default; refreshing every 4min ensures
+// the token is always fresh regardless of tab state or browser throttling
+setInterval(async () => {
+  if(!currentUser) return;
+  const { data, error } = await sb.auth.getSession();
+  if(error || !data.session) {
+    currentUser = null;
+    db = {...defaultDb};
+    document.getElementById('app').style.display = 'none';
+    document.getElementById('auth-screen').style.display = 'flex';
+    toast('Your session expired. Please sign in again.', 'error');
+  } else {
+    // Silently refresh the token if it's within 10 minutes of expiry
+    const expiresAt = data.session.expires_at;
+    const now = Math.floor(Date.now() / 1000);
+    if(expiresAt - now < 600) {
       await sb.auth.refreshSession();
-      // Ensure profile UI is rendered in case it got stuck
-      if(currentUser) updateProfileUI();
     }
   }
-});
+}, 4 * 60 * 1000); // every 4 minutes
 
 let currentUser = null;
 
