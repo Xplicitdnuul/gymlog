@@ -282,7 +282,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
     <div id="page-overview" class="page active">
       <div id="overview-greeting" style="margin-bottom:20px;"></div>
       <div id="overview-active-prog"></div>
-      <div class="card"><div id="overview-metrics"></div></div>
+      <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px;" id="overview-metrics"></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;">
         <div class="card">
           <div class="card-title">Muscle status</div>
@@ -641,7 +641,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.3.9';
+const APP_VERSION = '1.4.0';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -1106,22 +1106,25 @@ async function renderOverview() {
   const latestWeight = db.body.length ? db.body[db.body.length-1].weight : null;
 
   document.getElementById('overview-metrics').innerHTML =
-    '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:0.5px solid var(--border);">'
-    + '<span style="font-size:13px;color:var(--muted);">Sessions this month</span>'
-    + '<span style="font-size:13px;font-weight:500;">' + thisMonth
-    + ' <span style="font-size:11px;font-weight:400;color:' + (sessDelta>=0?'#2E7D32':'#B71C1C') + ';">(' + (sessDelta>=0?'↑':'↓') + Math.abs(sessDelta) + ' vs last month)</span></span>'
+    '<div class="card" style="padding:12px 14px;">'
+    + '<div style="font-size:11px;color:var(--muted);margin-bottom:6px;">Sessions this month</div>'
+    + '<div style="font-size:22px;font-weight:300;letter-spacing:-0.5px;">' + thisMonth + '</div>'
+    + '<div style="font-size:11px;color:' + (sessDelta>=0?'#2E7D32':'#B71C1C') + ';margin-top:4px;">' + (sessDelta>=0?'\u2191':'\u2193') + ' ' + Math.abs(sessDelta) + ' vs last month</div>'
     + '</div>'
-    + '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:0.5px solid var(--border);">'
-    + '<span style="font-size:13px;color:var(--muted);">Volume (30 days)</span>'
-    + '<span style="font-size:13px;font-weight:500;">' + (vol30>1000?(vol30/1000).toFixed(1)+'k':vol30) + ' kg</span>'
+    + '<div class="card" style="padding:12px 14px;">'
+    + '<div style="font-size:11px;color:var(--muted);margin-bottom:6px;">Volume (30 days)</div>'
+    + '<div style="font-size:22px;font-weight:300;letter-spacing:-0.5px;">' + (vol30>1000?(vol30/1000).toFixed(1)+'k':vol30) + '</div>'
+    + '<div style="font-size:11px;color:var(--faint);margin-top:4px;">reps \u00d7 kg</div>'
     + '</div>'
-    + '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:0.5px solid var(--border);">'
-    + '<span style="font-size:13px;color:var(--muted);">Body weight</span>'
-    + '<span style="font-size:13px;font-weight:500;">' + (latestWeight ? latestWeight+'kg' : '—') + '</span>'
+    + '<div class="card" style="padding:12px 14px;">'
+    + '<div style="font-size:11px;color:var(--muted);margin-bottom:6px;">Body weight</div>'
+    + '<div style="font-size:22px;font-weight:300;letter-spacing:-0.5px;">' + (latestWeight?latestWeight+'kg':'\u2014') + '</div>'
+    + '<div style="font-size:11px;color:var(--faint);margin-top:4px;">' + (db.body.length?'logged '+fmt(db.body[db.body.length-1].date):'not logged') + '</div>'
     + '</div>'
-    + '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;">'
-    + '<span style="font-size:13px;color:var(--muted);">Calories today</span>'
-    + '<span style="font-size:13px;font-weight:500;">' + totalKcal + ' <span style="font-size:11px;font-weight:400;color:var(--faint);">/ ' + (db.profile.calGoal||2200) + ' goal</span></span>'
+    + '<div class="card" style="padding:12px 14px;">'
+    + '<div style="font-size:11px;color:var(--muted);margin-bottom:6px;">Calories today</div>'
+    + '<div style="font-size:22px;font-weight:300;letter-spacing:-0.5px;">' + totalKcal + '</div>'
+    + '<div style="font-size:11px;color:var(--faint);margin-top:4px;">/ ' + (db.profile.calGoal||2200) + ' goal</div>'
     + '</div>'
 
   // ── MUSCLE STATUS ──
