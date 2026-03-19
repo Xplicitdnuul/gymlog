@@ -282,7 +282,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
     <div id="page-overview" class="page active">
       <div id="overview-greeting" style="margin-bottom:20px;"></div>
       <div id="overview-active-prog"></div>
-      <div class="metric-grid" id="overview-metrics"></div>
+      <div class="card"><div id="overview-metrics"></div></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;">
         <div class="card">
           <div class="card-title">Muscle status</div>
@@ -641,7 +641,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.3.7';
+const APP_VERSION = '1.3.9';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -1106,11 +1106,23 @@ async function renderOverview() {
   const latestWeight = db.body.length ? db.body[db.body.length-1].weight : null;
 
   document.getElementById('overview-metrics').innerHTML =
-    '<div class="metric"><div class="metric-label">Sessions this month</div><div class="metric-val">' + thisMonth + '</div>'
-    + '<div class="metric-sub" style="color:' + (sessDelta >= 0 ? '#2E7D32':'#B71C1C') + ';">' + (sessDelta >= 0 ? '↑':'↓') + ' ' + Math.abs(sessDelta) + ' vs last month</div></div>'
-    + '<div class="metric"><div class="metric-label">Volume (30d)</div><div class="metric-val">' + (vol30 > 1000 ? (vol30/1000).toFixed(1)+'k' : vol30) + '</div><div class="metric-sub" style="color:var(--faint);">reps × kg</div></div>'
-    + '<div class="metric"><div class="metric-label">Body weight</div><div class="metric-val">' + (latestWeight ? latestWeight+'kg' : '—') + '</div><div class="metric-sub" style="color:var(--faint);">' + (db.body.length ? 'logged ' + fmt(db.body[db.body.length-1].date) : 'not logged') + '</div></div>'
-    + '<div class="metric"><div class="metric-label">Calories today</div><div class="metric-val">' + totalKcal + '</div><div class="metric-sub" style="color:var(--faint);">/ ' + (db.profile.calGoal||2200) + ' goal</div></div>';
+    '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:0.5px solid var(--border);">'
+    + '<span style="font-size:13px;color:var(--muted);">Sessions this month</span>'
+    + '<span style="font-size:13px;font-weight:500;">' + thisMonth
+    + ' <span style="font-size:11px;font-weight:400;color:' + (sessDelta>=0?'#2E7D32':'#B71C1C') + ';">(' + (sessDelta>=0?'↑':'↓') + Math.abs(sessDelta) + ' vs last month)</span></span>'
+    + '</div>'
+    + '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:0.5px solid var(--border);">'
+    + '<span style="font-size:13px;color:var(--muted);">Volume (30 days)</span>'
+    + '<span style="font-size:13px;font-weight:500;">' + (vol30>1000?(vol30/1000).toFixed(1)+'k':vol30) + ' kg</span>'
+    + '</div>'
+    + '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:0.5px solid var(--border);">'
+    + '<span style="font-size:13px;color:var(--muted);">Body weight</span>'
+    + '<span style="font-size:13px;font-weight:500;">' + (latestWeight ? latestWeight+'kg' : '—') + '</span>'
+    + '</div>'
+    + '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;">'
+    + '<span style="font-size:13px;color:var(--muted);">Calories today</span>'
+    + '<span style="font-size:13px;font-weight:500;">' + totalKcal + ' <span style="font-size:11px;font-weight:400;color:var(--faint);">/ ' + (db.profile.calGoal||2200) + ' goal</span></span>'
+    + '</div>'
 
   // ── MUSCLE STATUS ──
   const muscleLastTrained = {};
