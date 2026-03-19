@@ -639,7 +639,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.4.2';
+const APP_VERSION = '1.4.3';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -2037,17 +2037,30 @@ function toggleStrengthEx(btn, n) {
 function renderVolumeChart(sessions) {
   if(progressCharts.volume) { try { progressCharts.volume.destroy(); } catch(e) {} }
   const tc = 'rgba(0,0,0,0.3)', gc = 'rgba(0,0,0,0.06)';
+  // Build 12 weekly buckets using Monday-anchored week start dates (YYYY-MM-DD)
   const weeks = [];
+  const weekStarts = [];
   for(let i = 11; i >= 0; i--) {
-    const d = new Date(); d.setDate(d.getDate() - i * 7);
-    weeks.push(d.toISOString().split('T')[0].slice(0, 7) + '-W' + String(Math.ceil(d.getDate()/7)).padStart(2,'0'));
+    const d = new Date();
+    d.setDate(d.getDate() - i * 7);
+    // Snap to Monday of that week
+    const day = d.getDay(); // 0=Sun, 1=Mon ...
+    const monday = new Date(d);
+    monday.setDate(d.getDate() - (day === 0 ? 6 : day - 1));
+    const key = monday.toISOString().split('T')[0];
+    if(!weeks.includes(key)) {
+      weeks.push(key);
+      weekStarts.push(monday);
+    }
   }
   const colors = ['#1A56A0','#2E7D32','#92600A','#7B61C4','#B71C1C','#0F6E56'];
   const datasets = volumeMuscles.map((muscle, ci) => {
     const data = weeks.map(wk => {
       return sessions.filter(s => {
         const d = new Date(s.date);
-        const sw = d.toISOString().split('T')[0].slice(0, 7) + '-W' + String(Math.ceil(d.getDate()/7)).padStart(2,'0');
+        const day = d.getDay();
+        const mon = new Date(d); mon.setDate(d.getDate() - (day===0?6:day-1));
+        const sw = mon.toISOString().split('T')[0];
         return sw === wk && (s.muscles||[]).includes(muscle);
       }).reduce((sum, s) => {
         return sum + (s.exercises||[]).filter(e => e.muscle === muscle || (e.muscle||'').includes(muscle)).reduce((vs, ex) => vs + calcVolume([ex]), 0);
@@ -2055,7 +2068,10 @@ function renderVolumeChart(sessions) {
     });
     return { label: muscle, data, backgroundColor: colors[ci % colors.length], borderRadius: 2, barPercentage: 0.7 };
   });
-  const wkLabels = weeks.map(w => w.slice(5, 7) + '/' + w.slice(0, 4).slice(2));
+  const wkLabels = weeks.map(w => {
+    const d = new Date(w + 'T00:00:00');
+    return d.toLocaleDateString('en-GB', {day:'2-digit', month:'short'});
+  });
   progressCharts.volume = new Chart(document.getElementById('chart-volume'), {
     type: 'bar',
     data: { labels: wkLabels, datasets },
@@ -2073,21 +2089,27 @@ function renderStrengthChart(sessions) {
     sessions.forEach(s => {
       const ex = (s.exercises||[]).find(e => e.name === name && e.loggedSets?.sets?.length);
       if(!ex) return;
+      // Store ISO date for correct sorting, display label separately
+      const isoDate = s.date.split('T')[0];
       if(strengthMode === 'weight') {
         const maxKg = Math.max(...ex.loggedSets.sets.filter(st => st.kg).map(st => st.kg));
-        if(maxKg > 0) pts.push({ x: fmt(s.date), y: maxKg });
+        if(maxKg > 0) pts.push({ iso: isoDate, display: fmt(s.date), y: maxKg });
       } else {
         const vol = calcVolume([ex]);
-        if(vol > 0) pts.push({ x: fmt(s.date), y: vol });
+        if(vol > 0) pts.push({ iso: isoDate, display: fmt(s.date), y: vol });
       }
     });
-    return { label: name, data: pts.map(p => p.y), labels: pts.map(p => p.x), borderColor: colors[ci % colors.length], backgroundColor: 'transparent', tension: 0.3, pointRadius: 4, pointBackgroundColor: colors[ci % colors.length] };
+    return { label: name, data: pts.map(p => p.y), isoLabels: pts.map(p => p.iso), displayLabels: pts.map(p => p.display), borderColor: colors[ci % colors.length], backgroundColor: 'transparent', tension: 0.3, pointRadius: 4, pointBackgroundColor: colors[ci % colors.length] };
   });
-  const allLabels = [...new Set(datasets.flatMap(d => d.labels || []))].sort();
+  // Sort by ISO date to guarantee chronological order
+  const allIso = [...new Set(datasets.flatMap(d => d.isoLabels || []))].sort();
+  const isoToDisplay = {};
+  datasets.forEach(d => (d.isoLabels||[]).forEach((iso,i) => { isoToDisplay[iso] = (d.displayLabels||[])[i] || iso; }));
+  const allLabels = allIso.map(iso => isoToDisplay[iso] || iso);
   const alignedDatasets = datasets.map(d => ({
     ...d,
-    data: allLabels.map(lbl => {
-      const idx = (d.labels||[]).indexOf(lbl);
+    data: allIso.map(iso => {
+      const idx = (d.isoLabels||[]).indexOf(iso);
       return idx > -1 ? d.data[idx] : null;
     }),
     spanGaps: true
