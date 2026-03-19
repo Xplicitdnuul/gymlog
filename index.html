@@ -216,6 +216,8 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 .set-pill-hist { display:inline-block; background:var(--color-background-primary); border:0.5px solid var(--color-border-tertiary); border-radius:var(--border-radius-md); font-size:12px; padding:3px 8px; margin:2px 3px 2px 0; color:var(--color-text-primary); }
 .set-pill-pr { border-color:#639922; background:#EAF3DE; color:#27500A; }
 .tag-pr { font-size:10px; font-weight:500; padding:2px 7px; border-radius:20px; background:#EAF3DE; color:#27500A; }
+
+.nav-group-label { font-size:10px; font-weight:500; color:var(--faint); text-transform:uppercase; letter-spacing:0.08em; padding:2px 0 4px 0; }
 </style>
 </head>
 <body>
@@ -250,19 +252,24 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
   <button class="hamburger" onclick="toggleSidebar()" id="hamburger">☰</button>
   <div class="overlay" id="overlay" onclick="closeSidebar()"></div>
   <aside class="sidebar">
-    <div class="logo">Gym<span>log</span></div>
+    <div class="logo" onclick="showPage('overview')" style="cursor:pointer;">Gym<span>log</span></div>
     <nav>
-      <div class="nav-item active" onclick="showPage('overview')"><span class="nav-icon">◈</span> Overview</div>
+      <div class="nav-group-label">Train</div>
+      <div class="nav-item" onclick="showPage('justtrain')"><span class="nav-icon">⚡</span> Just Train</div>
       <div class="nav-item" onclick="showPage('planner')"><span class="nav-icon">⊕</span> Plan session</div>
-      <div class="nav-item" onclick="showPage('log')"><span class="nav-icon">✦</span> Log workout</div>
-      <div class="nav-item" onclick="showPage('progress')"><span class="nav-icon">↗</span> Progress</div>
-      <div class="nav-item" onclick="showPage('food')"><span class="nav-icon">◎</span> Nutrition</div>
-      <div class="nav-item" onclick="showPage('body')"><span class="nav-icon">◉</span> Body</div>
-      <div class="nav-item" onclick="showPage('builder')"><span class="nav-icon">✎</span> Build workout</div>
-    <div class="nav-item" onclick="showPage('programme')"><span class="nav-icon">◫</span> Programme</div>
-    <div class="nav-item" onclick="showPage('library')"><span class="nav-icon">≡</span> Exercise library</div>
+      <div class="nav-item" id="nav-log" onclick="showPage('log')"><span class="nav-icon">✦</span> Log workout<span id="nav-log-badge" style="display:none;margin-left:auto;width:8px;height:8px;border-radius:50%;background:#2E7D32;flex-shrink:0;"></span></div>
       <div class="nav-item" onclick="showPage('history')"><span class="nav-icon">⊟</span> History</div>
-    <div class="nav-item" onclick="showPage('settings')"><span class="nav-icon">⚙</span> Settings</div>
+      <div class="nav-group-label" style="margin-top:10px;">Plan</div>
+      <div class="nav-item" onclick="showPage('builder')"><span class="nav-icon">✎</span> Build workout</div>
+      <div class="nav-item" onclick="showPage('programme')"><span class="nav-icon">◫</span> Programme</div>
+      <div class="nav-item" onclick="showPage('library')"><span class="nav-icon">≡</span> Exercise library</div>
+      <div class="nav-group-label" style="margin-top:10px;">Performance</div>
+      <div class="nav-item" onclick="showPage('progress')"><span class="nav-icon">↗</span> Progress</div>
+      <div class="nav-item" onclick="showPage('body')"><span class="nav-icon">◉</span> Body</div>
+      <div class="nav-item" onclick="showPage('food')"><span class="nav-icon">◎</span> Nutrition</div>
+      <div class="nav-group-label" style="margin-top:10px;">Goals &amp; Profile</div>
+      <div class="nav-item" onclick="showPage('goals')"><span class="nav-icon">◎</span> Goals</div>
+      <div class="nav-item" onclick="showPage('settings')"><span class="nav-icon">⚙</span> Profile</div>
     </nav>
     <div class="sidebar-bottom">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
@@ -587,10 +594,71 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
       <div class="card"><div class="card-title">Library — <span id="lib-count">0</span> exercises</div><div id="lib-display" style="display:flex;flex-wrap:wrap;gap:7px;"></div></div>
     </div>
 
+    <div id="page-justtrain" class="page">
+      <div class="page-title">Just Train</div>
+      <div class="page-sub">Start a freestyle session — add exercises as you go</div>
+
+      <div id="jt-add-section" class="card">
+        <div class="card-title">Add exercise</div>
+        <div style="display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:end;">
+          <div class="form-group">
+            <label class="form-label">Exercise</label>
+            <select id="jt-ex-pick"><option value="">Select from library...</option></select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Sets</label>
+            <select id="jt-sets-pick" style="width:80px;">
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="3" selected>3</option>
+              <option value="4">4</option>
+              <option value="5">5</option>
+            </select>
+          </div>
+          <button class="btn btn-dark btn-sm" onclick="jtAddExercise()" style="height:36px;">Add</button>
+        </div>
+      </div>
+
+      <div id="jt-session-content"></div>
+
+      <div id="jt-actions" style="display:none;">
+        <div style="display:flex;gap:10px;margin-top:4px;">
+          <button class="btn btn-dark" onclick="jtSaveSession()">Save session</button>
+          <button class="btn" onclick="jtDiscardSession()">Discard</button>
+        </div>
+      </div>
+    </div>
+
     <div id="page-history" class="page">
       <div class="page-title">History</div>
       <div class="page-sub">All completed sessions</div>
       <div id="history-content"></div>
+    </div>
+
+    <div id="page-goals" class="page">
+      <div class="page-title">Goals</div>
+      <div class="page-sub">Track what you're working towards</div>
+
+      <div class="card">
+        <div class="card-title">Add goal</div>
+        <div class="form-group">
+          <label class="form-label">Goal</label>
+          <input type="text" id="goals-input" placeholder="e.g. Bench press 100 kg">
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px;">
+          <div class="form-group">
+            <label class="form-label">Current best</label>
+            <input type="text" id="goals-current" placeholder="e.g. 87.5 kg">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Link to exercise (optional)</label>
+            <select id="goals-link-ex"><option value="">None — track manually</option></select>
+          </div>
+        </div>
+        <button class="btn btn-dark btn-sm" style="margin-top:10px;" onclick="addGoalFromPage()">Add goal</button>
+      </div>
+
+      <div id="goals-page-list"></div>
     </div>
 
     <div id="page-settings" class="page">
@@ -639,7 +707,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.4.3';
+const APP_VERSION = '1.4.4';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -1014,9 +1082,9 @@ function showPage(id) {
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   document.getElementById('page-'+id).classList.add('active');
-  const navMap={overview:0,planner:1,log:2,progress:3,food:4,body:5,builder:6,programme:7,library:8,history:9,settings:10};
+  const navMap={overview:0,justtrain:1,planner:2,log:3,progress:4,food:5,body:6,builder:7,programme:8,library:9,history:10,goals:11,settings:12};
   document.querySelectorAll('.nav-item')[navMap[id]].classList.add('active');
-  const renders={overview:renderOverview,planner:renderPlanner,log:renderLog,progress:renderProgress,food:renderFood,body:renderBody,builder:renderBuilder,programme:renderProgramme,library:renderLibrary,history:renderHistory,settings:renderSettings};
+  const renders={overview:renderOverview,justtrain:renderJustTrain,planner:renderPlanner,log:renderLog,progress:renderProgress,food:renderFood,body:renderBody,builder:renderBuilder,programme:renderProgramme,library:renderLibrary,history:renderHistory,goals:renderGoals,settings:renderSettings};
   if(window.innerWidth<=768) closeSidebar();
   if(renders[id]) Promise.resolve(renders[id]()).catch(e=>console.error('Page render error:',e));
 }
@@ -2951,6 +3019,257 @@ function cancelHistoryEdit(id) {
   if(el) el.remove();
 }
 
+// ── JUST TRAIN ────────────────────────────────────────────────────
+let jtExercises = []; // {name, muscle, sets, isCardio, loggedSets:[]}
+
+function renderJustTrain() {
+  // Populate exercise picker from library
+  const pick = document.getElementById('jt-ex-pick');
+  if(!pick) return;
+  const grouped = {};
+  db.library.forEach(e => {
+    const primary = e.muscle.split(',')[0].trim();
+    if(!grouped[primary]) grouped[primary] = [];
+    grouped[primary].push(e);
+  });
+  pick.innerHTML = '<option value="">Select from library...</option>'
+    + Object.keys(grouped).sort().map(m =>
+        '<optgroup label="' + m + '">'
+        + grouped[m].map(e => '<option value="' + e.name.replace(/"/g,'&quot;') + '" data-muscle="' + e.muscle.replace(/"/g,'&quot;') + '">' + e.name + '</option>').join('')
+        + '</optgroup>'
+      ).join('');
+  jtRenderSession();
+}
+
+function jtAddExercise() {
+  const pick = document.getElementById('jt-ex-pick');
+  const name = pick.value;
+  if(!name) { toast('Select an exercise first.', 'error'); return; }
+  const opt = pick.options[pick.selectedIndex];
+  const muscle = opt ? (opt.dataset.muscle || opt.parentElement.label || 'General') : 'General';
+  const sets = parseInt(document.getElementById('jt-sets-pick').value) || 3;
+  const isCardio = muscle.toLowerCase().includes('cardio');
+  jtExercises.push({ name, muscle, sets, isCardio, reps: isCardio ? '30 min' : '10 reps' });
+  pick.value = '';
+  jtRenderSession();
+}
+
+function jtRenderSession() {
+  const el = document.getElementById('jt-session-content');
+  const actEl = document.getElementById('jt-actions');
+  if(!jtExercises.length) {
+    el.innerHTML = '';
+    if(actEl) actEl.style.display = 'none';
+    return;
+  }
+  if(actEl) actEl.style.display = 'block';
+
+  el.innerHTML = jtExercises.map((ex, ei) => {
+    const prev = getPrevData(ex.name);
+    const cue = getFormCue(ex.name);
+
+    // Overload banner
+    let banner = '';
+    if(prev && prev.sets && prev.sets.length) {
+      const tgt = prev.targetReps || 0;
+      const allHit = prev.sets.every(st => st.reps >= tgt);
+      if(allHit && prev.sets[0]?.kg) {
+        const nk = Math.round(prev.sets[0].kg * 1.025 * 2) / 2;
+        banner = '<div class="banner banner-green" style="margin-bottom:8px;"><b>Increase weight</b> — last session all sets hit. Try <b>' + nk + ' kg</b>.</div>';
+      } else if(tgt > 0 && prev.sets.some(st => st.reps < tgt)) {
+        banner = '<div class="banner banner-amber" style="margin-bottom:8px;"><b>Hold steady</b> — some sets fell short last time.</div>';
+      }
+    } else {
+      banner = '<div class="banner banner-gray" style="margin-bottom:8px;">First time — enter your starting numbers.</div>';
+    }
+
+    // Set rows
+    let setRows = '<div style="display:flex;gap:8px;margin-bottom:4px;"><span style="font-size:10px;color:var(--faint);width:36px;"></span><span style="font-size:10px;color:var(--faint);width:72px;">kg</span><span style="font-size:10px;color:var(--faint);width:68px;">reps</span></div>';
+    if(ex.isCardio) {
+      setRows = '<div class="set-row"><span class="set-num">Time</span><input class="set-inp" type="number" id="jt-' + ei + '-kg-0" placeholder="min" style="width:80px;"></div>';
+    } else {
+      for(let i = 0; i < ex.sets; i++) {
+        const prev_set = prev && prev.sets ? prev.sets[i] : null;
+        const prefillKg = prev_set && prev_set.kg ? prev_set.kg : '';
+        const prefillReps = prev_set && prev_set.reps ? prev_set.reps : '';
+        const prevText = prev_set ? ('prev: ' + (prev_set.kg ? prev_set.kg + 'kg ' : 'BW ') + prev_set.reps + ' reps') : '';
+        setRows += '<div class="set-row">'
+          + '<span class="set-num">Set ' + (i+1) + '</span>'
+          + '<input class="set-inp set-kg" type="number" id="jt-' + ei + '-kg-' + i + '" placeholder="kg" value="' + prefillKg + '" step="0.5" min="0">'
+          + '<input class="set-inp set-reps" type="number" id="jt-' + ei + '-reps-' + i + '" placeholder="reps" value="' + prefillReps + '" min="0">'
+          + (prevText ? '<span class="set-prev">' + prevText + '</span>' : '')
+          + '</div>';
+      }
+    }
+
+    const cueHtml = cue
+      ? '<button class="cue-toggle" onclick="toggleCue(\'jt-cue-' + ei + '\')">▸ Form cue</button><div class="cue-body" id="jt-cue-' + ei + '">' + cue + '</div>'
+      : '';
+
+    return '<div class="card" style="margin-bottom:10px;">'
+      + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">'
+      + '<span style="font-size:14px;font-weight:500;">' + ex.name + '</span>'
+      + '<button data-ei="' + ei + '" onclick="jtRemoveExercise(parseInt(this.dataset.ei))" style="background:none;border:none;cursor:pointer;color:var(--faint);font-size:16px;">\u00d7</button>'
+      + '</div>'
+      + '<div style="font-size:12px;color:var(--muted);margin-bottom:8px;">' + ex.muscle + ' · ' + ex.sets + ' sets</div>'
+      + banner
+      + setRows
+      + cueHtml
+      + '<input class="note-inp" type="text" id="jt-' + ei + '-note" placeholder="Note for this exercise...">'
+      + '</div>';
+  }).join('');
+}
+
+function jtRemoveExercise(ei) {
+  jtExercises.splice(ei, 1);
+  jtRenderSession();
+}
+
+async function jtSaveSession() {
+  if(!jtExercises.length) { toast('Add at least one exercise.', 'error'); return; }
+
+  // Collect all logged sets
+  jtExercises.forEach((ex, ei) => {
+    const sets = [];
+    if(ex.isCardio) {
+      const kg = parseFloat(document.getElementById('jt-' + ei + '-kg-0')?.value) || null;
+      if(kg) sets.push({kg, reps: kg});
+    } else {
+      for(let i = 0; i < ex.sets; i++) {
+        const kg = parseFloat(document.getElementById('jt-' + ei + '-kg-' + i)?.value) || null;
+        const reps = parseInt(document.getElementById('jt-' + ei + '-reps-' + i)?.value) || null;
+        if(kg || reps) sets.push({kg, reps});
+      }
+    }
+    const note = document.getElementById('jt-' + ei + '-note')?.value || '';
+    ex.loggedSets = { sets, note, kg: sets[0]?.kg, targetReps: parseInt(ex.reps) || 0 };
+  });
+
+  const muscles = [...new Set(jtExercises.map(e => e.muscle.split(',')[0].trim()))];
+  const title = 'Freestyle — ' + muscles.slice(0,2).join(', ');
+
+  const {data, error} = await sb.from('sessions').insert({
+    user_id: currentUser.id,
+    date: new Date().toISOString(),
+    title,
+    muscles: JSON.stringify(muscles),
+    exercises: JSON.stringify(jtExercises),
+    note: 'Freestyle session',
+    is_draft: false
+  }).select().single();
+
+  if(error) { dbErr('Save freestyle session', error); return; }
+  if(data) db.sessions.push({...data, sessionTitle: title, exercises: jtExercises, muscles});
+
+  jtExercises = [];
+  toast('Session saved!', 'ok');
+  showPage('overview');
+}
+
+function jtDiscardSession() {
+  if(!confirm('Discard this session?')) return;
+  jtExercises = [];
+  jtRenderSession();
+}
+
+// ── GOALS PAGE ────────────────────────────────────────────────────
+function renderGoals() {
+  // Populate exercise link dropdown
+  const linkPick = document.getElementById('goals-link-ex');
+  if(linkPick) {
+    linkPick.innerHTML = '<option value="">None — track manually</option>'
+      + db.library.map(e => '<option value="' + e.name.replace(/"/g,'&quot;') + '">' + e.name + '</option>').join('');
+  }
+  renderGoalsPageList();
+}
+
+function renderGoalsPageList() {
+  const el = document.getElementById('goals-page-list');
+  if(!el) return;
+  if(!db.goals.length) {
+    el.innerHTML = '<div class="card"><p style="font-size:13px;color:var(--muted);">No goals yet. Add one above.</p></div>';
+    return;
+  }
+  el.innerHTML = db.goals.map(g => {
+    // Auto-track: if linked exercise, find best kg from sessions
+    let autoKg = null;
+    if(g.linked_exercise) {
+      db.sessions.forEach(s => {
+        (s.exercises||[]).forEach(ex => {
+          if(ex.name === g.linked_exercise && ex.loggedSets?.sets?.length) {
+            const maxKg = Math.max(...ex.loggedSets.sets.filter(st => st.kg).map(st => st.kg));
+            if(maxKg && (!autoKg || maxKg > autoKg)) autoKg = maxKg;
+          }
+        });
+      });
+    }
+
+    const pct = g.pct || 0;
+    const color = pct >= 80 ? '#2E7D32' : pct >= 50 ? '#BA7517' : '#1A56A0';
+
+    return '<div class="card" style="margin-bottom:10px;">'
+      + '<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px;">'
+      + '<div style="flex:1;">'
+      + '<div style="font-size:14px;font-weight:500;margin-bottom:2px;">' + g.text + '</div>'
+      + (g.linked_exercise ? '<div style="font-size:11px;color:var(--muted);">Auto-tracking: ' + g.linked_exercise + (autoKg ? ' · best: ' + autoKg + 'kg' : '') + '</div>' : '')
+      + '</div>'
+      + '<button data-gid="' + g.id + '" onclick="deleteGoalFromPage(this.dataset.gid)" style="background:none;border:none;cursor:pointer;color:var(--faint);font-size:16px;">\u00d7</button>'
+      + '</div>'
+      + '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">'
+      + '<div class="prog-bar" style="flex:1;height:7px;"><div class="prog-fill" style="width:' + pct + '%;background:' + color + ';"></div></div>'
+      + '<span style="font-size:13px;font-weight:500;color:' + color + ';min-width:36px;text-align:right;">' + pct + '%</span>'
+      + '</div>'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end;">'
+      + '<div class="form-group"><label class="form-label">Current best</label>'
+      + '<input type="text" id="gcb-' + g.id + '" value="' + (autoKg ? autoKg + ' kg' : (g.current_best||'')) + '" placeholder="e.g. 87.5 kg"' + (g.linked_exercise && autoKg ? ' style="background:var(--green-bg);border-color:var(--green);"' : '') + '></div>'
+      + '<div class="form-group"><label class="form-label">Progress %</label>'
+      + '<input type="number" id="gpct-' + g.id + '" value="' + pct + '" min="0" max="100" style="width:80px;"></div>'
+      + '<button class="btn btn-dark btn-sm" data-gid="' + g.id + '" onclick="updateGoal(this.dataset.gid)" style="height:36px;">Save</button>'
+      + '</div>'
+      + '</div>';
+  }).join('');
+}
+
+async function addGoalFromPage() {
+  const text = document.getElementById('goals-input')?.value.trim();
+  if(!text) { toast('Enter a goal description.', 'error'); return; }
+  const current = document.getElementById('goals-current')?.value.trim() || '';
+  const linked = document.getElementById('goals-link-ex')?.value || '';
+  const {data, error} = await sb.from('goals').insert({
+    user_id: currentUser.id,
+    text,
+    current_best: current,
+    pct: 0,
+    linked_exercise: linked || null
+  }).select().single();
+  if(error) { dbErr('Add goal', error); return; }
+  if(data) db.goals.push(data);
+  document.getElementById('goals-input').value = '';
+  document.getElementById('goals-current').value = '';
+  document.getElementById('goals-link-ex').value = '';
+  toast('Goal added!', 'ok');
+  renderGoalsPageList();
+}
+
+async function updateGoal(id) {
+  const current_best = document.getElementById('gcb-' + id)?.value.trim() || '';
+  const pct = Math.min(100, Math.max(0, parseInt(document.getElementById('gpct-' + id)?.value) || 0));
+  const {error} = await sb.from('goals').update({current_best, pct}).eq('id', id);
+  if(error) { dbErr('Update goal', error); return; }
+  const g = db.goals.find(g => String(g.id) === String(id));
+  if(g) { g.current_best = current_best; g.pct = pct; }
+  toast('Goal updated!', 'ok');
+  renderGoalsPageList();
+}
+
+async function deleteGoalFromPage(id) {
+  if(!confirm('Delete this goal?')) return;
+  const {error} = await sb.from('goals').delete().eq('id', id);
+  if(error) { dbErr('Delete goal', error); return; }
+  db.goals = db.goals.filter(g => String(g.id) !== String(id));
+  renderGoalsPageList();
+}
+
 // ── LIBRARY ───────────────────────────────────────────────────────
 async function importLib(){
   const raw=document.getElementById('lib-paste').value.trim();if(!raw)return;
@@ -3058,9 +3377,9 @@ function renderSettings(){
   document.getElementById('s-level').value=db.profile.level||'intermediate';
   document.getElementById('s-goal').value=db.profile.goal||'hypertrophy';
   document.getElementById('s-calgoal').value=db.profile.calGoal||2200;
-  renderGoals();updateRestDisplay();
+  renderGoalsInSettings();updateRestDisplay();
 }
-function renderGoals(){
+function renderGoalsInSettings(){
   document.getElementById('goals-list').innerHTML=db.goals.length?db.goals.map(g=>`<div class="goal-row"><div><div style="font-size:13px;font-weight:500;">${g.text}</div><div style="font-size:11px;color:var(--muted);">${g.current_best||'No baseline'}</div></div><div style="display:flex;align-items:center;gap:8px;"><div class="prog-bar" style="width:70px;"><div class="prog-fill" style="width:${g.pct||0}%;background:var(--green);"></div></div><span style="font-size:12px;color:var(--green);font-weight:500;">${g.pct||0}%</span><button onclick="deleteGoal(${g.id})" style="background:none;border:none;cursor:pointer;color:var(--faint);font-size:15px;">×</button></div></div>`).join(''):'<p style="color:var(--muted);font-size:13px;">No goals set yet.</p>';
 }
 async function addGoal(){
@@ -3069,9 +3388,9 @@ async function addGoal(){
   const {data:goalData,error:goalErr}=await sb.from('goals').insert({user_id:currentUser.id,text,current_best:current,pct:0}).select().single();
   if(goalErr){dbErr('Add goal',goalErr);return;}if(goalData){db.goals.push(goalData);toast('Goal added.','ok');}
   document.getElementById('goal-input').value='';document.getElementById('goal-current').value='';
-  renderGoals();
+  renderGoalsInSettings();
 }
-async function deleteGoal(id){const{error:dgErr}=await sb.from('goals').delete().eq('id',id);if(dgErr){dbErr('Delete goal',dgErr);return;}db.goals=db.goals.filter(g=>g.id!==id);renderGoals();}
+async function deleteGoal(id){const{error:dgErr}=await sb.from('goals').delete().eq('id',id);if(dgErr){dbErr('Delete goal',dgErr);return;}db.goals=db.goals.filter(g=>g.id!==id);renderGoalsInSettings();}
 function adjRest(k,d){const mins={strength:60,hyp:30,end:30,trans:30},maxs={strength:600,hyp:300,end:180,trans:300};db.rest[k]=Math.max(mins[k],Math.min(maxs[k],(db.rest[k]||0)+d));updateRestDisplay();}
 function updateRestDisplay(){
   document.getElementById('rest-strength-val').textContent=fmtSecs(db.rest.strength||180);
