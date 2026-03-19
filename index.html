@@ -633,7 +633,10 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 
     <div id="page-history" class="page">
       <div class="page-title">History</div>
-      <div class="page-sub">All completed sessions</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+        <div class="page-sub" style="margin-bottom:0;">All completed sessions</div>
+        <button class="btn btn-sm" onclick="exportHistoryCSV()">Export CSV ↓</button>
+      </div>
       <div id="history-content"></div>
     </div>
 
@@ -709,7 +712,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.4.8';
+const APP_VERSION = '1.4.9';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -3358,6 +3361,64 @@ async function deleteGoalFromPage(id) {
   if(error) { dbErr('Delete goal', error); return; }
   db.goals = db.goals.filter(g => String(g.id) !== String(id));
   renderGoalsPageList();
+}
+
+
+function exportHistoryCSV() {
+  if(!db.sessions.length) { toast('No sessions to export.', 'error'); return; }
+
+  const rows = [];
+  // Header
+  rows.push(['Date','Session title','Muscles','Exercise','Sets','Set','kg','Reps','Exercise note','Session note'].join(','));
+
+  db.sessions.forEach(s => {
+    const date = s.date ? s.date.split('T')[0] : '';
+    const title = (s.sessionTitle || s.title || '').replace(/,/g, ';');
+    const muscles = safeJSON(s.muscles, []).join('; ').replace(/,/g, ';');
+    const sessionNote = (s.note || '').replace(/,/g, ';').replace(/\n/g, ' ');
+    const exercises = safeJSON(s.exercises, []);
+
+    if(!exercises.length) {
+      rows.push([date, title, muscles, '', '', '', '', '', '', sessionNote].join(','));
+      return;
+    }
+
+    exercises.forEach(ex => {
+      const exName = (ex.name || '').replace(/,/g, ';');
+      const exNote = (ex.loggedSets && ex.loggedSets.note ? ex.loggedSets.note : '').replace(/,/g, ';').replace(/\n/g, ' ');
+      const sets = ex.loggedSets && ex.loggedSets.sets ? ex.loggedSets.sets : [];
+
+      if(!sets.length) {
+        rows.push([date, title, muscles, exName, ex.sets || '', '', '', '', exNote, sessionNote].join(','));
+        return;
+      }
+
+      sets.forEach((st, si) => {
+        rows.push([
+          date,
+          title,
+          muscles,
+          exName,
+          ex.sets || sets.length,
+          si + 1,
+          st.kg != null ? st.kg : '',
+          st.reps != null ? st.reps : '',
+          exNote,
+          sessionNote
+        ].join(','));
+      });
+    });
+  });
+
+  const csv = rows.join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'gymlog-history-' + new Date().toISOString().split('T')[0] + '.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+  toast('Exported ' + db.sessions.length + ' sessions.', 'ok');
 }
 
 // ── LIBRARY ───────────────────────────────────────────────────────
