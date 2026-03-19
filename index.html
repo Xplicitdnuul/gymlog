@@ -394,18 +394,8 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
           <div class="card-title" style="margin-bottom:0;">Training calendar</div>
           <button class="btn btn-sm" onclick="toggleCard('card-calendar')">hide</button>
         </div>
-        <div id="cal-grid" style="display:grid;grid-template-columns:repeat(26,1fr);gap:2px;"></div>
-        <div style="display:flex;gap:10px;margin-top:8px;font-size:11px;color:var(--muted);align-items:center;">
-          <span>Less</span>
-          <div style="display:flex;gap:3px;">
-            <div style="width:10px;height:10px;border-radius:2px;background:var(--bg);"></div>
-            <div style="width:10px;height:10px;border-radius:2px;background:#C0DD97;"></div>
-            <div style="width:10px;height:10px;border-radius:2px;background:#97C459;"></div>
-            <div style="width:10px;height:10px;border-radius:2px;background:#639922;"></div>
-            <div style="width:10px;height:10px;border-radius:2px;background:#3B6D11;"></div>
-          </div>
-          <span>More</span>
-        </div>
+        <div id="cal-grid" style="display:grid;grid-template-columns:repeat(26,1fr);gap:3px;"></div>
+        <div id="cal-legend" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;"></div>
       </div>
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
@@ -712,7 +702,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.4.9';
+const APP_VERSION = '1.5.0';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -1995,18 +1985,88 @@ async function renderProgress() {
 
   // ── CALENDAR ──
   const calEl = document.getElementById('cal-grid');
-  const dateMap = {};
-  sessions.forEach(s => {
-    const d = new Date(s.date).toISOString().split('T')[0];
-    dateMap[d] = (dateMap[d] || 0) + 1;
+  const MUSCLE_COLORS = {
+    'Chest':      '#2E7D32',
+    'Back':       '#1A56A0',
+    'Shoulders':  '#7B61C4',
+    'Legs':       '#BA7517',
+    'Hamstrings': '#BA7517',
+    'Quads':      '#BA7517',
+    'Glutes':     '#BA7517',
+    'Biceps':     '#993C1D',
+    'Triceps':    '#993C1D',
+    'Arms':       '#993C1D',
+    'Core':       '#5F5E5A',
+    'Calves':     '#5F5E5A',
+    'Traps':      '#5F5E5A',
+    'Spinning':   '#0F6E56',
+    'Running':    '#0F6E56',
+    'Cardio':     '#0F6E56',
+  };
+
+  // Build PR map — which dates had a PR
+  const prDates = new Set();
+  db.sessions.forEach(s => {
+    const dateKey = s.date ? s.date.split('T')[0] : null;
+    if(!dateKey) return;
+    const exercises = safeJSON(s.exercises, []);
+    const hasPR = exercises.some(ex => {
+      if(ex.isCardio || !ex.loggedSets?.sets?.length) return false;
+      const maxKg = Math.max(...ex.loggedSets.sets.filter(st => st.kg).map(st => st.kg || 0));
+      if(!maxKg) return false;
+      const allPrev = db.sessions
+        .filter(prev => new Date(prev.date) < new Date(s.date))
+        .flatMap(prev => safeJSON(prev.exercises,[]))
+        .filter(e => e.name === ex.name && e.loggedSets?.sets?.length);
+      const prevMax = allPrev.length
+        ? Math.max(...allPrev.flatMap(e => e.loggedSets.sets.filter(st => st.kg).map(st => st.kg || 0)))
+        : 0;
+      return maxKg > prevMax;
+    });
+    if(hasPR) prDates.add(dateKey);
   });
+
+  // Build date → session map
+  const dateSessionMap = {};
+  db.sessions.forEach(s => {
+    const key = s.date ? s.date.split('T')[0] : null;
+    if(!key) return;
+    if(!dateSessionMap[key]) dateSessionMap[key] = [];
+    dateSessionMap[key].push(s);
+  });
+
   calEl.innerHTML = '';
   for(let i = 181; i >= 0; i--) {
     const d = new Date(); d.setDate(d.getDate() - i);
     const key = d.toISOString().split('T')[0];
-    const count = dateMap[key] || 0;
-    const heat = count === 0 ? 0 : count === 1 ? 1 : count === 2 ? 2 : count === 3 ? 3 : 4;
-    calEl.innerHTML += `<div class="cal-cell cal-${heat}" title="${key}: ${count} session${count !== 1 ? 's' : ''}"></div>`;
+    const daySessions = dateSessionMap[key] || [];
+    const hasPR = prDates.has(key);
+
+    let cellHtml = '';
+    if(daySessions.length) {
+      // Primary muscle = first muscle of first session
+      const primaryMuscle = safeJSON(daySessions[0].muscles, [])[0] || '';
+      const color = MUSCLE_COLORS[primaryMuscle] || '#888780';
+      const prDot = hasPR ? '<span style="position:absolute;top:2px;right:2px;width:4px;height:4px;border-radius:50%;background:#EF9F27;display:block;"></span>' : '';
+      cellHtml = '<div style="position:relative;width:100%;height:100%;background:' + color + ';border-radius:3px;opacity:0.85;" title="' + (daySessions[0].sessionTitle || primaryMuscle || 'Session') + (hasPR ? ' ★' : '') + '">' + prDot + '</div>';
+    } else {
+      cellHtml = '<div style="width:100%;height:100%;background:var(--bg);border-radius:3px;"></div>';
+    }
+    calEl.innerHTML += '<div style="aspect-ratio:1;">' + cellHtml + '</div>';
+  }
+
+  // Update legend to show muscle colours + PR dot
+  const legendEl = document.getElementById('cal-legend');
+  if(legendEl) {
+    const legendMuscles = [
+      ['Chest','#2E7D32'],['Back','#1A56A0'],['Shoulders','#7B61C4'],
+      ['Legs','#BA7517'],['Arms','#993C1D'],['Cardio','#0F6E56'],['Other','#888780']
+    ];
+    legendEl.innerHTML = legendMuscles.map(([m,c]) =>
+      '<span style="display:flex;align-items:center;gap:3px;font-size:11px;color:var(--muted);">'
+      + '<span style="width:9px;height:9px;border-radius:2px;background:' + c + ';display:inline-block;opacity:0.85;"></span>' + m + '</span>'
+    ).join('') + '<span style="display:flex;align-items:center;gap:3px;font-size:11px;color:var(--muted);margin-left:4px;">'
+    + '<span style="width:7px;height:7px;border-radius:50%;background:#EF9F27;display:inline-block;"></span>PR</span>';
   }
 
   // ── MUSCLE HEATMAP ──
