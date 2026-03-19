@@ -707,7 +707,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.5.3';
+const APP_VERSION = '1.5.2';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -893,27 +893,6 @@ sb.auth.onAuthStateChange((event, session) => {
 // then loads data. This is more reliable than onAuthStateChange for
 // the page-refresh scenario because we control the timing ourselves.
 async function initApp() {
-  // ── OPTIMISTIC LOAD ─────────────────────────────────────────────
-  // Step 1: Check localStorage for a cached user identity (instant).
-  // If found, show the app shell immediately with cached profile data
-  // so the user sees content within one frame rather than waiting 2s.
-  const cachedUser = localStorage.getItem('gymlog_cached_user');
-  if(cachedUser) {
-    try {
-      const u = JSON.parse(cachedUser);
-      currentUser = u;
-      const cachedProfile = localStorage.getItem('gymlog_cached_profile');
-      if(cachedProfile) {
-        db.profile = JSON.parse(cachedProfile);
-      }
-      document.getElementById('auth-screen').style.display = 'none';
-      document.getElementById('app').style.display = 'flex';
-      updateProfileUI();
-    } catch(e) {}
-  }
-
-  // Step 2: Validate session with Supabase in the background.
-  // This is the slow network call — but the user already sees the app.
   const { data: { session }, error } = await sb.auth.getSession();
 
   if(error) {
@@ -922,18 +901,11 @@ async function initApp() {
 
   if(session?.user) {
     currentUser = session.user;
-    // Persist user identity for next load
-    localStorage.setItem('gymlog_cached_user', JSON.stringify({
-      id: session.user.id,
-      email: session.user.email
-    }));
     document.getElementById('auth-screen').style.display = 'none';
     document.getElementById('app').style.display = 'flex';
     updateProfileUI();
     try {
       await loadUserData();
-      // Cache profile for next load
-      localStorage.setItem('gymlog_cached_profile', JSON.stringify(db.profile));
       updateProfileUI();
       updateNavBadge();
       renderOverview();
@@ -942,9 +914,6 @@ async function initApp() {
       toast('Some data failed to load. Please refresh.', 'error');
     }
   } else {
-    // Session invalid — clear cache and show login
-    localStorage.removeItem('gymlog_cached_user');
-    localStorage.removeItem('gymlog_cached_profile');
     currentUser = null;
     db = {...defaultDb};
     document.getElementById('auth-screen').style.display = 'flex';
