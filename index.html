@@ -641,7 +641,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.3.6';
+const APP_VERSION = '1.3.7';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -1157,10 +1157,10 @@ async function renderOverview() {
       return '<div style="display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:0.5px solid var(--border);">'
         + '<div><div style="font-size:13px;font-weight:500;">' + (s.sessionTitle||muscles.join(', ')||'Session') + '</div>'
         + '<div style="font-size:11px;color:var(--muted);">' + fmt(s.date) + (volStr ? ' · ' + volStr : '') + '</div></div>'
-        + '<button class="btn btn-sm" style="font-size:11px;" onclick="showPage(\"history\")">View</button>'
+        + '<button class="btn btn-sm" style="font-size:11px;" onclick="showPage(&apos;history&apos;)">View</button>'
         + '</div>';
     }).join('')
-    + '<div style="margin-top:8px;"><button class="btn btn-sm" onclick="showPage(\"history\")" style="font-size:12px;">View all ' + db.sessions.length + ' sessions →</button></div>';
+    + '<div style="margin-top:8px;"><button class="btn btn-sm" style="font-size:12px;" onclick="showPage(&apos;history&apos;)">View all ' + db.sessions.length + ' sessions →</button></div>';
   } else {
     rEl.innerHTML = '<p style="color:var(--muted);font-size:13px;">No sessions logged yet.</p>';
   }
