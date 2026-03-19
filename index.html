@@ -1043,30 +1043,134 @@ async function refreshData(){
 // ── OVERVIEW ──────────────────────────────────────────────────────
 async function renderOverview() {
   await refreshData();
-  document.getElementById('overview-date').textContent=new Date().toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
-  const today=new Date().toISOString().split('T')[0];
-  const todayFood=db.food.filter(f=>f.log_date===today);
-  const totalKcal=todayFood.reduce((s,f)=>s+f.kcal,0);
-  const thisMonth=db.sessions.filter(s=>{const d=new Date(s.date),n=new Date();return d.getMonth()===n.getMonth()&&d.getFullYear()===n.getFullYear();}).length;
-  document.getElementById('overview-metrics').innerHTML=`
-    <div class="metric"><div class="metric-label">Sessions this month</div><div class="metric-val">${thisMonth}</div></div>
-    <div class="metric"><div class="metric-label">Total sessions</div><div class="metric-val">${db.sessions.length}</div></div>
-    <div class="metric"><div class="metric-label">Calories today</div><div class="metric-val">${totalKcal}</div><div class="metric-sub">goal ${db.profile.calGoal}</div></div>
-    <div class="metric"><div class="metric-label">Body weight</div><div class="metric-val">${db.body.length?db.body[db.body.length-1].weight+'kg':'—'}</div></div>`;
-  const rEl=document.getElementById('recent-sessions');
-  const recentSessions=[...db.sessions].reverse().slice(0,3);
-  rEl.innerHTML=recentSessions.length?recentSessions.map(s=>{
-    const muscles=safeJSON(s.muscles,[]);
-    const vol=calcVolume(safeJSON(s.exercises,[]));
-    const volStr=vol>0?(vol>1000?(vol/1000).toFixed(1)+'k':vol)+' kg':'';
-    return '<div style="display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:0.5px solid var(--border);">'      +'<div><div style="font-size:13px;font-weight:500;">'+(s.sessionTitle||muscles.join(', ')||'Session')+'</div>'      +'<div style="font-size:11px;color:var(--muted);">'+fmt(s.date)+(volStr?' &middot; '+volStr:'')+'</div></div>'      +'<button class="btn btn-sm" style="font-size:11px;" onclick="showPage(\'history\')">View</button>'      +'</div>';
-  }).join('')+'<div style="margin-top:8px;"><button class="btn btn-sm" onclick="showPage(\'history\')" style="font-size:12px;">View all '+db.sessions.length+' sessions →</button></div>'
-  :'<p style="color:var(--muted);font-size:13px;">No sessions logged yet.</p>';
-  const gEl=document.getElementById('overview-goals');
-  gEl.innerHTML=db.goals.length?db.goals.map(g=>`<div class="goal-row"><div><div style="font-size:13px;font-weight:500;">${g.text}</div><div style="font-size:11px;color:var(--muted);">${g.current_best||'No baseline'}</div></div><div style="display:flex;align-items:center;gap:8px;"><div class="prog-bar" style="width:70px;"><div class="prog-fill" style="width:${g.pct||0}%;background:var(--green);"></div></div><span style="font-size:12px;color:var(--green);font-weight:500;">${g.pct||0}%</span></div></div>`).join(''):'<p style="color:var(--muted);font-size:13px;">No goals set. Add them in Settings.</p>';
-  const p=todayFood.reduce((s,f)=>s+f.protein,0),c=todayFood.reduce((s,f)=>s+f.carbs,0),fat=todayFood.reduce((s,f)=>s+f.fat,0);
-  document.getElementById('overview-nutrition').innerHTML=`<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;"><div class="metric"><div class="metric-label">Calories</div><div class="metric-val">${totalKcal}</div></div><div class="metric"><div class="metric-label">Protein</div><div class="metric-val">${p}g</div></div><div class="metric"><div class="metric-label">Carbs</div><div class="metric-val">${c}g</div></div><div class="metric"><div class="metric-label">Fat</div><div class="metric-val">${fat}g</div></div></div>`;
+  const today = new Date().toISOString().split('T')[0];
+  const now = new Date();
+
+  // ── GREETING ──
+  const hour = now.getHours();
+  const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+  const dateStr = now.toLocaleDateString('en-GB', {weekday:'long', day:'numeric', month:'long', year:'numeric'});
+  document.getElementById('overview-greeting').innerHTML =
+    '<div style="font-size:22px;font-weight:500;margin-bottom:2px;">' + greeting + (db.profile.name ? ', ' + db.profile.name : '') + '</div>'
+    + '<div style="font-size:13px;color:var(--muted);">' + dateStr + '</div>';
+
+  // ── ACTIVE PROGRAMME ──
+  const progEl = document.getElementById('overview-active-prog');
+  const prog = programmes.find(p => String(p.id) === String(activeProgrammeId));
+  if(prog) {
+    const days = safeJSON(prog.days, []);
+    const currentDay = prog.current_day || 0;
+    const nextDay = days[currentDay];
+    const dotHtml = days.map((d, i) => {
+      const cls = i < currentDay ? 'done' : i === currentDay ? 'current' : d.type === 'rest' ? 'rest' : '';
+      const lbl = d.type === 'rest' ? 'Rest' : (d.workoutTitle || ('Day '+(i+1)));
+      const shortLbl = lbl.length > 7 ? lbl.slice(0,6) + '…' : lbl;
+      return '<div class="day-chip"><div class="day-dot ' + cls + '">' + (d.type==='rest'?'R':(i+1)) + '</div><div class="day-chip-lbl">' + shortLbl + '</div></div>';
+    }).join('');
+    const musclesHtml = nextDay && nextDay.muscles ? nextDay.muscles.slice(0,3).map(m => '<span class="tag tag-blue" style="margin-right:3px;">' + m + '</span>').join('') : '';
+    const isRest = nextDay && nextDay.type === 'rest';
+    progEl.innerHTML = '<div style="border:2px solid var(--color-border-info);border-radius:var(--border-radius-lg);padding:1rem 1.25rem;margin-bottom:14px;">'
+      + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">'
+      + '<div><div style="font-size:11px;font-weight:500;color:var(--color-text-info);text-transform:uppercase;letter-spacing:0.07em;">Active programme</div>'
+      + '<div style="font-size:14px;font-weight:500;margin-top:2px;">' + prog.name + '</div></div>'
+      + '<div style="text-align:right;"><div style="font-size:11px;color:var(--muted);">Day ' + (currentDay+1) + ' of ' + days.length + '</div>'
+      + '<div style="font-size:13px;font-weight:500;margin-top:2px;">' + (nextDay ? (nextDay.workoutTitle || 'Rest day') : '') + '</div></div>'
+      + '</div>'
+      + '<div class="day-strip" style="margin-bottom:12px;">' + dotHtml + '</div>'
+      + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
+      + '<div>' + musclesHtml + '</div>'
+      + (isRest
+          ? '<button class="btn btn-sm" onclick="skipProgrammeDay()">Mark rest day done →</button>'
+          : (nextDay ? '<button class="btn btn-dark btn-sm" onclick="startProgrammeDay()">Start ' + (nextDay.workoutTitle||'session') + '</button>' : ''))
+      + '</div>'
+      + '</div>';
+  } else {
+    progEl.innerHTML = '';
+  }
+
+  // ── METRICS ──
+  const todayFood = db.food.filter(f => f.log_date === today);
+  const totalKcal = todayFood.reduce((s,f) => s+f.kcal, 0);
+  const thisMonth = db.sessions.filter(s => {
+    const d = new Date(s.date);
+    return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+  }).length;
+  const lastMonth = db.sessions.filter(s => {
+    const d = new Date(s.date);
+    const lm = new Date(now.getFullYear(), now.getMonth()-1, 1);
+    return d.getMonth() === lm.getMonth() && d.getFullYear() === lm.getFullYear();
+  }).length;
+  const sessionsThisMonth30 = db.sessions.filter(s => new Date(s.date) >= new Date(now - 30*864e5));
+  const vol30 = sessionsThisMonth30.reduce((sum, s) => sum + calcVolume(safeJSON(s.exercises,[])), 0);
+  const sessDelta = thisMonth - lastMonth;
+  const latestWeight = db.body.length ? db.body[db.body.length-1].weight : null;
+
+  document.getElementById('overview-metrics').innerHTML =
+    '<div class="metric"><div class="metric-label">Sessions this month</div><div class="metric-val">' + thisMonth + '</div>'
+    + '<div class="metric-sub" style="color:' + (sessDelta >= 0 ? '#2E7D32':'#B71C1C') + ';">' + (sessDelta >= 0 ? '↑':'↓') + ' ' + Math.abs(sessDelta) + ' vs last month</div></div>'
+    + '<div class="metric"><div class="metric-label">Volume (30d)</div><div class="metric-val">' + (vol30 > 1000 ? (vol30/1000).toFixed(1)+'k' : vol30) + '</div><div class="metric-sub" style="color:var(--faint);">reps × kg</div></div>'
+    + '<div class="metric"><div class="metric-label">Body weight</div><div class="metric-val">' + (latestWeight ? latestWeight+'kg' : '—') + '</div><div class="metric-sub" style="color:var(--faint);">' + (db.body.length ? 'logged ' + fmt(db.body[db.body.length-1].date) : 'not logged') + '</div></div>'
+    + '<div class="metric"><div class="metric-label">Calories today</div><div class="metric-val">' + totalKcal + '</div><div class="metric-sub" style="color:var(--faint);">/ ' + (db.profile.calGoal||2200) + ' goal</div></div>';
+
+  // ── MUSCLE STATUS ──
+  const muscleLastTrained = {};
+  db.sessions.forEach(s => {
+    safeJSON(s.muscles,[]).forEach(m => {
+      const d = new Date(s.date);
+      if(!muscleLastTrained[m] || d > muscleLastTrained[m]) muscleLastTrained[m] = d;
+    });
+  });
+  const dotColor = days => days <= 4 ? '#639922' : days <= 10 ? '#97C459' : days <= 18 ? '#D3D1C7' : '#E24B4A';
+  document.getElementById('overview-muscles').innerHTML = MUSCLES_W.map(m => {
+    const last = muscleLastTrained[m];
+    const days = last ? Math.floor((Date.now() - last) / 864e5) : 999;
+    return '<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:0.5px solid var(--border);">'
+      + '<span style="font-size:12px;display:flex;align-items:center;gap:6px;">'
+      + '<span style="width:8px;height:8px;border-radius:50%;background:' + dotColor(days) + ';display:inline-block;flex-shrink:0;"></span>'
+      + m + '</span>'
+      + '<span style="font-size:11px;color:var(--faint);">' + (last ? days + 'd ago' : 'never') + '</span>'
+      + '</div>';
+  }).join('');
+
+  // ── GOALS ──
+  document.getElementById('overview-goals').innerHTML = db.goals.length
+    ? db.goals.map(g =>
+        '<div style="margin-bottom:10px;">'
+        + '<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;">'
+        + '<span style="font-weight:500;">' + g.text + '</span>'
+        + '<span style="font-weight:500;color:' + ((g.pct||0)>=80?'#2E7D32':(g.pct||0)>=50?'#BA7517':'#1A56A0') + ';">' + (g.pct||0) + '%</span>'
+        + '</div>'
+        + '<div class="prog-bar" style="height:6px;"><div class="prog-fill" style="width:' + (g.pct||0) + '%;background:' + ((g.pct||0)>=80?'#2E7D32':(g.pct||0)>=50?'#BA7517':'#1A56A0') + ';"></div></div>'
+        + '<div style="font-size:11px;color:var(--faint);margin-top:2px;">' + (g.current_best||'No baseline') + '</div>'
+        + '</div>'
+      ).join('')
+    : '<p style="font-size:13px;color:var(--muted);">No goals set. Add them in Settings.</p>';
+
+  // ── RECENT SESSIONS (3, compact) ──
+  const recentSessions = [...db.sessions].reverse().slice(0, 3);
+  const rEl = document.getElementById('recent-sessions');
+  if(recentSessions.length) {
+    rEl.innerHTML = recentSessions.map(s => {
+      const muscles = safeJSON(s.muscles, []);
+      const vol = calcVolume(safeJSON(s.exercises, []));
+      const volStr = vol > 0 ? (vol > 1000 ? (vol/1000).toFixed(1)+'k' : vol) + ' kg' : '';
+      return '<div style="display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:0.5px solid var(--border);">'
+        + '<div><div style="font-size:13px;font-weight:500;">' + (s.sessionTitle||muscles.join(', ')||'Session') + '</div>'
+        + '<div style="font-size:11px;color:var(--muted);">' + fmt(s.date) + (volStr ? ' · ' + volStr : '') + '</div></div>'
+        + '<button class="btn btn-sm" style="font-size:11px;" onclick="showPage(\"history\")">View</button>'
+        + '</div>';
+    }).join('')
+    + '<div style="margin-top:8px;"><button class="btn btn-sm" onclick="showPage(\"history\")" style="font-size:12px;">View all ' + db.sessions.length + ' sessions →</button></div>';
+  } else {
+    rEl.innerHTML = '<p style="color:var(--muted);font-size:13px;">No sessions logged yet.</p>';
+  }
+
+  // ── TODAY'S NUTRITION inline badge ──
+  const p = todayFood.reduce((s,f)=>s+f.protein,0);
+  const nutEl = document.getElementById('overview-nutrition-inline');
+  if(nutEl) nutEl.textContent = totalKcal ? totalKcal + ' kcal · ' + p + 'g protein' : 'Not logged today';
 }
+
 
 // ── PLANNER ───────────────────────────────────────────────────────
 async function renderPlanner() {
