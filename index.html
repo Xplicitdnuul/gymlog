@@ -217,7 +217,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 .set-pill-pr { border-color:#639922; background:#EAF3DE; color:#27500A; }
 .tag-pr { font-size:10px; font-weight:500; padding:2px 7px; border-radius:20px; background:#EAF3DE; color:#27500A; }
 
-.nav-group-label { font-size:10px; font-weight:500; color:var(--faint); text-transform:uppercase; letter-spacing:0.08em; padding:2px 0 4px 0; }
+.nav-group-label { font-size:10px; font-weight:500; color:var(--faint); text-transform:uppercase; letter-spacing:0.08em; padding:2px 0 4px 12px; }
 </style>
 </head>
 <body>
@@ -256,7 +256,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
     <nav>
       <div class="nav-group-label">Train</div>
       <div class="nav-item" onclick="showPage('justtrain')"><span class="nav-icon">⚡</span> Just Train</div>
-      <div class="nav-item" onclick="showPage('planner')"><span class="nav-icon">⊕</span> Plan session</div>
+      <div class="nav-item" onclick="showPage('planner')"><span class="nav-icon">⊕</span> Generate Workout</div>
       <div class="nav-item" id="nav-log" onclick="showPage('log')"><span class="nav-icon">✦</span> Log workout<span id="nav-log-badge" style="display:none;margin-left:auto;width:8px;height:8px;border-radius:50%;background:#2E7D32;flex-shrink:0;"></span></div>
       <div class="nav-item" onclick="showPage('history')"><span class="nav-icon">⊟</span> History</div>
       <div class="nav-group-label" style="margin-top:10px;">Plan</div>
@@ -308,7 +308,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
     </div>
 
     <div id="page-planner" class="page">
-      <div class="page-title">Plan a session</div>
+      <div class="page-title">Generate Workout</div>
       <div class="page-sub" id="planner-date"></div>
       <div class="card">
         <div class="card-title">Select muscle groups</div>
@@ -361,17 +361,19 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
       </div>
       <div id="planner-result"></div>
 
-      <div class="card" style="margin-top:14px;">
-        <div class="card-title">Saved workouts</div>
-        <div style="font-size:12px;color:var(--muted);margin-bottom:12px;">Saved sessions you can load and log any time, without using the AI.</div>
-        <div id="saved-workouts-list"></div>
-      </div>
+      
     </div>
 
     <div id="page-log" class="page">
       <div class="page-title">Log workout</div>
       <div class="page-sub">Record your sets, reps, and weights</div>
       <div id="log-content"></div>
+
+      <div class="card" style="margin-top:14px;">
+        <div class="card-title">Saved workouts</div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:12px;">Saved sessions you can load and log any time, without using the AI.</div>
+        <div id="saved-workouts-list"></div>
+      </div>
     </div>
 
     <div id="page-progress" class="page">
@@ -707,7 +709,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.4.4';
+const APP_VERSION = '1.4.5';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -1268,7 +1270,6 @@ async function renderPlanner() {
   }).join('');
   document.getElementById('planner-cardio').innerHTML=MUSCLES_C.map(m=>'<button class="mpill cardio'+(db.selectedMuscles.includes(m)?' sel':'')+'" data-m="'+m+'" onclick="togglePlanMuscle(this,this.dataset.m)">'+m+'</button>').join('');
   renderMuscleSettings();
-  renderSavedWorkouts();
   updateEstimate();
 }
 
@@ -1770,6 +1771,7 @@ function renderLog() {
   html2+='<div style="display:flex;gap:10px;"><button class="btn btn-dark" onclick="saveSession()">Save session</button><button class="btn" onclick="discardSession()">Discard</button></div>';
   el.innerHTML=html2;
   updateNavBadge();
+  renderSavedWorkouts();
 }
 
 function toggleCue(id){
