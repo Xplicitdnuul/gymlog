@@ -218,6 +218,8 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 .tag-pr { font-size:10px; font-weight:500; padding:2px 7px; border-radius:20px; background:#EAF3DE; color:#27500A; }
 
 .nav-group-label { font-size:10px; font-weight:500; color:var(--faint); text-transform:uppercase; letter-spacing:0.08em; padding:2px 0 4px 12px; }
+
+.cardio-block-item{border:0.5px solid #9FE1CB;border-radius:var(--border-radius-lg);padding:1rem 1.25rem;background:#E1F5EE;margin-bottom:10px;}
 </style>
 </head>
 <body>
@@ -702,7 +704,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.5.0';
+const APP_VERSION = '1.5.1';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -1705,6 +1707,7 @@ function getPrevData(name){
 function renderLog() {
   const el=document.getElementById('log-content');
   if(!db.activeSession){
+    resetCardioBlocks();
     el.innerHTML='<div class="card"><p style="color:var(--muted);">No active session.</p><div style="margin-top:10px;"><button class="btn btn-dark btn-sm" onclick="goToPlanner()">Plan a session</button></div></div>';
     updateNavBadge();
     renderSavedWorkouts();
@@ -1786,6 +1789,8 @@ function renderLog() {
 
   html2+='</div>';
   html2+='<div class="card"><div class="card-title">Session notes</div><textarea id="session-note" rows="3" style="font-size:13px;font-style:italic;" placeholder="How did it feel overall?" oninput="autosaveDraft()">'+(s.sessionNote||'')+'</textarea></div>';
+  html2+='<div style="margin-bottom:10px;"><button class="btn btn-sm" style="border-color:#9FE1CB;color:#0F6E56;background:#E1F5EE;" onclick="addCardioBlock()">+ Add cardio</button></div>';
+  html2+='<div id="cardio-blocks"></div>';
   html2+='<div style="display:flex;gap:10px;"><button class="btn btn-dark" onclick="saveSession()">Save session</button><button class="btn" onclick="discardSession()">Discard</button></div>';
   el.innerHTML=html2;
   updateNavBadge();
@@ -1863,6 +1868,24 @@ async function saveSession(){
     ex.loggedSets={sets,note,kg:sets[0]?.kg,targetReps:parseInt(ex.reps)||0};
     delete ex.draftSets;
   });
+  // Append cardio blocks as exercises
+  cardioBlocks.forEach(b => {
+    if(!b.duration) return;
+    s.exercises.push({
+      name: b.type,
+      muscle: 'Cardio',
+      sets: 1,
+      reps: b.duration + ' min',
+      isCardio: true,
+      loggedSets: {
+        sets: [{kg: parseFloat(b.duration)||0, reps: parseFloat(b.duration)||0}],
+        note: [b.intensity, b.distance ? b.distance+'km' : '', b.note].filter(Boolean).join(' · '),
+        kg: null,
+        targetReps: 0
+      }
+    });
+    if(!s.muscles.includes('Cardio')) s.muscles.push('Cardio');
+  });
   s.sessionNote=document.getElementById('session-note')?.value||'';
   s.is_draft=false;
   if(s.draft_id){
@@ -1876,6 +1899,7 @@ async function saveSession(){
     db.sessions.push({...s,...sessData,exercises:s.exercises,muscles:s.muscles});
   }
   db.activeSession=null;db.pendingSession=null;
+  resetCardioBlocks();
   updateNavBadge();
   toast('Session saved!','ok');showPage('overview');
 }
@@ -1887,6 +1911,7 @@ async function discardSession(){
     await sb.from('sessions').delete().eq('id',s.draft_id);
   }
   db.activeSession=null;
+  resetCardioBlocks();
   updateNavBadge();
   showPage('overview');
 }
@@ -3479,6 +3504,80 @@ function exportHistoryCSV() {
   a.click();
   URL.revokeObjectURL(url);
   toast('Exported ' + db.sessions.length + ' sessions.', 'ok');
+}
+
+// ── CARDIO BLOCKS (inline during session logging) ─────────────────
+const CARDIO_TYPES = [
+  'Spinning', 'Walking', 'Incline walking', 'Rowing machine',
+  'Elliptical', 'Stairmaster', 'Running', 'Cycling'
+];
+
+let cardioBlocks = []; // [{type, duration, intensity, distance, note}]
+
+function addCardioBlock() {
+  // Also pull any cardio exercises from the user's library
+  const libCardio = db.library
+    .filter(e => MUSCLES_C.some(m => e.muscle.includes(m)) || e.muscle.toLowerCase().includes('cardio'))
+    .map(e => e.name)
+    .filter(n => !CARDIO_TYPES.includes(n));
+  const allTypes = [...CARDIO_TYPES, ...libCardio];
+
+  cardioBlocks.push({ type: allTypes[0], duration: '', intensity: 'Moderate', distance: '', note: '' });
+  renderCardioBlocks(allTypes);
+}
+
+function renderCardioBlocks(allTypesOverride) {
+  const el = document.getElementById('cardio-blocks');
+  if(!el) return;
+  if(!cardioBlocks.length) { el.innerHTML = ''; return; }
+
+  const libCardio = db.library
+    .filter(e => MUSCLES_C.some(m => e.muscle.includes(m)) || e.muscle.toLowerCase().includes('cardio'))
+    .map(e => e.name)
+    .filter(n => !CARDIO_TYPES.includes(n));
+  const allTypes = allTypesOverride || [...CARDIO_TYPES, ...libCardio];
+
+  el.innerHTML = cardioBlocks.map((b, bi) => {
+    const typeOptions = allTypes.map(t =>
+      '<option value="' + t + '"' + (b.type === t ? ' selected' : '') + '>' + t + '</option>'
+    ).join('');
+
+    return '<div class="cardio-block-item">'
+      + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">'
+      + '<div style="display:flex;align-items:center;gap:8px;">'
+      + '<select style="font-size:13px;font-weight:500;border:none;background:transparent;color:#085041;font-family:var(--font-sans);padding:0;cursor:pointer;" data-bi="' + bi + '" onchange="updateCardioBlock(' + bi + ',\'type\',this.value)">' + typeOptions + '</select>'
+      + '<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:20px;background:#9FE1CB;color:#04342C;">cardio</span>'
+      + '</div>'
+      + '<button data-bi="' + bi + '" onclick="removeCardioBlock(parseInt(this.dataset.bi))" style="background:none;border:none;cursor:pointer;color:#0F6E56;font-size:16px;">\u00d7</button>'
+      + '</div>'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px;">'
+      + '<div><div style="font-size:10px;color:#0F6E56;margin-bottom:3px;">Duration (min)</div>'
+      + '<input type="number" min="1" value="' + (b.duration||'') + '" placeholder="30" data-bi="' + bi + '" oninput="updateCardioBlock(parseInt(this.dataset.bi),\'duration\',this.value)" style="width:100%;padding:6px 8px;font-size:13px;border:0.5px solid #9FE1CB;border-radius:var(--border-radius-md);background:white;font-family:var(--font-sans);"></div>'
+      + '<div><div style="font-size:10px;color:#0F6E56;margin-bottom:3px;">Intensity</div>'
+      + '<select data-bi="' + bi + '" onchange="updateCardioBlock(parseInt(this.dataset.bi),\'intensity\',this.value)" style="width:100%;padding:6px 8px;font-size:13px;border:0.5px solid #9FE1CB;border-radius:var(--border-radius-md);background:white;font-family:var(--font-sans);">'
+      + ['Low','Moderate','High','Intervals'].map(v => '<option value="' + v + '"' + (b.intensity===v?' selected':'') + '>' + v + '</option>').join('')
+      + '</select></div>'
+      + '<div><div style="font-size:10px;color:#0F6E56;margin-bottom:3px;">Distance (km)</div>'
+      + '<input type="number" min="0" step="0.1" value="' + (b.distance||'') + '" placeholder="optional" data-bi="' + bi + '" oninput="updateCardioBlock(parseInt(this.dataset.bi),\'distance\',this.value)" style="width:100%;padding:6px 8px;font-size:13px;border:0.5px solid #9FE1CB;border-radius:var(--border-radius-md);background:white;font-family:var(--font-sans);"></div>'
+      + '</div>'
+      + '<input type="text" value="' + (b.note||'') + '" placeholder="Note (e.g. intervals, steady state...)" data-bi="' + bi + '" oninput="updateCardioBlock(parseInt(this.dataset.bi),\'note\',this.value)" style="width:100%;padding:6px 8px;font-size:12px;border:0.5px solid #9FE1CB;border-radius:var(--border-radius-md);background:white;font-family:var(--font-sans);">'
+      + '</div>';
+  }).join('');
+}
+
+function updateCardioBlock(bi, field, value) {
+  if(cardioBlocks[bi]) cardioBlocks[bi][field] = value;
+}
+
+function removeCardioBlock(bi) {
+  cardioBlocks.splice(bi, 1);
+  renderCardioBlocks();
+}
+
+function resetCardioBlocks() {
+  cardioBlocks = [];
+  const el = document.getElementById('cardio-blocks');
+  if(el) el.innerHTML = '';
 }
 
 // ── LIBRARY ───────────────────────────────────────────────────────
