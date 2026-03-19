@@ -280,14 +280,26 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 
   <main class="main">
     <div id="page-overview" class="page active">
-      <div class="page-title">Overview</div>
-      <div class="page-sub" id="overview-date"></div>
+      <div id="overview-greeting" style="margin-bottom:20px;"></div>
+      <div id="overview-active-prog"></div>
       <div class="metric-grid" id="overview-metrics"></div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
-        <div class="card"><div class="card-title">Recent sessions</div><div id="recent-sessions"></div></div>
-        <div class="card"><div class="card-title">Goals progress</div><div id="overview-goals"></div></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;">
+        <div class="card">
+          <div class="card-title">Muscle status</div>
+          <div id="overview-muscles"></div>
+        </div>
+        <div class="card">
+          <div class="card-title">Goals</div>
+          <div id="overview-goals"></div>
+        </div>
       </div>
-      <div class="card" style="margin-top:14px;"><div class="card-title">Today's nutrition</div><div id="overview-nutrition"></div></div>
+      <div class="card" style="margin-top:14px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+          <div class="card-title" style="margin-bottom:0;">Recent sessions</div>
+          <div id="overview-nutrition-inline" style="font-size:12px;color:var(--muted);"></div>
+        </div>
+        <div id="recent-sessions"></div>
+      </div>
     </div>
 
     <div id="page-planner" class="page">
@@ -629,7 +641,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.3.5';
+const APP_VERSION = '1.3.6';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -2525,7 +2537,7 @@ function renderHistoryList() {
   const hasMore = sessions.length > historyShownCount;
 
   const rowsHtml = shown.map(s => {
-    const isExpanded = historyExpandedId === s.id;
+    const isExpanded = String(historyExpandedId) === String(s.id);
     const exercises = safeJSON(s.exercises, []);
     const muscles = safeJSON(s.muscles, []);
     const vol = calcVolume(exercises);
@@ -2652,7 +2664,7 @@ function isPRSession(s) {
 }
 
 function toggleHistorySession(id) {
-  historyExpandedId = historyExpandedId === id ? null : id;
+  historyExpandedId = String(historyExpandedId) === String(id) ? null : String(id);
   renderHistoryList();
   if(historyExpandedId) {
     const el = document.getElementById('hist-' + id);
