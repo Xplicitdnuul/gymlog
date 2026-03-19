@@ -209,6 +209,15 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 .sug-row{padding:12px 0;border-bottom:0.5px solid var(--color-border-tertiary);}
 .sug-row:last-child{border-bottom:none;}
 .sug-added{opacity:0.45;}
+
+.hist-row { display:flex; align-items:center; justify-content:space-between; padding:12px 1.25rem; cursor:pointer; border-bottom:0.5px solid var(--color-border-tertiary); }
+.hist-row:last-child { border-bottom:none; }
+.hist-row:hover { background:var(--color-background-secondary); }
+.hist-session-wrap:last-child .hist-row { border-bottom:none; }
+.hist-detail { padding:12px 1.25rem 4px; background:var(--color-background-secondary); border-bottom:0.5px solid var(--color-border-tertiary); }
+.set-pill-hist { display:inline-block; background:var(--color-background-primary); border:0.5px solid var(--color-border-tertiary); border-radius:var(--border-radius-md); font-size:12px; padding:3px 8px; margin:2px 3px 2px 0; color:var(--color-text-primary); }
+.set-pill-pr { border-color:#639922; background:#EAF3DE; color:#27500A; }
+.tag-pr { font-size:10px; font-weight:500; padding:2px 7px; border-radius:20px; background:#EAF3DE; color:#27500A; }
 </style>
 </head>
 <body>
@@ -254,7 +263,8 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
       <div class="nav-item" onclick="showPage('builder')"><span class="nav-icon">✎</span> Build workout</div>
     <div class="nav-item" onclick="showPage('programme')"><span class="nav-icon">◫</span> Programme</div>
     <div class="nav-item" onclick="showPage('library')"><span class="nav-icon">≡</span> Exercise library</div>
-      <div class="nav-item" onclick="showPage('settings')"><span class="nav-icon">⚙</span> Settings</div>
+      <div class="nav-item" onclick="showPage('history')"><span class="nav-icon">⊟</span> History</div>
+    <div class="nav-item" onclick="showPage('settings')"><span class="nav-icon">⚙</span> Settings</div>
     </nav>
     <div class="sidebar-bottom">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
@@ -567,6 +577,12 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
       <div class="card"><div class="card-title">Library — <span id="lib-count">0</span> exercises</div><div id="lib-display" style="display:flex;flex-wrap:wrap;gap:7px;"></div></div>
     </div>
 
+    <div id="page-history" class="page">
+      <div class="page-title">History</div>
+      <div class="page-sub">All completed sessions</div>
+      <div id="history-content"></div>
+    </div>
+
     <div id="page-settings" class="page">
       <div class="page-title">Settings</div>
       <div class="page-sub">Your profile and preferences</div>
@@ -613,7 +629,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.3.3';
+const APP_VERSION = '1.3.5';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -988,9 +1004,9 @@ function showPage(id) {
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   document.getElementById('page-'+id).classList.add('active');
-  const navMap={overview:0,planner:1,log:2,progress:3,food:4,body:5,builder:6,programme:7,library:8,settings:9};
+  const navMap={overview:0,planner:1,log:2,progress:3,food:4,body:5,builder:6,programme:7,library:8,history:9,settings:10};
   document.querySelectorAll('.nav-item')[navMap[id]].classList.add('active');
-  const renders={overview:renderOverview,planner:renderPlanner,log:renderLog,progress:renderProgress,food:renderFood,body:renderBody,builder:renderBuilder,programme:renderProgramme,library:renderLibrary,settings:renderSettings};
+  const renders={overview:renderOverview,planner:renderPlanner,log:renderLog,progress:renderProgress,food:renderFood,body:renderBody,builder:renderBuilder,programme:renderProgramme,library:renderLibrary,history:renderHistory,settings:renderSettings};
   if(window.innerWidth<=768) closeSidebar();
   if(renders[id]) Promise.resolve(renders[id]()).catch(e=>console.error('Page render error:',e));
 }
@@ -1026,7 +1042,14 @@ async function renderOverview() {
     <div class="metric"><div class="metric-label">Calories today</div><div class="metric-val">${totalKcal}</div><div class="metric-sub">goal ${db.profile.calGoal}</div></div>
     <div class="metric"><div class="metric-label">Body weight</div><div class="metric-val">${db.body.length?db.body[db.body.length-1].weight+'kg':'—'}</div></div>`;
   const rEl=document.getElementById('recent-sessions');
-  rEl.innerHTML=db.sessions.length?[...db.sessions].reverse().slice(0,5).map(s=>`<div style="padding:8px 0;border-bottom:0.5px solid var(--border);display:flex;justify-content:space-between;align-items:center;"><div><div style="font-size:13px;font-weight:500;">${s.muscles?s.muscles.join(', '):'Session'}</div><div style="font-size:11px;color:var(--muted);">${fmt(s.date)}</div></div><span style="font-size:12px;color:var(--muted);">${s.exercises?s.exercises.length:0} ex</span></div>`).join(''):'<p style="color:var(--muted);font-size:13px;">No sessions logged yet.</p>';
+  const recentSessions=[...db.sessions].reverse().slice(0,3);
+  rEl.innerHTML=recentSessions.length?recentSessions.map(s=>{
+    const muscles=safeJSON(s.muscles,[]);
+    const vol=calcVolume(safeJSON(s.exercises,[]));
+    const volStr=vol>0?(vol>1000?(vol/1000).toFixed(1)+'k':vol)+' kg':'';
+    return '<div style="display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:0.5px solid var(--border);">'      +'<div><div style="font-size:13px;font-weight:500;">'+(s.sessionTitle||muscles.join(', ')||'Session')+'</div>'      +'<div style="font-size:11px;color:var(--muted);">'+fmt(s.date)+(volStr?' &middot; '+volStr:'')+'</div></div>'      +'<button class="btn btn-sm" style="font-size:11px;" onclick="showPage(\'history\')">View</button>'      +'</div>';
+  }).join('')+'<div style="margin-top:8px;"><button class="btn btn-sm" onclick="showPage(\'history\')" style="font-size:12px;">View all '+db.sessions.length+' sessions →</button></div>'
+  :'<p style="color:var(--muted);font-size:13px;">No sessions logged yet.</p>';
   const gEl=document.getElementById('overview-goals');
   gEl.innerHTML=db.goals.length?db.goals.map(g=>`<div class="goal-row"><div><div style="font-size:13px;font-weight:500;">${g.text}</div><div style="font-size:11px;color:var(--muted);">${g.current_best||'No baseline'}</div></div><div style="display:flex;align-items:center;gap:8px;"><div class="prog-bar" style="width:70px;"><div class="prog-fill" style="width:${g.pct||0}%;background:var(--green);"></div></div><span style="font-size:12px;color:var(--green);font-weight:500;">${g.pct||0}%</span></div></div>`).join(''):'<p style="color:var(--muted);font-size:13px;">No goals set. Add them in Settings.</p>';
   const p=todayFood.reduce((s,f)=>s+f.protein,0),c=todayFood.reduce((s,f)=>s+f.carbs,0),fat=todayFood.reduce((s,f)=>s+f.fat,0);
@@ -2476,6 +2499,312 @@ async function addSuggestion(name, muscle) {
   renderSuggestionPanel();
 }
 
+
+// ── HISTORY ───────────────────────────────────────────────────────
+let historyShownCount = 20;
+let historyExpandedId = null;
+
+function renderHistory() {
+  historyShownCount = 20;
+  historyExpandedId = null;
+  renderHistoryList();
+}
+
+function renderHistoryList() {
+  const el = document.getElementById('history-content');
+  if(!el) return;
+
+  const sessions = [...db.sessions].reverse();
+
+  if(!sessions.length) {
+    el.innerHTML = '<div class="card"><p style="font-size:13px;color:var(--color-text-secondary);">No sessions logged yet.</p></div>';
+    return;
+  }
+
+  const shown = sessions.slice(0, historyShownCount);
+  const hasMore = sessions.length > historyShownCount;
+
+  const rowsHtml = shown.map(s => {
+    const isExpanded = historyExpandedId === s.id;
+    const exercises = safeJSON(s.exercises, []);
+    const muscles = safeJSON(s.muscles, []);
+    const vol = calcVolume(exercises);
+    const volStr = vol > 0 ? (vol > 1000 ? (vol/1000).toFixed(1) + 'k' : vol) + ' kg vol' : '';
+    const cardioEx = exercises.filter(e => e.isCardio);
+    const liftEx = exercises.filter(e => !e.isCardio);
+    const exSummary = [
+      liftEx.length ? liftEx.length + ' exercise' + (liftEx.length !== 1 ? 's' : '') : '',
+      cardioEx.length ? cardioEx.length + ' cardio' : '',
+      volStr
+    ].filter(Boolean).join(' · ');
+
+    const muscleTags = muscles.slice(0, 4).map(m =>
+      '<span class="tag tag-blue" style="margin-right:3px;">' + m + '</span>'
+    ).join('');
+
+    // Detail panel
+    let detailHtml = '';
+    if(isExpanded) {
+      const exRows = exercises.map(ex => {
+        const sets = ex.loggedSets?.sets || [];
+        const isCardio = ex.isCardio;
+
+        // Check if this is a PR for this exercise
+        let isPR = false;
+        if(!isCardio && sets.length) {
+          const maxKg = Math.max(...sets.filter(st => st.kg).map(st => st.kg || 0));
+          if(maxKg > 0) {
+            const allPrev = db.sessions
+              .filter(prev => new Date(prev.date) < new Date(s.date))
+              .flatMap(prev => safeJSON(prev.exercises, []))
+              .filter(e => e.name === ex.name && e.loggedSets?.sets?.length);
+            const prevMax = allPrev.length
+              ? Math.max(...allPrev.flatMap(e => e.loggedSets.sets.filter(st => st.kg).map(st => st.kg || 0)))
+              : 0;
+            isPR = maxKg > prevMax;
+          }
+        }
+
+        let setPills = '';
+        if(isCardio) {
+          const mins = sets[0]?.kg || sets[0]?.reps || '?';
+          setPills = '<span class="set-pill-hist">' + mins + ' min</span>';
+        } else {
+          setPills = sets.map((st, i) => {
+            const txt = (st.kg ? st.kg + 'kg' : 'BW') + ' × ' + (st.reps || '?');
+            return '<span class="set-pill-hist' + (isPR && i === 0 ? ' set-pill-pr' : '') + '">Set ' + (i+1) + ': ' + txt + '</span>';
+          }).join('');
+        }
+
+        const noteHtml = ex.loggedSets?.note
+          ? '<div style="font-size:11px;color:var(--color-text-tertiary);font-style:italic;margin-top:4px;">' + ex.loggedSets.note + '</div>'
+          : '';
+
+        return '<div style="padding:9px 0;border-bottom:0.5px solid var(--color-border-tertiary);">'
+          + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;">'
+          + '<span style="font-size:13px;font-weight:500;">' + ex.name + '</span>'
+          + (isPR ? '<span class="tag-pr">PR</span>' : '')
+          + '</div>'
+          + '<div style="display:flex;flex-wrap:wrap;gap:4px;">' + setPills + '</div>'
+          + noteHtml
+          + '</div>';
+      }).join('');
+
+      const sessionNoteHtml = s.note
+        ? '<div style="margin-top:8px;font-size:12px;color:var(--color-text-secondary);font-style:italic;border-top:0.5px solid var(--color-border-tertiary);padding-top:8px;">&ldquo;' + s.note + '&rdquo;</div>'
+        : '';
+
+      detailHtml = '<div class="hist-detail">'
+        + exRows
+        + sessionNoteHtml
+        + '<div style="display:flex;gap:8px;margin-top:10px;">'
+        + '<button class="btn btn-sm" data-sid="' + s.id + '" onclick="openHistoryEdit(this.dataset.sid)">Edit session</button>'
+        + '</div>'
+        + '</div>';
+    }
+
+    return '<div class="hist-session-wrap" id="hist-' + s.id + '">'
+      + '<div class="hist-row" data-sid="' + s.id + '" onclick="toggleHistorySession(this.dataset.sid)">'
+      + '<div style="flex:1;min-width:0;">'
+      + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;">'
+      + '<span style="font-size:13px;font-weight:500;">' + (s.sessionTitle || muscles.join(', ') || 'Session') + '</span>'
+      + (isPRSession(s) ? '<span class="tag-pr">PR</span>' : '')
+      + '</div>'
+      + '<div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:5px;">' + fmt(s.date) + (exSummary ? ' &middot; ' + exSummary : '') + '</div>'
+      + '<div style="display:flex;flex-wrap:wrap;gap:3px;">' + muscleTags + '</div>'
+      + '</div>'
+      + '<span style="color:var(--color-text-tertiary);font-size:14px;margin-left:10px;flex-shrink:0;">' + (isExpanded ? '▾' : '▸') + '</span>'
+      + '</div>'
+      + detailHtml
+      + '</div>';
+  }).join('');
+
+  const showMoreHtml = hasMore
+    ? '<button class="btn" style="width:100%;text-align:center;margin-top:4px;" onclick="historyShowMore()">Show more (' + (sessions.length - historyShownCount) + ' remaining)</button>'
+    : sessions.length > 20 ? '<p style="font-size:12px;color:var(--color-text-tertiary);text-align:center;margin-top:8px;">All ' + sessions.length + ' sessions shown</p>' : '';
+
+  el.innerHTML = '<div class="card" style="padding:0;">'
+    + '<div style="padding:1rem 1.25rem 0;">'
+    + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">'
+    + '<span style="font-size:11px;font-weight:500;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.07em;">' + sessions.length + ' sessions total</span>'
+    + '</div>'
+    + '</div>'
+    + '<div id="hist-rows" style="padding:0 1.25rem;">' + rowsHtml + '</div>'
+    + '<div style="padding:0 1.25rem 1rem;">' + showMoreHtml + '</div>'
+    + '</div>';
+}
+
+function isPRSession(s) {
+  const exercises = safeJSON(s.exercises, []);
+  return exercises.some(ex => {
+    if(ex.isCardio || !ex.loggedSets?.sets?.length) return false;
+    const maxKg = Math.max(...ex.loggedSets.sets.filter(st => st.kg).map(st => st.kg || 0));
+    if(!maxKg) return false;
+    const allPrev = db.sessions
+      .filter(prev => new Date(prev.date) < new Date(s.date))
+      .flatMap(prev => safeJSON(prev.exercises, []))
+      .filter(e => e.name === ex.name && e.loggedSets?.sets?.length);
+    const prevMax = allPrev.length
+      ? Math.max(...allPrev.flatMap(e => e.loggedSets.sets.filter(st => st.kg).map(st => st.kg || 0)))
+      : 0;
+    return maxKg > prevMax;
+  });
+}
+
+function toggleHistorySession(id) {
+  historyExpandedId = historyExpandedId === id ? null : id;
+  renderHistoryList();
+  if(historyExpandedId) {
+    const el = document.getElementById('hist-' + id);
+    if(el) setTimeout(() => el.scrollIntoView({behavior:'smooth', block:'nearest'}), 50);
+  }
+}
+
+function historyShowMore() {
+  historyShownCount += 20;
+  renderHistoryList();
+}
+
+
+
+function openHistoryEdit(id) {
+  const s = db.sessions.find(s => String(s.id) === String(id));
+  if(!s) return;
+
+  const existing = document.getElementById('hist-edit-' + id);
+  if(existing) { existing.remove(); return; }
+
+  const container = document.getElementById('hist-' + id);
+  if(!container) return;
+
+  const exercises = safeJSON(s.exercises, []);
+  const libOptions = db.library.map(e =>
+    '<option value="' + e.name.replace(/"/g,'&quot;') + '" data-muscle="' + e.muscle.replace(/"/g,'&quot;') + '">' + e.name + '</option>'
+  ).join('');
+
+  const exRows = exercises.map((ex, ei) => {
+    const sets = ex.loggedSets && ex.loggedSets.sets ? ex.loggedSets.sets : [];
+    const isCardio = ex.isCardio;
+    const numSets = ex.sets || sets.length || 3;
+
+    let setInputsHtml = '';
+    if(isCardio) {
+      setInputsHtml = '<div style="display:flex;gap:8px;margin-top:6px;">'
+        + '<div class="form-group"><label class="form-label">Duration (min)</label>'
+        + '<input type="number" id="he-' + id + '-' + ei + '-kg-0" value="' + (sets[0] ? (sets[0].kg||'') : '') + '" min="0" style="width:80px;"></div>'
+        + '</div>';
+    } else {
+      setInputsHtml = '<div style="margin-top:6px;">';
+      setInputsHtml += '<div style="display:flex;gap:8px;margin-bottom:4px;">'
+        + '<span style="font-size:10px;color:var(--color-text-tertiary);width:44px;"></span>'
+        + '<span style="font-size:10px;color:var(--color-text-tertiary);width:72px;">kg</span>'
+        + '<span style="font-size:10px;color:var(--color-text-tertiary);">reps</span></div>';
+      for(let i = 0; i < numSets; i++) {
+        const st = sets[i] || {};
+        setInputsHtml += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">'
+          + '<span style="font-size:11px;color:var(--color-text-tertiary);width:44px;">Set ' + (i+1) + '</span>'
+          + '<input type="number" id="he-' + id + '-' + ei + '-kg-' + i + '" value="' + (st.kg||'') + '" placeholder="kg" step="0.5" min="0" style="width:72px;">'
+          + '<input type="number" id="he-' + id + '-' + ei + '-reps-' + i + '" value="' + (st.reps||'') + '" placeholder="reps" min="0" style="width:68px;">'
+          + '</div>';
+      }
+      setInputsHtml += '</div>';
+    }
+
+    return '<div style="padding:10px;background:var(--color-background-secondary);border-radius:var(--border-radius-md);margin-bottom:8px;">'
+      + '<div class="form-group" style="margin-bottom:6px;"><label class="form-label">Exercise</label>'
+      + '<select data-heid="' + id + '" data-ei="' + ei + '" onchange="heUpdateEx(this.dataset.heid,parseInt(this.dataset.ei),this.value,this.options[this.selectedIndex].dataset.muscle)">'
+      + '<option value="' + ex.name.replace(/"/g,'&quot;') + '" selected>' + ex.name + '</option>'
+      + libOptions
+      + '</select></div>'
+      + setInputsHtml
+      + '<div class="form-group" style="margin-top:6px;"><label class="form-label">Note</label>'
+      + '<input type="text" id="he-' + id + '-' + ei + '-note" value="' + ((ex.loggedSets && ex.loggedSets.note ? ex.loggedSets.note : '')).replace(/"/g,'&quot;') + '" placeholder="Exercise note..."></div>'
+      + '</div>';
+  }).join('');
+
+  const editDiv = document.createElement('div');
+  editDiv.id = 'hist-edit-' + id;
+  editDiv.style.cssText = 'padding:14px 1.25rem;background:var(--color-background-primary);border-top:2px solid var(--color-border-info);';
+  editDiv.innerHTML = '<div style="font-size:13px;font-weight:500;margin-bottom:12px;">Edit session</div>'
+    + '<div class="form-group" style="margin-bottom:12px;"><label class="form-label">Session title</label>'
+    + '<input type="text" id="he-title-' + id + '" value="' + (s.sessionTitle||s.title||'').replace(/"/g,'&quot;') + '"></div>'
+    + exRows
+    + '<div class="form-group" style="margin-bottom:12px;"><label class="form-label">Session note</label>'
+    + '<textarea id="he-sessionnote-' + id + '" rows="2" style="font-size:13px;font-family:var(--font-sans);">' + (s.note||'') + '</textarea></div>'
+    + '<div style="display:flex;gap:8px;">'
+    + '<button class="btn btn-dark btn-sm" data-sid="' + id + '" onclick="saveHistoryEdit(this.dataset.sid)">Save changes</button>'
+    + '<button class="btn btn-sm" data-sid="' + id + '" onclick="cancelHistoryEdit(this.dataset.sid)">Cancel</button>'
+    + '</div>';
+
+  container.appendChild(editDiv);
+  editDiv.scrollIntoView({behavior:'smooth', block:'nearest'});
+}
+
+function heUpdateEx(id, ei, name, muscle) {
+  const s = db.sessions.find(s => String(s.id) === String(id));
+  if(!s) return;
+  const exercises = safeJSON(s.exercises, []);
+  if(exercises[ei]) {
+    exercises[ei].name = name;
+    if(muscle) exercises[ei].muscle = muscle;
+    s.exercises = exercises;
+  }
+}
+
+async function saveHistoryEdit(id) {
+  const s = db.sessions.find(s => String(s.id) === String(id));
+  if(!s) return;
+  const title = document.getElementById('he-title-' + id).value.trim() || s.sessionTitle || 'Session';
+  const sessionNote = document.getElementById('he-sessionnote-' + id).value || '';
+  const exercises = safeJSON(s.exercises, []);
+
+  exercises.forEach((ex, ei) => {
+    const numSets = ex.sets || (ex.loggedSets && ex.loggedSets.sets ? ex.loggedSets.sets.length : 3);
+    const sets = [];
+    if(ex.isCardio) {
+      const kg = parseFloat(document.getElementById('he-' + id + '-' + ei + '-kg-0') && document.getElementById('he-' + id + '-' + ei + '-kg-0').value) || null;
+      if(kg) sets.push({kg, reps: kg});
+    } else {
+      for(let i = 0; i < numSets; i++) {
+        const kgEl = document.getElementById('he-' + id + '-' + ei + '-kg-' + i);
+        const repsEl = document.getElementById('he-' + id + '-' + ei + '-reps-' + i);
+        const kg = kgEl ? (parseFloat(kgEl.value) || null) : null;
+        const reps = repsEl ? (parseInt(repsEl.value) || null) : null;
+        if(kg || reps) sets.push({kg, reps});
+      }
+    }
+    const noteEl = document.getElementById('he-' + id + '-' + ei + '-note');
+    const note = noteEl ? noteEl.value : '';
+    ex.loggedSets = Object.assign({}, ex.loggedSets||{}, {
+      sets,
+      note,
+      kg: sets[0] ? sets[0].kg : null,
+      targetReps: parseInt(ex.reps) || 0
+    });
+  });
+
+  const {error} = await sb.from('sessions').update({
+    title,
+    exercises: JSON.stringify(exercises),
+    note: sessionNote
+  }).eq('id', id);
+
+  if(error) { dbErr('Update session', error); return; }
+
+  s.sessionTitle = title;
+  s.title = title;
+  s.exercises = exercises;
+  s.note = sessionNote;
+
+  toast('Session updated!', 'ok');
+  cancelHistoryEdit(id);
+  renderHistoryList();
+}
+
+function cancelHistoryEdit(id) {
+  const el = document.getElementById('hist-edit-' + id);
+  if(el) el.remove();
+}
 
 // ── LIBRARY ───────────────────────────────────────────────────────
 async function importLib(){
