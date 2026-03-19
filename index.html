@@ -210,11 +210,9 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 .sug-row:last-child{border-bottom:none;}
 .sug-added{opacity:0.45;}
 
-.hist-row { display:flex; align-items:center; justify-content:space-between; padding:12px 1.25rem; cursor:pointer; }
-.hist-row:hover { background:var(--color-background-secondary); }
-.hist-session-wrap { border-top:2px solid var(--color-border-tertiary); }
-.hist-session-wrap:first-child { border-top:none; }
-.hist-detail { padding:12px 1.25rem 12px; background:var(--color-background-secondary); }
+.hist-row { display:flex; align-items:center; justify-content:space-between; padding:12px 1.25rem; cursor:pointer; border-radius:var(--border-radius-lg); }
+.hist-row:hover { background:var(--color-background-secondary); border-radius:var(--border-radius-lg) var(--border-radius-lg) 0 0; }
+.hist-detail { padding:12px 1.25rem 12px; background:var(--color-background-secondary); border-radius:0 0 var(--border-radius-lg) var(--border-radius-lg); border-top:0.5px solid var(--color-border-tertiary); }
 .set-pill-hist { display:inline-block; background:var(--color-background-primary); border:0.5px solid var(--color-border-tertiary); border-radius:var(--border-radius-md); font-size:12px; padding:3px 8px; margin:2px 3px 2px 0; color:var(--color-text-primary); }
 .set-pill-pr { border-color:#639922; background:#EAF3DE; color:#27500A; }
 .tag-pr { font-size:10px; font-weight:500; padding:2px 7px; border-radius:20px; background:#EAF3DE; color:#27500A; }
@@ -641,7 +639,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.4.1';
+const APP_VERSION = '1.4.2';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -2732,7 +2730,7 @@ function renderHistoryList() {
         + '</div>';
     }
 
-    return '<div class="hist-session-wrap" id="hist-' + s.id + '">'
+    return '<div class="card" style="padding:0;margin-bottom:10px;" id="hist-' + s.id + '">'
       + '<div class="hist-row" data-sid="' + s.id + '" onclick="toggleHistorySession(this.dataset.sid)">'
       + '<div style="flex:1;min-width:0;">'
       + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;">'
@@ -2755,15 +2753,8 @@ function renderHistoryList() {
     ? '<button class="btn" style="width:100%;text-align:center;margin-top:4px;" onclick="historyShowMore()">Show more (' + (sessions.length - historyShownCount) + ' remaining)</button>'
     : sessions.length > 20 ? '<p style="font-size:12px;color:var(--color-text-tertiary);text-align:center;margin-top:8px;">All ' + sessions.length + ' sessions shown</p>' : '';
 
-  el.innerHTML = '<div class="card" style="padding:0;">'
-    + '<div style="padding:1rem 1.25rem 0;">'
-    + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">'
-    + '<span style="font-size:11px;font-weight:500;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.07em;">' + sessions.length + ' sessions total</span>'
-    + '</div>'
-    + '</div>'
-    + '<div id="hist-rows" style="padding:0 1.25rem;">' + rowsHtml + '</div>'
-    + '<div style="padding:0 1.25rem 1rem;">' + showMoreHtml + '</div>'
-    + '</div>';
+  el.innerHTML =
+    '<div style="margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;">'    + '<span style="font-size:11px;font-weight:500;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.07em;">' + sessions.length + ' sessions total</span>'    + '</div>'    + '<div id="hist-rows">' + rowsHtml + '</div>'    + '<div style="margin-top:8px;">' + showMoreHtml + '</div>'
 }
 
 function isPRSession(s) {
