@@ -709,7 +709,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.4.5';
+const APP_VERSION = '1.4.6';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -1690,6 +1690,7 @@ function renderLog() {
   if(!db.activeSession){
     el.innerHTML='<div class="card"><p style="color:var(--muted);">No active session.</p><div style="margin-top:10px;"><button class="btn btn-dark btn-sm" onclick="goToPlanner()">Plan a session</button></div></div>';
     updateNavBadge();
+    renderSavedWorkouts();
     return;
   }
   const s=db.activeSession;
