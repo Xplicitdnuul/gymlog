@@ -709,7 +709,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.4.6';
+const APP_VERSION = '1.4.7';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -2394,43 +2394,112 @@ function renderActiveProgramme() {
   if(!prog) { el.innerHTML = ''; return; }
   const days = safeJSON(prog.days, []);
   const currentDay = prog.current_day || 0;
-  const nextDay = days[currentDay];
+
+  // selectedDay is what the user has clicked — defaults to currentDay
+  if(typeof prog._selectedDay === 'undefined') prog._selectedDay = currentDay;
+  const selectedDay = prog._selectedDay;
+  const selectedDayData = days[selectedDay];
 
   const dotHtml = days.map((d, i) => {
     const isDone = i < currentDay;
-    const isCurrent = i === currentDay;
+    const isScheduled = i === currentDay;
+    const isSelected = i === selectedDay;
     const isRest = d.type === 'rest';
-    const cls = isDone ? 'done' : isCurrent ? 'current' : isRest ? 'rest' : '';
     const lbl = isRest ? 'Rest' : (d.workoutTitle || ('Day ' + (i+1)));
-    const shortLbl = lbl.length > 8 ? lbl.slice(0,7) + '\u2026' : lbl;
+    const shortLbl = lbl.length > 8 ? lbl.slice(0,7) + '…' : lbl;
     const num = isRest ? 'R' : (i+1);
-    return '<div class="day-chip"><div class="day-dot ' + cls + '">' + num + '</div><div class="day-chip-lbl">' + shortLbl + '</div></div>';
+
+    // Dot style: selected = blue, done = black, scheduled = black outline, rest = dashed
+    let dotStyle = '';
+    if(isSelected && !isScheduled) {
+      dotStyle = 'background:#185FA5;color:white;border-color:#185FA5;cursor:pointer;';
+    } else if(isSelected && isScheduled) {
+      dotStyle = 'background:#185FA5;color:white;border-color:#185FA5;cursor:pointer;';
+    } else if(isDone) {
+      dotStyle = 'cursor:pointer;opacity:0.6;';
+    } else if(isRest) {
+      dotStyle = 'cursor:pointer;border-style:dashed;';
+    } else {
+      dotStyle = 'cursor:pointer;';
+    }
+
+    const cls = isDone ? 'done' : isScheduled ? 'current' : isRest ? 'rest' : '';
+
+    return '<div class="day-chip" data-prog="' + prog.id + '" data-day="' + i + '" onclick="selectProgrammeDay(this.dataset.prog, parseInt(this.dataset.day))" style="cursor:pointer;">'
+      + '<div class="day-dot ' + cls + '" style="' + (isSelected && !isScheduled ? 'background:#185FA5;color:white;border-color:#185FA5;' : '') + '">' + num + '</div>'
+      + '<div class="day-chip-lbl">' + shortLbl + '</div>'
+      + '</div>';
   }).join('');
 
-  const muscleTagsHtml = (nextDay && nextDay.muscles) ?
-    nextDay.muscles.map(m => '<span class="tag tag-blue" style="margin-right:4px;">' + m + '</span>').join('') : '';
+  // Preview panel for selected day
+  const muscleTagsHtml = (selectedDayData && selectedDayData.muscles) ?
+    selectedDayData.muscles.map(m => '<span class="tag tag-blue" style="margin-right:4px;">' + m + '</span>').join('') : '';
+  const isRestDay = selectedDayData && selectedDayData.type === 'rest';
+  const isScheduledDay = selectedDay === currentDay;
 
-  const isRestDay = nextDay && nextDay.type === 'rest';
-  const nextUpHtml = nextDay ? (
+  const previewHtml = selectedDayData ? (
     '<div style="background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:12px 14px;margin-bottom:14px;">'
-    + '<div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:3px;">Up next \u2014 Day ' + (currentDay+1) + '</div>'
-    + '<div style="font-size:15px;font-weight:500;margin-bottom:8px;">' + (nextDay.workoutTitle || 'Rest day') + '</div>'
+    + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;">'
+    + '<div style="font-size:11px;color:var(--color-text-secondary);">'
+    + (isScheduledDay ? 'Up next — Day ' + (currentDay+1) : 'Day ' + (selectedDay+1))
+    + '</div>'
+    + (!isScheduledDay ? '<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:20px;background:#EBF2FB;color:#185FA5;">out of order</span>' : '')
+    + '</div>'
+    + '<div style="font-size:15px;font-weight:500;margin-bottom:8px;">' + (selectedDayData.workoutTitle || 'Rest day') + '</div>'
     + '<div style="margin-bottom:10px;">' + muscleTagsHtml + '</div>'
     + (isRestDay
-        ? '<button class="btn btn-sm" onclick="skipProgrammeDay()">Mark rest day done \u2192</button>'
-        : '<div style="display:flex;gap:8px;"><button class="btn btn-dark btn-sm" onclick="startProgrammeDay()">Start this session</button><button class="btn btn-sm" onclick="skipProgrammeDay()">Skip day</button></div>')
+        ? '<button class="btn btn-sm" onclick="skipProgrammeDay()">Mark rest day done →</button>'
+        : '<div style="display:flex;gap:8px;flex-wrap:wrap;">'
+          + '<button class="btn btn-dark btn-sm" data-prog="' + prog.id + '" data-day="' + selectedDay + '" onclick="startProgrammeDayByIndex(this.dataset.prog,parseInt(this.dataset.day))">Start this session</button>'
+          + (!isScheduledDay ? '<button class="btn btn-sm" onclick="skipToDay(' + prog.id + ',' + selectedDay + ')">Set as current day</button>' : '<button class="btn btn-sm" onclick="skipProgrammeDay()">Skip day</button>')
+          + '</div>')
     + '</div>'
   ) : '';
 
   el.innerHTML = '<div class="active-prog-banner">'
     + '<div style="font-size:11px;font-weight:500;color:var(--color-text-info);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:8px;">Active programme</div>'
     + '<div style="font-size:17px;font-weight:500;margin-bottom:3px;">' + prog.name + '</div>'
-    + '<div style="font-size:13px;color:var(--color-text-secondary);margin-bottom:14px;">Day ' + (currentDay+1) + ' of ' + days.length + ' \u00b7 loops automatically</div>'
+    + '<div style="font-size:13px;color:var(--color-text-secondary);margin-bottom:14px;">Day ' + (currentDay+1) + ' of ' + days.length + ' · loops automatically</div>'
     + '<div class="day-strip">' + dotHtml + '</div>'
-    + nextUpHtml
+    + previewHtml
     + '<div style="display:flex;gap:8px;"><button class="btn btn-sm" onclick="editProgramme(' + prog.id + ')">Edit</button><button class="btn btn-sm" onclick="deactivateProgramme()">Deactivate</button></div>'
     + '</div>';
 }
+
+function selectProgrammeDay(progId, dayIndex) {
+  const prog = programmes.find(p => String(p.id) === String(progId));
+  if(!prog) return;
+  prog._selectedDay = dayIndex;
+  renderActiveProgramme();
+}
+
+function startProgrammeDayByIndex(progId, dayIndex) {
+  const prog = programmes.find(p => String(p.id) === String(progId));
+  if(!prog) return;
+  const days = safeJSON(prog.days, []);
+  const day = days[dayIndex];
+  if(!day || day.type === 'rest') return;
+  const saved = db.savedWorkouts.find(w => (w.sessionTitle || w.title) === day.workoutTitle);
+  if(!saved) { toast('Saved workout not found: ' + day.workoutTitle, 'error'); return; }
+  loadSavedWorkout(db.savedWorkouts.indexOf(saved));
+  // Advance programme to the day after the one we just started
+  const next = (dayIndex + 1) % days.length;
+  prog.current_day = next;
+  prog._selectedDay = next;
+  sb.from('programmes').update({current_day: next}).eq('id', prog.id);
+}
+
+async function skipToDay(progId, dayIndex) {
+  const prog = programmes.find(p => String(p.id) === String(progId));
+  if(!prog) return;
+  const days = safeJSON(prog.days, []);
+  prog.current_day = dayIndex;
+  prog._selectedDay = dayIndex;
+  await sb.from('programmes').update({current_day: dayIndex}).eq('id', prog.id);
+  renderActiveProgramme();
+  toast('Programme updated to day ' + (dayIndex+1) + '.', 'ok');
+}
+
 
 function renderProgrammeList() {
   const el = document.getElementById('programme-list');
@@ -2470,14 +2539,8 @@ function deactivateProgramme() {
 function startProgrammeDay() {
   const prog = programmes.find(p => String(p.id) === String(activeProgrammeId));
   if(!prog) return;
-  const days = safeJSON(prog.days, []);
-  const day = days[prog.current_day || 0];
-  if(!day || day.type === 'rest') return;
-  const saved = db.savedWorkouts.find(w => (w.sessionTitle || w.title) === day.workoutTitle);
-  if(!saved) { toast('Saved workout not found: ' + day.workoutTitle, 'error'); return; }
-  const idx = db.savedWorkouts.indexOf(saved);
-  loadSavedWorkout(idx);
-  advanceProgrammeDay(prog);
+  const selectedDay = typeof prog._selectedDay !== 'undefined' ? prog._selectedDay : (prog.current_day || 0);
+  startProgrammeDayByIndex(prog.id, selectedDay);
 }
 
 async function skipProgrammeDay() {
