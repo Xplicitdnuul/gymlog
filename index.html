@@ -593,7 +593,10 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
       <div class="page-sub">Start a freestyle session — add exercises as you go</div>
 
       <div id="jt-add-section" class="card">
-        <div class="card-title">Add exercise</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+          <div class="card-title" style="margin-bottom:0;">Add exercise</div>
+          <button class="btn btn-sm" style="border-color:#9FE1CB;color:#0F6E56;background:#E1F5EE;" onclick="jtAddCardioBlock()">+ Add cardio</button>
+        </div>
         <div style="display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:end;">
           <div class="form-group">
             <label class="form-label">Exercise</label>
@@ -704,7 +707,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.5.1';
+const APP_VERSION = '1.5.2';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -1719,6 +1722,8 @@ function renderLog() {
   html2+='<div style="font-size:16px;font-weight:500;margin-bottom:2px;">'+( s.sessionTitle||'Session')+'</div>';
   html2+='<div style="font-size:13px;color:var(--muted);margin-bottom:12px;">'+(s.muscles?s.muscles.join(', '):'')+'</div>';
   if(isDraft) html2+='<div class="draft-banner"><span>Autosaved draft — your progress is safe.</span></div>';
+  html2+='<div style="margin-bottom:10px;"><button class="btn btn-sm" style="border-color:#9FE1CB;color:#0F6E56;background:#E1F5EE;" onclick="addCardioBlock()">+ Add cardio</button></div>';
+  html2+='<div id="cardio-blocks"></div>';
 
   s.exercises.forEach((ex,ei)=>{
     const prev=getPrevData(ex.name);
@@ -1789,8 +1794,6 @@ function renderLog() {
 
   html2+='</div>';
   html2+='<div class="card"><div class="card-title">Session notes</div><textarea id="session-note" rows="3" style="font-size:13px;font-style:italic;" placeholder="How did it feel overall?" oninput="autosaveDraft()">'+(s.sessionNote||'')+'</textarea></div>';
-  html2+='<div style="margin-bottom:10px;"><button class="btn btn-sm" style="border-color:#9FE1CB;color:#0F6E56;background:#E1F5EE;" onclick="addCardioBlock()">+ Add cardio</button></div>';
-  html2+='<div id="cardio-blocks"></div>';
   html2+='<div style="display:flex;gap:10px;"><button class="btn btn-dark" onclick="saveSession()">Save session</button><button class="btn" onclick="discardSession()">Discard</button></div>';
   el.innerHTML=html2;
   updateNavBadge();
@@ -3232,6 +3235,56 @@ function jtAddExercise() {
   jtRenderSession();
 }
 
+function jtAddCardioBlock() {
+  addCardioBlock();
+  // Re-render JT cardio area using shared cardioBlocks
+  jtSyncCardioDisplay();
+}
+
+function jtSyncCardioDisplay() {
+  let el = document.getElementById('jt-cardio-blocks');
+  if(!el) {
+    el = document.createElement('div');
+    el.id = 'jt-cardio-blocks';
+    const actEl = document.getElementById('jt-actions');
+    if(actEl) actEl.parentNode.insertBefore(el, actEl);
+  }
+  // Sync content from shared renderCardioBlocks but target jt-cardio-blocks
+  if(!cardioBlocks.length) { el.innerHTML = ''; return; }
+  const libCardio = db.library
+    .filter(e => MUSCLES_C.some(m => e.muscle.includes(m)) || e.muscle.toLowerCase().includes('cardio'))
+    .map(e => e.name).filter(n => !CARDIO_TYPES.includes(n));
+  const allTypes = [...CARDIO_TYPES, ...libCardio];
+  el.innerHTML = cardioBlocks.map((b, bi) => {
+    const typeOptions = allTypes.map(t =>
+      '<option value="' + t.replace(/"/g,'&quot;') + '"' + (b.type===t?' selected':'') + '>' + t + '</option>'
+    ).join('');
+    return '<div class="cardio-block-item">'
+      + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">'
+      + '<div style="display:flex;align-items:center;gap:8px;">'
+      + '<select style="font-size:13px;font-weight:500;border:none;background:transparent;color:#085041;font-family:var(--font-sans);padding:0;" data-bi="' + bi + '" onchange="updateCardioBlock(parseInt(this.dataset.bi),&quot;type&quot;,this.value);jtSyncCardioDisplay();">' + typeOptions + '</select>'
+      + '<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:20px;background:#9FE1CB;color:#04342C;">cardio</span>'
+      + '</div>'
+      + '<button data-bi="' + bi + '" onclick="removeCardioBlock(parseInt(this.dataset.bi));jtSyncCardioDisplay();" style="background:none;border:none;cursor:pointer;color:#0F6E56;font-size:16px;">×</button>'
+      + '</div>'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px;">'
+      + '<div><div style="font-size:10px;color:#0F6E56;margin-bottom:3px;">Duration (min)</div>'
+      + '<input type="number" min="1" value="' + (b.duration||'') + '" placeholder="30" data-bi="' + bi + '" oninput="updateCardioBlock(parseInt(this.dataset.bi),&quot;duration&quot;,this.value)" style="width:100%;padding:6px 8px;font-size:13px;border:0.5px solid #9FE1CB;border-radius:var(--border-radius-md);background:white;font-family:var(--font-sans);"></div>'
+      + '<div><div style="font-size:10px;color:#0F6E56;margin-bottom:3px;">Intensity</div>'
+      + '<select data-bi="' + bi + '" onchange="updateCardioBlock(parseInt(this.dataset.bi),&quot;intensity&quot;,this.value)" style="width:100%;padding:6px 8px;font-size:13px;border:0.5px solid #9FE1CB;border-radius:var(--border-radius-md);background:white;font-family:var(--font-sans);">'
+      + ['Low','Moderate','High','Intervals'].map(v => '<option value="' + v + '"' + (b.intensity===v?' selected':'') + '>' + v + '</option>').join('')
+      + '</select></div>'
+      + '<div><div style="font-size:10px;color:#0F6E56;margin-bottom:3px;">Distance (km)</div>'
+      + '<input type="number" min="0" step="0.1" value="' + (b.distance||'') + '" placeholder="optional" data-bi="' + bi + '" oninput="updateCardioBlock(parseInt(this.dataset.bi),&quot;distance&quot;,this.value)" style="width:100%;padding:6px 8px;font-size:13px;border:0.5px solid #9FE1CB;border-radius:var(--border-radius-md);background:white;font-family:var(--font-sans);"></div>'
+      + '</div>'
+      + '<input type="text" value="' + (b.note||'').replace(/"/g,'&quot;') + '" placeholder="Note..." data-bi="' + bi + '" oninput="updateCardioBlock(parseInt(this.dataset.bi),&quot;note&quot;,this.value)" style="width:100%;padding:6px 8px;font-size:12px;border:0.5px solid #9FE1CB;border-radius:var(--border-radius-md);background:white;font-family:var(--font-sans);">'
+      + '</div>';
+  }).join('');
+  const actEl = document.getElementById('jt-actions');
+  if(actEl) actEl.style.display = 'block';
+}
+
+
 function jtRenderSession() {
   const el = document.getElementById('jt-session-content');
   const actEl = document.getElementById('jt-actions');
@@ -3323,8 +3376,17 @@ async function jtSaveSession() {
     ex.loggedSets = { sets, note, kg: sets[0]?.kg, targetReps: parseInt(ex.reps) || 0 };
   });
 
+  // Append cardio blocks
+  cardioBlocks.forEach(b => {
+    if(!b.duration) return;
+    jtExercises.push({
+      name: b.type, muscle: 'Cardio', sets: 1, reps: b.duration + ' min', isCardio: true,
+      loggedSets: { sets: [{kg: parseFloat(b.duration)||0, reps: parseFloat(b.duration)||0}],
+        note: [b.intensity, b.distance ? b.distance+'km' : '', b.note].filter(Boolean).join(' · '), kg: null, targetReps: 0 }
+    });
+  });
   const muscles = [...new Set(jtExercises.map(e => e.muscle.split(',')[0].trim()))];
-  const title = 'Freestyle — ' + muscles.slice(0,2).join(', ');
+  const title = 'Freestyle — ' + muscles.filter(m => m !== 'Cardio').slice(0,2).join(', ') || 'Freestyle';
 
   const {data, error} = await sb.from('sessions').insert({
     user_id: currentUser.id,
@@ -3340,6 +3402,9 @@ async function jtSaveSession() {
   if(data) db.sessions.push({...data, sessionTitle: title, exercises: jtExercises, muscles});
 
   jtExercises = [];
+  resetCardioBlocks();
+  const jtCardioEl = document.getElementById('jt-cardio-blocks');
+  if(jtCardioEl) jtCardioEl.innerHTML = '';
   toast('Session saved!', 'ok');
   showPage('overview');
 }
@@ -3347,6 +3412,9 @@ async function jtSaveSession() {
 function jtDiscardSession() {
   if(!confirm('Discard this session?')) return;
   jtExercises = [];
+  resetCardioBlocks();
+  const jtCardioEl = document.getElementById('jt-cardio-blocks');
+  if(jtCardioEl) jtCardioEl.innerHTML = '';
   jtRenderSession();
 }
 
