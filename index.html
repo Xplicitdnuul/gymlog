@@ -1042,8 +1042,24 @@ async function saveSettings() {
 }
 
 // ── HELPERS ───────────────────────────────────────────────────────
-const MUSCLES_W=['Chest','Back','Shoulders','Biceps','Triceps','Legs','Quads','Hamstrings','Glutes','Calves','Core','Forearms','Traps'];
+const MUSCLES_W=['Chest','Back','Shoulders','Biceps','Triceps','Legs','Quads','Hamstrings','Glutes','Adductors','Calves','Core','Forearms','Traps'];
 const MUSCLES_C=['Spinning','Running','Incline walking'];
+const EQUIPMENT=['Bodyweight','Barbell','Dumbbell','Kettlebell','Machine','Cable','Smith machine','Resistance band','Suspension/TRX','Other'];
+// Build the <option> list for an equipment dropdown, marking `cur` selected.
+function equipmentOptions(cur){
+  cur=cur||'';
+  return '<option value="">Equipment…</option>'+EQUIPMENT.map(e=>'<option value="'+e+'"'+(e===cur?' selected':'')+'>'+e+'</option>').join('');
+}
+// Most recent equipment the user logged for a given movement (for pre-selecting).
+function lastEquipmentFor(name){
+  for(let i=db.sessions.length-1;i>=0;i--){
+    const s=db.sessions[i];
+    if(!s.exercises) continue;
+    const ex=s.exercises.find(e=>e.name===name&&e.equipment);
+    if(ex) return ex.equipment;
+  }
+  return '';
+}
 const fmt=d=>new Date(d).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});
 const fmtSecs=s=>{if(s<60)return s+'s';if(s%60===0)return(s/60)+'m';return Math.floor(s/60)+'m '+(s%60)+'s';};
 
@@ -1076,8 +1092,9 @@ function showPage(id) {
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   document.getElementById('page-'+id).classList.add('active');
-  const navMap={overview:0,justtrain:1,planner:2,log:3,progress:4,food:5,body:6,builder:7,programme:8,library:9,history:10,goals:11,settings:12};
-  document.querySelectorAll('.nav-item')[navMap[id]].classList.add('active');
+  const navMap={justtrain:0,planner:1,log:2,history:3,builder:4,programme:5,library:6,progress:7,body:8,food:9,goals:10,settings:11};
+  const navEl=document.querySelectorAll('.nav-item')[navMap[id]];
+  if(navEl) navEl.classList.add('active');
   const renders={overview:renderOverview,justtrain:renderJustTrain,planner:renderPlanner,log:renderLog,progress:renderProgress,food:renderFood,body:renderBody,builder:renderBuilder,programme:renderProgramme,library:renderLibrary,history:renderHistory,goals:renderGoals,settings:renderSettings};
   if(window.innerWidth<=768) closeSidebar();
   if(renders[id]) Promise.resolve(renders[id]()).catch(e=>console.error('Page render error:',e));
@@ -1416,6 +1433,8 @@ function renderWorkoutEditor(w, idx) {
       +'<option value="cardio"'+(isCardio?' selected':'')+'>Cardio</option>'
       +'</select></div>'
       +'</div>'
+      +(isCardio?'':'<div class="form-group" style="margin-top:8px;"><label class="form-label">Equipment</label>'
+          +'<select data-ei="'+ei+'" onchange="weUpdateEquipment(parseInt(this.dataset.ei),this.value)">'+equipmentOptions(ex.equipment)+'</select></div>')
       +'</div>';
   }).join('');
 
@@ -1446,6 +1465,7 @@ function weUpdateExercise(ei, name, muscle) {
 function weUpdateSets(ei, sets) { editingWorkoutExercises[ei].sets = sets; }
 function weUpdateReps(ei, reps) { editingWorkoutExercises[ei].reps = reps; }
 function weUpdateCardio(ei, isCardio) { editingWorkoutExercises[ei].isCardio = isCardio; }
+function weUpdateEquipment(ei, val) { editingWorkoutExercises[ei].equipment = val; }
 
 function weRemoveExercise(ei) {
   editingWorkoutExercises.splice(ei, 1);
@@ -1462,6 +1482,7 @@ function weAddExercise() {
     reps: '10 reps',
     isCardio: false,
     isRepeat: false,
+    equipment: '',
     tip: ''
   });
   const w = db.savedWorkouts.find(w => String(w.id) === String(editingWorkoutId));
@@ -1692,11 +1713,12 @@ function getFormCue(name) {
 }
 // ── LOG ──
 
-function getPrevData(name){
+function getPrevData(name, equipment){
+  const eq=equipment||'';
   for(let i=db.sessions.length-1;i>=0;i--){
     const s=db.sessions[i];
     if(!s.exercises) continue;
-    const ex=s.exercises.find(e=>e.name===name&&e.loggedSets&&e.loggedSets.sets&&e.loggedSets.sets.length);
+    const ex=s.exercises.find(e=>e.name===name&&(e.equipment||'')===eq&&e.loggedSets&&e.loggedSets.sets&&e.loggedSets.sets.length);
     if(ex) return ex.loggedSets;
   }
   return null;
@@ -1720,7 +1742,8 @@ function renderLog() {
   html2+='<div id="cardio-blocks"></div>';
 
   s.exercises.forEach((ex,ei)=>{
-    const prev=getPrevData(ex.name);
+    if(!ex.isCardio) ex.equipment = ex.equipment || lastEquipmentFor(ex.name) || '';
+    const prev=getPrevData(ex.name, ex.equipment);
     const numSets=ex.sets||3;
     const cue=getFormCue(ex.name);
 
@@ -1773,6 +1796,9 @@ function renderLog() {
     html2+='<span class="'+(ex.isCardio?'tag-cardio':ex.isRepeat?'tag-repeat':'tag-new')+'">'+(ex.isCardio?'cardio':ex.isRepeat?'repeated':'fresh pick')+'</span>';
     html2+='</div>';
     html2+='<div style="font-size:12px;color:var(--muted);margin-bottom:8px;">'+(ex.isCardio?ex.muscle+' &middot; '+ex.reps:ex.muscle+' &middot; target '+numSets+' sets &times; '+ex.reps)+'</div>';
+    if(!ex.isCardio){
+      html2+='<div style="margin-bottom:8px;"><select class="set-inp" data-ei="'+ei+'" onchange="setLogEquipment(parseInt(this.dataset.ei),this.value)" style="width:auto;min-width:150px;font-size:12px;padding:5px 8px;">'+equipmentOptions(ex.equipment)+'</select></div>';
+    }
     html2+=banner;
     if(ex.isCardio){
       const cardioDraft=ex.draftSets&&ex.draftSets[0]?ex.draftSets[0].kg:'';
@@ -1792,6 +1818,13 @@ function renderLog() {
   el.innerHTML=html2;
   updateNavBadge();
   renderSavedWorkouts();
+}
+
+function setLogEquipment(ei,val){
+  if(db.activeSession&&db.activeSession.exercises[ei]){
+    db.activeSession.exercises[ei].equipment=val;
+    autosaveDraft();
+  }
 }
 
 function toggleCue(id){
@@ -2039,7 +2072,7 @@ async function renderProgress() {
       const allPrev = db.sessions
         .filter(prev => new Date(prev.date) < new Date(s.date))
         .flatMap(prev => safeJSON(prev.exercises,[]))
-        .filter(e => e.name === ex.name && e.loggedSets?.sets?.length);
+        .filter(e => e.name === ex.name && (e.equipment||'')===(ex.equipment||'') && e.loggedSets?.sets?.length);
       const prevMax = allPrev.length
         ? Math.max(...allPrev.flatMap(e => e.loggedSets.sets.filter(st => st.kg).map(st => st.kg || 0)))
         : 0;
@@ -2147,11 +2180,14 @@ async function renderProgress() {
     volMuscles.map(m => `<button class="filter-pill${volumeMuscles.includes(m) ? ' sel' : ''}" onclick="toggleVolumeMuscle(this,'${m}')">${m}</button>`).join('');
   renderVolumeChart(sessions);
 
-  // ── STRENGTH EXERCISE FILTER ──
-  const exNames = [...new Set(sessions.flatMap(s => (s.exercises||[]).filter(e => !e.isCardio && e.loggedSets?.sets?.some(st => st.kg)).map(e => e.name)))];
-  if(!strengthExercises.length) strengthExercises = exNames.slice(0, 3);
+  // ── STRENGTH EXERCISE FILTER ── (keyed by movement + equipment so variants stay separate)
+  const exItems = [...new Map(sessions.flatMap(s => (s.exercises||[])
+      .filter(e => !e.isCardio && e.loggedSets?.sets?.some(st => st.kg))
+      .map(e => { const eq=e.equipment||''; const key=e.name+'|||'+eq; const label=e.name+(eq?' · '+eq:''); return [key,{key,label}]; })
+    )).values()];
+  if(!strengthExercises.length) strengthExercises = exItems.slice(0, 3).map(x => x.key);
   document.getElementById('strength-ex-filter').innerHTML =
-    exNames.map(n => `<button class="filter-pill${strengthExercises.includes(n) ? ' sel' : ''}" onclick="toggleStrengthEx(this,'${n}')">${n}</button>`).join('');
+    exItems.map(x => `<button class="filter-pill${strengthExercises.includes(x.key) ? ' sel' : ''}" data-key="${x.key.replace(/"/g,'&quot;')}" onclick="toggleStrengthEx(this,this.dataset.key)">${x.label}</button>`).join('');
   renderStrengthChart(sessions);
 
   // ── COMPARE ──
@@ -2186,8 +2222,10 @@ async function renderProgress() {
       if(ex.isCardio || !ex.loggedSets?.sets?.length) return;
       const maxKg = Math.max(...ex.loggedSets.sets.filter(st => st.kg).map(st => st.kg));
       if(!maxKg) return;
-      if(!prMap[ex.name] || maxKg > prMap[ex.name].kg) {
-        prMap[ex.name] = { kg: maxKg, date: s.date, sets: ex.loggedSets.sets.length, reps: Math.max(...ex.loggedSets.sets.map(st => st.reps||0)) };
+      const eq = ex.equipment || '';
+      const key = ex.name + (eq ? ' \u00b7 ' + eq : '');
+      if(!prMap[key] || maxKg > prMap[key].kg) {
+        prMap[key] = { kg: maxKg, date: s.date, sets: ex.loggedSets.sets.length, reps: Math.max(...ex.loggedSets.sets.map(st => st.reps||0)) };
       }
     });
   });
@@ -2264,10 +2302,14 @@ function renderStrengthChart(sessions) {
   if(progressCharts.strength) { try { progressCharts.strength.destroy(); } catch(e) {} }
   const tc = 'rgba(0,0,0,0.3)', gc = 'rgba(0,0,0,0.06)';
   const colors = ['#1A56A0','#2E7D32','#92600A','#7B61C4','#B71C1C','#0F6E56'];
-  const datasets = strengthExercises.map((name, ci) => {
+  const datasets = strengthExercises.map((key, ci) => {
+    const sep = key.indexOf('|||');
+    const exName = sep >= 0 ? key.slice(0, sep) : key;
+    const exEquip = sep >= 0 ? key.slice(sep + 3) : '';
+    const dsLabel = exName + (exEquip ? ' · ' + exEquip : '');
     const pts = [];
     sessions.forEach(s => {
-      const ex = (s.exercises||[]).find(e => e.name === name && e.loggedSets?.sets?.length);
+      const ex = (s.exercises||[]).find(e => e.name === exName && (e.equipment||'')===exEquip && e.loggedSets?.sets?.length);
       if(!ex) return;
       // Store ISO date for correct sorting, display label separately
       const isoDate = s.date.split('T')[0];
@@ -2279,7 +2321,7 @@ function renderStrengthChart(sessions) {
         if(vol > 0) pts.push({ iso: isoDate, display: fmt(s.date), y: vol });
       }
     });
-    return { label: name, data: pts.map(p => p.y), isoLabels: pts.map(p => p.iso), displayLabels: pts.map(p => p.display), borderColor: colors[ci % colors.length], backgroundColor: 'transparent', tension: 0.3, pointRadius: 4, pointBackgroundColor: colors[ci % colors.length] };
+    return { label: dsLabel, data: pts.map(p => p.y), isoLabels: pts.map(p => p.iso), displayLabels: pts.map(p => p.display), borderColor: colors[ci % colors.length], backgroundColor: 'transparent', tension: 0.3, pointRadius: 4, pointBackgroundColor: colors[ci % colors.length] };
   });
   // Sort by ISO date to guarantee chronological order
   const allIso = [...new Set(datasets.flatMap(d => d.isoLabels || []))].sort();
@@ -2403,7 +2445,7 @@ function builderAddExercise(){
   const sets = parseInt(document.getElementById('builder-sets').value)||3;
   const reps = document.getElementById('builder-reps').value.trim()||'10 reps';
   const isCardio = muscle.toLowerCase().includes('cardio');
-  builderExercises.push({name, muscle, sets, reps, isRepeat:false, isCardio, tip:''});
+  builderExercises.push({name, muscle, sets, reps, isRepeat:false, isCardio, equipment: isCardio ? '' : (lastEquipmentFor(name)||''), tip:''});
   pick.value = '';
   document.getElementById('builder-reps').value = '';
   renderBuilderList();
@@ -2421,6 +2463,7 @@ function renderBuilderList(){
     +'<div>'
     +'<div style="font-size:13px;font-weight:500;">'+ex.name+'</div>'
     +'<div style="font-size:11px;color:var(--muted);">'+ex.muscle+' &middot; '+ex.sets+' sets &times; '+ex.reps+'</div>'
+    +(ex.isCardio?'':'<select data-i="'+i+'" onchange="builderUpdateEquipment(parseInt(this.dataset.i),this.value)" style="margin-top:5px;width:auto;min-width:140px;font-size:11px;padding:4px 7px;border:0.5px solid var(--border-md);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);font-family:var(--font);">'+equipmentOptions(ex.equipment)+'</select>')
     +'</div>'
     +'<div style="display:flex;gap:8px;align-items:center;">'
     +'<button onclick="builderMoveUp('+i+')" style="background:none;border:0.5px solid var(--border);border-radius:4px;padding:2px 7px;cursor:pointer;color:var(--muted);">↑</button>'
@@ -2431,6 +2474,9 @@ function renderBuilderList(){
   ).join('');
 }
 
+function builderUpdateEquipment(i,val){
+  if(builderExercises[i]) builderExercises[i].equipment=val;
+}
 function builderMoveUp(i){
   if(i===0) return;
   [builderExercises[i-1],builderExercises[i]]=[builderExercises[i],builderExercises[i-1]];
@@ -2951,7 +2997,7 @@ function renderHistoryList() {
             const allPrev = db.sessions
               .filter(prev => new Date(prev.date) < new Date(s.date))
               .flatMap(prev => safeJSON(prev.exercises, []))
-              .filter(e => e.name === ex.name && e.loggedSets?.sets?.length);
+              .filter(e => e.name === ex.name && (e.equipment||'')===(ex.equipment||'') && e.loggedSets?.sets?.length);
             const prevMax = allPrev.length
               ? Math.max(...allPrev.flatMap(e => e.loggedSets.sets.filter(st => st.kg).map(st => st.kg || 0)))
               : 0;
@@ -2976,7 +3022,7 @@ function renderHistoryList() {
 
         return '<div style="padding:9px 0;border-bottom:0.5px solid var(--color-border-tertiary);">'
           + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;">'
-          + '<span style="font-size:13px;font-weight:500;">' + ex.name + '</span>'
+          + '<span style="font-size:13px;font-weight:500;">' + ex.name + (ex.equipment ? ' <span style="color:var(--color-text-tertiary);font-weight:400;">· ' + ex.equipment + '</span>' : '') + '</span>'
           + (isPR ? '<span class="tag-pr">PR</span>' : '')
           + '</div>'
           + '<div style="display:flex;flex-wrap:wrap;gap:4px;">' + setPills + '</div>'
@@ -3031,7 +3077,7 @@ function isPRSession(s) {
     const allPrev = db.sessions
       .filter(prev => new Date(prev.date) < new Date(s.date))
       .flatMap(prev => safeJSON(prev.exercises, []))
-      .filter(e => e.name === ex.name && e.loggedSets?.sets?.length);
+      .filter(e => e.name === ex.name && (e.equipment||'')===(ex.equipment||'') && e.loggedSets?.sets?.length);
     const prevMax = allPrev.length
       ? Math.max(...allPrev.flatMap(e => e.loggedSets.sets.filter(st => st.kg).map(st => st.kg || 0)))
       : 0;
@@ -3104,6 +3150,8 @@ function openHistoryEdit(id) {
       + '<option value="' + ex.name.replace(/"/g,'&quot;') + '" selected>' + ex.name + '</option>'
       + libOptions
       + '</select></div>'
+      + (isCardio ? '' : '<div class="form-group" style="margin-bottom:6px;"><label class="form-label">Equipment</label>'
+          + '<select data-heid="' + id + '" data-ei="' + ei + '" onchange="heUpdateEquipment(this.dataset.heid,parseInt(this.dataset.ei),this.value)">' + equipmentOptions(ex.equipment) + '</select></div>')
       + setInputsHtml
       + '<div class="form-group" style="margin-top:6px;"><label class="form-label">Note</label>'
       + '<input type="text" id="he-' + id + '-' + ei + '-note" value="' + ((ex.loggedSets && ex.loggedSets.note ? ex.loggedSets.note : '')).replace(/"/g,'&quot;') + '" placeholder="Exercise note..."></div>'
@@ -3135,6 +3183,16 @@ function heUpdateEx(id, ei, name, muscle) {
   if(exercises[ei]) {
     exercises[ei].name = name;
     if(muscle) exercises[ei].muscle = muscle;
+    s.exercises = exercises;
+  }
+}
+
+function heUpdateEquipment(id, ei, val) {
+  const s = db.sessions.find(s => String(s.id) === String(id));
+  if(!s) return;
+  const exercises = safeJSON(s.exercises, []);
+  if(exercises[ei]) {
+    exercises[ei].equipment = val;
     s.exercises = exercises;
   }
 }
@@ -3224,7 +3282,7 @@ function jtAddExercise() {
   const muscle = opt ? (opt.dataset.muscle || opt.parentElement.label || 'General') : 'General';
   const sets = parseInt(document.getElementById('jt-sets-pick').value) || 3;
   const isCardio = muscle.toLowerCase().includes('cardio');
-  jtExercises.push({ name, muscle, sets, isCardio, reps: isCardio ? '30 min' : '10 reps' });
+  jtExercises.push({ name, muscle, sets, isCardio, equipment: isCardio ? '' : (lastEquipmentFor(name)||''), reps: isCardio ? '30 min' : '10 reps' });
   pick.value = '';
   jtRenderSession();
 }
@@ -3290,7 +3348,7 @@ function jtRenderSession() {
   if(actEl) actEl.style.display = 'block';
 
   el.innerHTML = jtExercises.map((ex, ei) => {
-    const prev = getPrevData(ex.name);
+    const prev = getPrevData(ex.name, ex.equipment);
     const cue = getFormCue(ex.name);
 
     // Overload banner
@@ -3337,12 +3395,17 @@ function jtRenderSession() {
       + '<button data-ei="' + ei + '" onclick="jtRemoveExercise(parseInt(this.dataset.ei))" style="background:none;border:none;cursor:pointer;color:var(--faint);font-size:16px;">\u00d7</button>'
       + '</div>'
       + '<div style="font-size:12px;color:var(--muted);margin-bottom:8px;">' + ex.muscle + ' · ' + ex.sets + ' sets</div>'
+      + (ex.isCardio ? '' : '<div style="margin-bottom:8px;"><select class="set-inp" data-ei="' + ei + '" onchange="setJtEquipment(parseInt(this.dataset.ei),this.value)" style="width:auto;min-width:150px;font-size:12px;padding:5px 8px;">' + equipmentOptions(ex.equipment) + '</select></div>')
       + banner
       + setRows
       + cueHtml
       + '<input class="note-inp" type="text" id="jt-' + ei + '-note" placeholder="Note for this exercise...">'
       + '</div>';
   }).join('');
+}
+
+function setJtEquipment(ei, val) {
+  if(jtExercises[ei]) jtExercises[ei].equipment = val;
 }
 
 function jtRemoveExercise(ei) {
