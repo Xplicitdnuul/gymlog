@@ -150,6 +150,11 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
   .metric-grid { grid-template-columns:1fr 1fr; }
   .form-2,.form-3,.form-4 { grid-template-columns:1fr; }
   #muscle-settings-list > div { grid-template-columns:1fr 1fr !important; }
+  input, select, textarea { font-size:16px; }
+  .set-inp, .note-inp { font-size:16px; }
+  .set-inp { height:44px; }
+  .step-btn, .set-fill { height:44px; }
+  .step-btn { width:38px; }
 }
 .overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.35); z-index:199; }
 .overlay.show { display:block; }
@@ -162,6 +167,21 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 .set-reps { width:68px; }
 .set-prev { font-size:11px; color:var(--faint); white-space:nowrap; }
 .set-prev.improved { color:var(--green); }
+.stepper { flex:1; display:flex; align-items:center; min-width:0; max-width:170px; }
+.step-btn { flex-shrink:0; width:32px; height:36px; padding:0; border:0.5px solid var(--border-md); background:var(--surface); color:var(--text); font-size:18px; line-height:1; cursor:pointer; font-family:var(--font); user-select:none; -webkit-user-select:none; }
+.step-btn.minus { border-radius:var(--radius-sm) 0 0 var(--radius-sm); border-right:none; }
+.step-btn.plus { border-radius:0 var(--radius-sm) var(--radius-sm) 0; border-left:none; }
+.step-btn:active { background:var(--bg); }
+.stepper .set-inp { flex:1; min-width:44px; width:auto; border-radius:0; }
+.set-fill { flex-shrink:0; width:34px; height:36px; padding:0; border:0.5px solid var(--border-md); border-radius:var(--radius-sm); background:var(--surface); color:var(--muted); font-size:15px; cursor:pointer; }
+.set-fill:active { background:var(--bg); }
+.set-head { display:flex; align-items:center; gap:8px; margin-bottom:4px; }
+.set-head-sp { flex-shrink:0; }
+.set-head .set-head-sp:first-child { width:36px; }
+.set-head .set-head-sp:last-child { width:34px; }
+.set-head > span:not(.set-head-sp) { flex:1; text-align:center; font-size:10px; color:var(--faint); }
+.ex-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; cursor:pointer; }
+.log-actions { position:sticky; bottom:0; background:var(--bg); padding:12px 0; display:flex; gap:10px; z-index:5; box-shadow:0 -8px 12px -8px rgba(0,0,0,0.12); }
 .cue-toggle { font-size:12px; color:var(--blue); cursor:pointer; margin-top:6px; display:inline-block; background:none; border:none; padding:0; font-family:var(--font); }
 .cue-body { font-size:12px; color:var(--muted); line-height:1.6; margin-top:5px; padding:8px 12px; background:var(--blue-bg); border-radius:var(--radius-sm); display:none; }
 .draft-pulse { animation:pulse 2s infinite; }
@@ -1771,17 +1791,21 @@ function renderLog() {
       // Draft takes priority — user's current input beats last session
       const prefillKg=draftSet&&draftSet.kg?draftSet.kg:(lastSet&&lastSet.kg?lastSet.kg:'');
       const prefillReps=draftSet&&draftSet.reps?draftSet.reps:(lastSet&&lastSet.reps?lastSet.reps:'');
-      // Only show "prev:" hint if we're NOT showing draft data in that field
-      const showingDraftKg=draftSet&&draftSet.kg;
-      const showingDraftReps=draftSet&&draftSet.reps;
-      const prevKgText=!showingDraftKg&&lastSet&&lastSet.kg?lastSet.kg+'kg':'';
-      const prevRepsText=!showingDraftReps&&lastSet&&lastSet.reps?lastSet.reps+' reps':'';
-      const prevText=prevKgText||prevRepsText?'prev: '+(prevKgText?prevKgText+' ':'')+prevRepsText:'';
+      const kgId='ex-'+ei+'-kg-'+i, repsId='ex-'+ei+'-reps-'+i;
       setRows+='<div class="set-row">';
       setRows+='<span class="set-num">Set '+(i+1)+'</span>';
-      setRows+='<input class="set-inp set-kg" type="number" id="ex-'+ei+'-kg-'+i+'" placeholder="kg" value="'+prefillKg+'" step="0.5" min="0" oninput="autosaveDraft()">';
-      setRows+='<input class="set-inp set-reps" type="number" id="ex-'+ei+'-reps-'+i+'" placeholder="reps" value="'+prefillReps+'" min="0" oninput="autosaveDraft()">';
-      if(prevText) setRows+='<span class="set-prev">'+prevText+'</span>';
+      setRows+='<div class="stepper">'
+        +'<button type="button" class="step-btn minus" onclick="stepInput(\''+kgId+'\',-2.5)">\u2212</button>'
+        +'<input class="set-inp set-kg" type="number" inputmode="decimal" enterkeyhint="next" id="'+kgId+'" placeholder="kg" value="'+prefillKg+'" step="0.5" min="0" oninput="autosaveDraft()">'
+        +'<button type="button" class="step-btn plus" onclick="stepInput(\''+kgId+'\',2.5)">+</button>'
+        +'</div>';
+      setRows+='<div class="stepper">'
+        +'<button type="button" class="step-btn minus" onclick="stepInput(\''+repsId+'\',-1)">\u2212</button>'
+        +'<input class="set-inp set-reps" type="number" inputmode="numeric" enterkeyhint="next" id="'+repsId+'" placeholder="reps" value="'+prefillReps+'" min="0" oninput="autosaveDraft()">'
+        +'<button type="button" class="step-btn plus" onclick="stepInput(\''+repsId+'\',1)">+</button>'
+        +'</div>';
+      if(i<numSets-1) setRows+='<button type="button" class="set-fill" title="Copy this set to the ones below" onclick="fillDown('+ei+','+i+')">\u2913</button>';
+      else setRows+='<span style="width:34px;flex-shrink:0;"></span>';
       setRows+='</div>';
     }
 
@@ -1791,10 +1815,11 @@ function renderLog() {
       :'';
 
     html2+='<div class="ex-block">';
-    html2+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">';
+    html2+='<div class="ex-head" onclick="toggleExBlock('+ei+')">';
     html2+='<span style="font-size:14px;font-weight:500;">'+ex.name+'</span>';
-    html2+='<span class="'+(ex.isCardio?'tag-cardio':ex.isRepeat?'tag-repeat':'tag-new')+'">'+(ex.isCardio?'cardio':ex.isRepeat?'repeated':'fresh pick')+'</span>';
+    html2+='<span style="display:flex;align-items:center;gap:8px;"><span class="'+(ex.isCardio?'tag-cardio':ex.isRepeat?'tag-repeat':'tag-new')+'">'+(ex.isCardio?'cardio':ex.isRepeat?'repeated':'fresh pick')+'</span><span class="ex-caret" id="excaret-'+ei+'" style="color:var(--faint);font-size:13px;">\u25be</span></span>';
     html2+='</div>';
+    html2+='<div class="ex-body" id="exbody-'+ei+'">';
     html2+='<div style="font-size:12px;color:var(--muted);margin-bottom:8px;">'+(ex.isCardio?ex.muscle+' &middot; '+ex.reps:ex.muscle+' &middot; target '+numSets+' sets &times; '+ex.reps)+'</div>';
     if(!ex.isCardio){
       html2+='<div style="margin-bottom:8px;"><select class="set-inp" data-ei="'+ei+'" onchange="setLogEquipment(parseInt(this.dataset.ei),this.value)" style="width:auto;min-width:150px;font-size:12px;padding:5px 8px;">'+equipmentOptions(ex.equipment)+'</select></div>';
@@ -1802,19 +1827,20 @@ function renderLog() {
     html2+=banner;
     if(ex.isCardio){
       const cardioDraft=ex.draftSets&&ex.draftSets[0]?ex.draftSets[0].kg:'';
-      html2+='<div class="set-row"><span class="set-num">Time</span><input class="set-inp" type="number" id="ex-'+ei+'-kg-0" placeholder="min" value="'+cardioDraft+'" style="width:80px;" oninput="autosaveDraft()"></div>';
+      html2+='<div class="set-row"><span class="set-num">Time</span><input class="set-inp" type="number" inputmode="numeric" id="ex-'+ei+'-kg-0" placeholder="min" value="'+cardioDraft+'" style="width:80px;" oninput="autosaveDraft()"></div>';
     } else {
-      html2+='<div style="display:flex;gap:8px;margin-bottom:4px;"><span style="font-size:10px;color:var(--faint);width:36px;"></span><span style="font-size:10px;color:var(--faint);width:72px;">kg</span><span style="font-size:10px;color:var(--faint);width:68px;">reps</span></div>';
+      html2+='<div class="set-head"><span class="set-head-sp"></span><span>weight (kg)</span><span>reps</span><span class="set-head-sp"></span></div>';
       html2+=setRows;
     }
     html2+=cueHtml;
     html2+='<input class="note-inp" type="text" id="ex-'+ei+'-note" placeholder="Note for this exercise..." value="'+( ex.savedNote||'')+'" oninput="autosaveDraft()">';
     html2+='</div>';
+    html2+='</div>';
   });
 
   html2+='</div>';
   html2+='<div class="card"><div class="card-title">Session notes</div><textarea id="session-note" rows="3" style="font-size:13px;font-style:italic;" placeholder="How did it feel overall?" oninput="autosaveDraft()">'+(s.sessionNote||'')+'</textarea></div>';
-  html2+='<div style="display:flex;gap:10px;"><button class="btn btn-dark" onclick="saveSession()">Save session</button><button class="btn" onclick="discardSession()">Discard</button></div>';
+  html2+='<div class="log-actions"><button class="btn btn-dark" onclick="saveSession()">Save session</button><button class="btn" onclick="discardSession()">Discard</button></div>';
   el.innerHTML=html2;
   updateNavBadge();
   renderSavedWorkouts();
@@ -1825,6 +1851,40 @@ function setLogEquipment(ei,val){
     db.activeSession.exercises[ei].equipment=val;
     autosaveDraft();
   }
+}
+
+// Nudge a numeric input by delta (used by the +/- steppers). Never goes below 0.
+function stepInput(id, delta){
+  const el=document.getElementById(id);
+  if(!el) return;
+  let v=parseFloat(el.value);
+  if(isNaN(v)) v=0;
+  v=Math.round((v+delta)*100)/100;
+  if(v<0) v=0;
+  el.value=v;
+  if(typeof autosaveDraft==='function') autosaveDraft();
+}
+
+// Copy a set's weight & reps into every set below it (within the same exercise).
+function fillDown(ei, fromIndex){
+  const numSets=(db.activeSession&&db.activeSession.exercises[ei]&&db.activeSession.exercises[ei].sets)||3;
+  const kg=document.getElementById('ex-'+ei+'-kg-'+fromIndex)?.value||'';
+  const reps=document.getElementById('ex-'+ei+'-reps-'+fromIndex)?.value||'';
+  for(let i=fromIndex+1;i<numSets;i++){
+    const k=document.getElementById('ex-'+ei+'-kg-'+i); if(k) k.value=kg;
+    const r=document.getElementById('ex-'+ei+'-reps-'+i); if(r) r.value=reps;
+  }
+  if(typeof autosaveDraft==='function') autosaveDraft();
+}
+
+// Collapse / expand a single exercise on the Log screen (pure DOM toggle — no re-render, so typed values are never lost).
+function toggleExBlock(ei){
+  const b=document.getElementById('exbody-'+ei);
+  const c=document.getElementById('excaret-'+ei);
+  if(!b) return;
+  const collapsed=b.style.display==='none';
+  b.style.display=collapsed?'':'none';
+  if(c) c.textContent=collapsed?'\u25be':'\u25b8';
 }
 
 function toggleCue(id){
