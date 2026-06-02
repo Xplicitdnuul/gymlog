@@ -155,6 +155,8 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
   .set-inp { height:44px; }
   .step-btn, .set-fill { height:44px; }
   .step-btn { width:38px; }
+  #progress-metrics { grid-template-columns:1fr 1fr !important; }
+  .prog-2col { grid-template-columns:1fr !important; }
 }
 .overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.35); z-index:199; }
 .overlay.show { display:block; }
@@ -420,7 +422,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
         <div id="cal-legend" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;"></div>
       </div>
 
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
+      <div class="prog-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
         <div class="card" id="card-heatmap">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
             <div class="card-title" style="margin-bottom:0;">Muscle group heatmap</div>
@@ -453,13 +455,23 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
         </div>
         <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;">
           <button class="filter-pill sel" onclick="setStrengthMode(this,'weight')">Max weight</button>
+          <button class="filter-pill" onclick="setStrengthMode(this,'e1rm')">Est. 1RM</button>
           <button class="filter-pill" onclick="setStrengthMode(this,'volume')">Volume per session</button>
         </div>
         <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap;" id="strength-ex-filter"></div>
         <div style="position:relative;width:100%;height:200px;"><canvas id="chart-strength"></canvas></div>
       </div>
 
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
+      <div class="card" id="card-cardio">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+          <div class="card-title" style="margin-bottom:0;">Cardio</div>
+          <button class="btn btn-sm" onclick="toggleCard('card-cardio')">hide</button>
+        </div>
+        <div id="cardio-stats" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px;"></div>
+        <div style="position:relative;width:100%;height:180px;"><canvas id="chart-cardio"></canvas></div>
+      </div>
+
+      <div class="prog-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
         <div class="card" id="card-compare">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
             <div class="card-title" style="margin-bottom:0;">This period vs previous</div>
@@ -1029,6 +1041,8 @@ async function loadUserData() {
       sessionNote:d.note||'',
       date:d.date,
       draft_id:d.id,
+      programme_id:d.programme_id||null,
+      programme_day:(d.programme_day!=null?d.programme_day:null),
       is_draft:true
     };
     } // end age check
@@ -1854,7 +1868,8 @@ function setLogEquipment(ei,val){
 }
 
 // Nudge a numeric input by delta (used by the +/- steppers). Never goes below 0.
-function stepInput(id, delta){
+// autosave defaults on (Log screen); Just Train passes false since it has no draft.
+function stepInput(id, delta, autosave){
   const el=document.getElementById(id);
   if(!el) return;
   let v=parseFloat(el.value);
@@ -1862,7 +1877,7 @@ function stepInput(id, delta){
   v=Math.round((v+delta)*100)/100;
   if(v<0) v=0;
   el.value=v;
-  if(typeof autosaveDraft==='function') autosaveDraft();
+  if(autosave!==false && typeof autosaveDraft==='function') autosaveDraft();
 }
 
 // Copy a set's weight & reps into every set below it (within the same exercise).
@@ -1936,7 +1951,7 @@ async function autosaveDraft(){
     if(s.draft_id){
       await sb.from('sessions').update({exercises:JSON.stringify(s.exercises),note:s.sessionNote,is_draft:true}).eq('id',s.draft_id);
     } else {
-      const {data}=await sb.from('sessions').insert({user_id:currentUser.id,date:s.date||new Date().toISOString(),title:s.sessionTitle,muscles:JSON.stringify(s.muscles||[]),exercises:JSON.stringify(s.exercises||[]),note:s.sessionNote,is_draft:true}).select().single();
+      const {data}=await sb.from('sessions').insert({user_id:currentUser.id,date:s.date||new Date().toISOString(),title:s.sessionTitle,muscles:JSON.stringify(s.muscles||[]),exercises:JSON.stringify(s.exercises||[]),note:s.sessionNote,is_draft:true,...(s.programme_id?{programme_id:String(s.programme_id),programme_day:(s.programme_day!=null?s.programme_day:null)}:{})}).select().single();
       if(data) s.draft_id=data.id;
     }
   }, 1000);
@@ -1967,6 +1982,8 @@ async function saveSession(){
       sets: 1,
       reps: b.duration + ' min',
       isCardio: true,
+      distanceKm: parseFloat(b.distance) || null,
+      intensity: b.intensity || null,
       loggedSets: {
         sets: [{kg: parseFloat(b.duration)||0, reps: parseFloat(b.duration)||0}],
         note: [b.intensity, b.distance ? b.distance+'km' : '', b.note].filter(Boolean).join(' · '),
@@ -1978,13 +1995,14 @@ async function saveSession(){
   });
   s.sessionNote=document.getElementById('session-note')?.value||'';
   s.is_draft=false;
+  const progStamp = s.programme_id ? {programme_id:String(s.programme_id), programme_day:(s.programme_day!=null?s.programme_day:null)} : {};
   if(s.draft_id){
     // Update existing draft row to finalise it
-    const {data:sessData,error:sessErr}=await sb.from('sessions').update({exercises:JSON.stringify(s.exercises),note:s.sessionNote,is_draft:false}).eq('id',s.draft_id).select().single();
+    const {data:sessData,error:sessErr}=await sb.from('sessions').update({exercises:JSON.stringify(s.exercises),note:s.sessionNote,is_draft:false,...progStamp}).eq('id',s.draft_id).select().single();
     if(sessErr){dbErr('Save session',sessErr);return;}
     db.sessions.push({...s,...sessData,exercises:s.exercises,muscles:s.muscles});
   } else {
-    const {data:sessData,error:sessErr}=await sb.from('sessions').insert({user_id:currentUser.id,date:s.date||new Date().toISOString(),title:s.sessionTitle,muscles:JSON.stringify(s.muscles||[]),exercises:JSON.stringify(s.exercises||[]),note:s.sessionNote,is_draft:false}).select().single();
+    const {data:sessData,error:sessErr}=await sb.from('sessions').insert({user_id:currentUser.id,date:s.date||new Date().toISOString(),title:s.sessionTitle,muscles:JSON.stringify(s.muscles||[]),exercises:JSON.stringify(s.exercises||[]),note:s.sessionNote,is_draft:false,...progStamp}).select().single();
     if(sessErr){dbErr('Save session',sessErr);return;}
     db.sessions.push({...s,...sessData,exercises:s.exercises,muscles:s.muscles});
   }
@@ -2013,6 +2031,15 @@ let strengthMode = 'weight';
 let strengthExercises = [];
 let volumeMuscles = [];
 
+// Number of weekly buckets to show, scaled to the selected period (capped for readability).
+function weeksForPeriod(sessions){
+  if(progressPeriod) return Math.min(26, Math.max(1, Math.ceil(progressPeriod/7)));
+  if(!sessions || !sessions.length) return 12;
+  const earliest = new Date(Math.min(...sessions.map(s => new Date(s.date).getTime())));
+  const wk = Math.ceil((Date.now() - earliest.getTime()) / (7*864e5));
+  return Math.min(26, Math.max(4, wk));
+}
+
 function setPeriod(btn, days) {
   document.querySelectorAll('#period-filters .filter-pill').forEach(p => p.classList.remove('sel'));
   btn.classList.add('sel');
@@ -2022,7 +2049,7 @@ function setPeriod(btn, days) {
 
 function setStrengthMode(btn, mode) {
   document.querySelectorAll('#card-strength .filter-pill').forEach(p => {
-    if(p.textContent === 'Max weight' || p.textContent === 'Volume per session') p.classList.remove('sel');
+    if(p.textContent === 'Max weight' || p.textContent === 'Volume per session' || p.textContent === 'Est. 1RM') p.classList.remove('sel');
   });
   btn.classList.add('sel');
   strengthMode = mode;
@@ -2074,10 +2101,6 @@ async function renderProgress() {
   // ── METRICS ──
   const totalVol = sessions.reduce((s, sess) => s + calcVolume(sess.exercises), 0);
   const prevVol = prev.reduce((s, sess) => s + calcVolume(sess.exercises), 0);
-  const avgLen = sessions.length ? Math.round(sessions.reduce((s, sess) => {
-    const exCount = (sess.exercises||[]).length;
-    return s + exCount * 8;
-  }, 0) / sessions.length) : 0;
   const overloadCount = sessions.reduce((s, sess) => {
     return s + (sess.exercises||[]).filter(ex => {
       if(!ex.loggedSets?.sets?.length) return false;
@@ -2250,6 +2273,19 @@ async function renderProgress() {
     exItems.map(x => `<button class="filter-pill${strengthExercises.includes(x.key) ? ' sel' : ''}" data-key="${x.key.replace(/"/g,'&quot;')}" onclick="toggleStrengthEx(this,this.dataset.key)">${x.label}</button>`).join('');
   renderStrengthChart(sessions);
 
+  // ── CARDIO PANEL ──
+  const cardioSessionCount = sessions.filter(s => (s.exercises||[]).some(e => e.isCardio)).length;
+  let totalMin = 0, totalKm = 0;
+  sessions.forEach(s => (s.exercises||[]).forEach(ex => { totalMin += cardioMinutes(ex); totalKm += cardioDistance(ex); }));
+  const cardioStatsEl = document.getElementById('cardio-stats');
+  if(cardioStatsEl){
+    cardioStatsEl.innerHTML =
+      '<div class="metric"><div class="metric-label">Time</div><div class="metric-val">' + (totalMin>=60 ? (totalMin/60).toFixed(1)+'h' : Math.round(totalMin)+'m') + '</div><div class="metric-sub" style="color:var(--faint);">in period</div></div>'
+      + '<div class="metric"><div class="metric-label">Distance</div><div class="metric-val">' + (totalKm>0 ? (Math.round(totalKm*10)/10)+'km' : '—') + '</div><div class="metric-sub" style="color:var(--faint);">' + (totalKm>0?'logged':'not logged') + '</div></div>'
+      + '<div class="metric"><div class="metric-label">Sessions</div><div class="metric-val">' + cardioSessionCount + '</div><div class="metric-sub" style="color:var(--faint);">with cardio</div></div>';
+  }
+  renderCardioChart(sessions);
+
   // ── COMPARE ──
   const cmpEl = document.getElementById('compare-content');
   const label = progressPeriod ? `vs prev ${progressPeriod}d` : 'vs all previous';
@@ -2315,10 +2351,11 @@ function toggleStrengthEx(btn, n) {
 function renderVolumeChart(sessions) {
   if(progressCharts.volume) { try { progressCharts.volume.destroy(); } catch(e) {} }
   const tc = 'rgba(0,0,0,0.3)', gc = 'rgba(0,0,0,0.06)';
-  // Build 12 weekly buckets using Monday-anchored week start dates (YYYY-MM-DD)
+  // Build weekly buckets scaled to the selected period (Monday-anchored, YYYY-MM-DD)
   const weeks = [];
   const weekStarts = [];
-  for(let i = 11; i >= 0; i--) {
+  const weeksToShow = weeksForPeriod(sessions);
+  for(let i = weeksToShow - 1; i >= 0; i--) {
     const d = new Date();
     d.setDate(d.getDate() - i * 7);
     // Snap to Monday of that week
@@ -2357,6 +2394,53 @@ function renderVolumeChart(sessions) {
   });
 }
 
+// Minutes for a cardio exercise — duration is stored as the set's kg (falls back to reps).
+function cardioMinutes(ex){
+  if(!ex || !ex.isCardio) return 0;
+  const st = ex.loggedSets && ex.loggedSets.sets && ex.loggedSets.sets[0];
+  const m = st ? parseFloat(st.kg != null ? st.kg : st.reps) : 0;
+  return isNaN(m) ? 0 : m;
+}
+// Distance in km — prefers the structured field, falls back to parsing older notes ("5km").
+function cardioDistance(ex){
+  if(!ex || !ex.isCardio) return 0;
+  if(ex.distanceKm != null){ const d = parseFloat(ex.distanceKm); if(!isNaN(d)) return d; }
+  const note = ex.loggedSets && ex.loggedSets.note ? String(ex.loggedSets.note) : '';
+  const m = note.match(/([\d.]+)\s*km/i);
+  return m ? parseFloat(m[1]) : 0;
+}
+
+function renderCardioChart(sessions){
+  if(progressCharts.cardio){ try { progressCharts.cardio.destroy(); } catch(e){} }
+  const tc = 'rgba(0,0,0,0.3)', gc = 'rgba(0,0,0,0.06)';
+  const weeks = [];
+  const weeksToShow = weeksForPeriod(sessions);
+  for(let i = weeksToShow - 1; i >= 0; i--){
+    const d = new Date(); d.setDate(d.getDate() - i*7);
+    const day = d.getDay();
+    const monday = new Date(d); monday.setDate(d.getDate() - (day===0?6:day-1));
+    const key = monday.toISOString().split('T')[0];
+    if(!weeks.includes(key)) weeks.push(key);
+  }
+  const weekKey = dateStr => { const d=new Date(dateStr); const day=d.getDay(); const mon=new Date(d); mon.setDate(d.getDate()-(day===0?6:day-1)); return mon.toISOString().split('T')[0]; };
+  const minutesData = weeks.map(wk => sessions.filter(s => weekKey(s.date)===wk).reduce((sum,s)=> sum + (s.exercises||[]).reduce((a,ex)=>a+cardioMinutes(ex),0), 0));
+  const distData = weeks.map(wk => Math.round(sessions.filter(s => weekKey(s.date)===wk).reduce((sum,s)=> sum + (s.exercises||[]).reduce((a,ex)=>a+cardioDistance(ex),0), 0)*10)/10);
+  const hasDist = distData.some(v => v>0);
+  const labels = weeks.map(w => new Date(w+'T00:00:00').toLocaleDateString('en-GB',{day:'2-digit',month:'short'}));
+  const datasets = [{ type:'bar', label:'Minutes', data: minutesData, backgroundColor:'#0F6E56', borderRadius:2, barPercentage:0.7, yAxisID:'y' }];
+  if(hasDist) datasets.push({ type:'line', label:'Distance (km)', data: distData, borderColor:'#92600A', backgroundColor:'transparent', tension:0.3, pointRadius:3, pointBackgroundColor:'#92600A', yAxisID:'y1' });
+  const scales = {
+    x: { ticks:{ color:tc, font:{size:11} }, grid:{ display:false }, border:{ display:false } },
+    y: { position:'left', beginAtZero:true, ticks:{ color:tc, callback:v=> v>=60?(v/60).toFixed(0)+'h':v+'m' }, grid:{ color:gc }, border:{ display:false } }
+  };
+  if(hasDist) scales.y1 = { position:'right', beginAtZero:true, ticks:{ color:tc, callback:v=>v+'km' }, grid:{ display:false }, border:{ display:false } };
+  progressCharts.cardio = new Chart(document.getElementById('chart-cardio'), {
+    type: 'bar',
+    data: { labels, datasets },
+    options: { responsive:true, maintainAspectRatio:false, plugins:{ legend:{ display:true, position:'top', align:'start', labels:{ font:{size:11}, boxWidth:8, padding:10 } } }, scales }
+  });
+}
+
 function renderStrengthChart(sessions) {
   sessions = sessions || getFilteredSessions();
   if(progressCharts.strength) { try { progressCharts.strength.destroy(); } catch(e) {} }
@@ -2376,6 +2460,10 @@ function renderStrengthChart(sessions) {
       if(strengthMode === 'weight') {
         const maxKg = Math.max(...ex.loggedSets.sets.filter(st => st.kg).map(st => st.kg));
         if(maxKg > 0) pts.push({ iso: isoDate, display: fmt(s.date), y: maxKg });
+      } else if(strengthMode === 'e1rm') {
+        // Epley estimated 1-rep max: weight × (1 + reps/30), best set in the session
+        const e1 = Math.max(...ex.loggedSets.sets.filter(st => st.kg && st.reps).map(st => st.kg * (1 + st.reps/30)), 0);
+        if(e1 > 0) pts.push({ iso: isoDate, display: fmt(s.date), y: Math.round(e1*10)/10 });
       } else {
         const vol = calcVolume([ex]);
         if(vol > 0) pts.push({ iso: isoDate, display: fmt(s.date), y: vol });
@@ -2399,7 +2487,7 @@ function renderStrengthChart(sessions) {
   progressCharts.strength = new Chart(document.getElementById('chart-strength'), {
     type: 'line',
     data: { labels: allLabels, datasets: alignedDatasets },
-    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: true, position: 'top', align: 'start', labels: { font: { size: 11 }, boxWidth: 8, padding: 10 } } }, scales: { x: { ticks: { color: tc, font: { size: 11 }, maxRotation: 45 }, grid: { display: false }, border: { display: false } }, y: { ticks: { color: tc, callback: v => strengthMode === 'weight' ? v + ' kg' : v > 1000 ? (v/1000).toFixed(1)+'k' : v }, grid: { color: gc }, border: { display: false } } } }
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: true, position: 'top', align: 'start', labels: { font: { size: 11 }, boxWidth: 8, padding: 10 } } }, scales: { x: { ticks: { color: tc, font: { size: 11 }, maxRotation: 45 }, grid: { display: false }, border: { display: false } }, y: { ticks: { color: tc, callback: v => strengthMode === 'volume' ? (v > 1000 ? (v/1000).toFixed(1)+'k' : v) : v + ' kg' }, grid: { color: gc }, border: { display: false } } } }
   });
 }
 
@@ -2592,7 +2680,33 @@ async function loadProgrammes() {
   try {
     const {data} = await sb.from('programmes').select('*').eq('user_id', currentUser.id).order('created_at');
     programmes = data || [];
-    activeProgrammeId = localStorage.getItem('gymlog_active_prog_' + currentUser.id);
+    // Active programme now lives in the DB (is_active). Fall back to / migrate the old per-device flag.
+    const activeRow = programmes.find(p => p.is_active);
+    if(activeRow) {
+      activeProgrammeId = activeRow.id;
+    } else {
+      const legacy = localStorage.getItem('gymlog_active_prog_' + currentUser.id);
+      if(legacy && programmes.find(p => String(p.id) === String(legacy))) {
+        activeProgrammeId = legacy;
+        const p = programmes.find(p => String(p.id) === String(legacy));
+        if(p) p.is_active = true;
+        try { await sb.from('programmes').update({is_active:true}).eq('id', legacy); } catch(e) {}
+      } else {
+        activeProgrammeId = null;
+      }
+    }
+    // One-time: stamp existing programme days with the workout's ID so renaming a workout no longer breaks them.
+    for(const p of programmes) {
+      const days = safeJSON(p.days, []);
+      let changed = false;
+      days.forEach(d => {
+        if(d.type !== 'rest' && !d.workoutId && d.workoutTitle) {
+          const m = db.savedWorkouts.find(w => (w.sessionTitle || w.title) === d.workoutTitle);
+          if(m) { d.workoutId = m.id; changed = true; }
+        }
+      });
+      if(changed) { p.days = days; try { await sb.from('programmes').update({days: JSON.stringify(days)}).eq('id', p.id); } catch(e) {} }
+    }
   } catch(e) { programmes = []; }
 }
 
@@ -2601,6 +2715,60 @@ function renderProgramme() {
     renderActiveProgramme();
     renderProgrammeList();
   });
+}
+
+// Adherence + gains summary for a programme, computed from sessions stamped with its id.
+function programmeReviewHtml(prog, days){
+  const pid = String(prog.id);
+  const stamped = db.sessions.filter(s => String(s.programme_id||'') === pid);
+  const plannedDays = days.filter(d => d.type !== 'rest').length || 1;
+  const cycleLen = days.length || 1;
+  const now = Date.now();
+  const last28 = stamped.filter(s => (now - new Date(s.date).getTime()) <= 28*864e5);
+  const expected28 = Math.max(1, Math.round(28 * plannedDays / cycleLen));
+
+  if(!stamped.length){
+    return '<div class="card" style="margin-bottom:14px;"><div class="card-title">Programme review</div>'
+      + '<p style="font-size:13px;color:var(--muted);">No programme sessions logged yet. Start a day from the banner above and your adherence and progress will build here.</p></div>';
+  }
+
+  const adherence = Math.min(100, Math.round(last28.length / expected28 * 100));
+  const adColor = adherence>=80?'#2E7D32':adherence>=50?'#92600A':'#B71C1C';
+  const perWeekActual = Math.round(last28.length/4*10)/10;
+  const perWeekPlanned = Math.round(plannedDays*7/cycleLen*10)/10;
+
+  // completion by workout day
+  const counts = days.map((d,i)=>({i,d})).filter(x=>x.d.type!=='rest')
+    .map(x => Object.assign({}, x, {count: stamped.filter(s => s.programme_day === x.i).length}));
+  const maxC = Math.max(1, ...counts.map(c=>c.count));
+  const minC = counts.length ? Math.min(...counts.map(c=>c.count)) : 0;
+  const completionHtml = counts.map(c => {
+    const title = (c.d.workoutTitle || ('Day '+(c.i+1)));
+    const flag = (minC<maxC && c.count===minC) ? ' <span style="font-size:10px;color:#B71C1C;">skipped most</span>' : '';
+    const pct = Math.round(c.count/maxC*100);
+    return '<div style="margin-bottom:8px;">'
+      + '<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px;"><span>Day '+(c.i+1)+' · '+title+flag+'</span><span style="color:var(--muted);">'+c.count+'\u00d7</span></div>'
+      + '<div class="prog-bar" style="height:5px;"><div class="prog-fill" style="width:'+pct+'%;background:#185FA5;"></div></div>'
+      + '</div>';
+  }).join('');
+
+  // gains on this programme
+  const prCount = stamped.filter(s => isPRSession(s)).length;
+  const totalVol = stamped.reduce((sum,s)=> sum + calcVolume(safeJSON(s.exercises,[])), 0);
+  const volStr = totalVol>1000?(totalVol/1000).toFixed(1)+'k':totalVol;
+
+  return '<div class="card" style="margin-bottom:14px;"><div class="card-title">Programme review</div>'
+    + '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px;">'
+    + '<div class="metric"><div class="metric-label">Adherence</div><div class="metric-val" style="color:'+adColor+';">'+adherence+'%</div><div class="metric-sub" style="color:var(--faint);">'+last28.length+'/'+expected28+' last 4 wks</div></div>'
+    + '<div class="metric"><div class="metric-label">Cadence</div><div class="metric-val">'+perWeekActual+'</div><div class="metric-sub" style="color:var(--faint);">/wk \u00b7 plan '+perWeekPlanned+'</div></div>'
+    + '<div class="metric"><div class="metric-label">Sessions</div><div class="metric-val">'+stamped.length+'</div><div class="metric-sub" style="color:var(--faint);">on this programme</div></div>'
+    + '</div>'
+    + '<div style="font-size:11px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px;">Completion by day</div>'
+    + completionHtml
+    + '<div style="margin-top:10px;padding-top:10px;border-top:0.5px solid var(--border);font-size:13px;color:var(--muted);">'
+    + 'Progress on this programme: <b style="color:var(--text);">'+prCount+'</b> PR session'+(prCount===1?'':'s')+' \u00b7 <b style="color:var(--text);">'+volStr+' kg</b> moved'
+    + '</div>'
+    + '</div>';
 }
 
 function renderActiveProgramme() {
@@ -2678,7 +2846,8 @@ function renderActiveProgramme() {
     + '<div class="day-strip">' + dotHtml + '</div>'
     + previewHtml
     + '<div style="display:flex;gap:8px;"><button class="btn btn-sm" onclick="editProgramme(' + prog.id + ')">Edit</button><button class="btn btn-sm" onclick="deactivateProgramme()">Deactivate</button></div>'
-    + '</div>';
+    + '</div>'
+    + programmeReviewHtml(prog, days);
 }
 
 function selectProgrammeDay(progId, dayIndex) {
@@ -2694,9 +2863,12 @@ function startProgrammeDayByIndex(progId, dayIndex) {
   const days = safeJSON(prog.days, []);
   const day = days[dayIndex];
   if(!day || day.type === 'rest') return;
-  const saved = db.savedWorkouts.find(w => (w.sessionTitle || w.title) === day.workoutTitle);
-  if(!saved) { toast('Saved workout not found: ' + day.workoutTitle, 'error'); return; }
+  let saved = day.workoutId ? db.savedWorkouts.find(w => String(w.id) === String(day.workoutId)) : null;
+  if(!saved) saved = db.savedWorkouts.find(w => (w.sessionTitle || w.title) === day.workoutTitle);
+  if(!saved) { toast('Saved workout not found: ' + (day.workoutTitle || '(unnamed)'), 'error'); return; }
   loadSavedWorkout(db.savedWorkouts.indexOf(saved));
+  // Stamp the session so adherence can tell it was this programme + day.
+  if(db.activeSession) { db.activeSession.programme_id = String(prog.id); db.activeSession.programme_day = dayIndex; }
   // Advance programme to the day after the one we just started
   const next = (dayIndex + 1) % days.length;
   prog.current_day = next;
@@ -2737,18 +2909,26 @@ function renderProgrammeList() {
   }).join('');
 }
 
-function activateProgramme(id) {
+async function activateProgramme(id) {
   activeProgrammeId = id;
   localStorage.setItem('gymlog_active_prog_' + currentUser.id, id);
+  programmes.forEach(p => p.is_active = (String(p.id) === String(id)));
   renderActiveProgramme();
   renderProgrammeList();
+  try {
+    await sb.from('programmes').update({is_active:false}).eq('user_id', currentUser.id).neq('id', id);
+    await sb.from('programmes').update({is_active:true}).eq('id', id);
+  } catch(e) {}
 }
 
-function deactivateProgramme() {
+async function deactivateProgramme() {
+  const id = activeProgrammeId;
   activeProgrammeId = null;
   localStorage.removeItem('gymlog_active_prog_' + currentUser.id);
+  programmes.forEach(p => p.is_active = false);
   renderActiveProgramme();
   renderProgrammeList();
+  if(id) { try { await sb.from('programmes').update({is_active:false}).eq('id', id); } catch(e) {} }
 }
 
 function startProgrammeDay() {
@@ -2802,19 +2982,18 @@ function renderProgDayList() {
     el.innerHTML = '<p style="font-size:13px;color:var(--color-text-secondary);padding:8px 0;">No days added yet.</p>';
     return;
   }
-  const workoutOptions = db.savedWorkouts.map(w => {
-    const t = w.sessionTitle || w.title || '';
-    return '<option value="' + t.replace(/"/g, '&quot;') + '">' + t + '</option>';
-  }).join('');
-
   el.innerHTML = progDays.map((d, i) => {
     const isRest = d.type === 'rest';
     const badgeExtra = isRest ? 'background:#FAEEDA;border-color:#EF9F27;color:#633806;' : '';
+    // Resolve which workout is selected by ID (falling back to a title match for older programmes).
+    let selId = d.workoutId || '';
+    if(!selId && d.workoutTitle) { const m = db.savedWorkouts.find(w => (w.sessionTitle || w.title) === d.workoutTitle); selId = m ? m.id : ''; }
+    const opts = '<option value="">Select saved workout...</option>'
+      + db.savedWorkouts.map(w => { const t = (w.sessionTitle || w.title || '').replace(/</g,'&lt;'); return '<option value="' + String(w.id) + '"' + (String(w.id) === String(selId) ? ' selected' : '') + '>' + t + '</option>'; }).join('');
     const selectHtml = isRest
       ? '<span style="font-size:13px;color:var(--color-text-secondary);flex:1;">Rest day</span>'
       : '<select style="flex:1;padding:6px 10px;font-size:13px;border:0.5px solid var(--color-border-secondary);border-radius:var(--border-radius-md);background:var(--color-background-primary);color:var(--color-text-primary);font-family:var(--font-sans);" data-idx="' + i + '" onchange="setProgDayWorkout(parseInt(this.dataset.idx),this.value)">'
-        + '<option value="">Select saved workout...</option>'
-        + workoutOptions.replace('value="' + (d.workoutTitle || '').replace(/"/g, '&quot;') + '"', 'value="' + (d.workoutTitle || '').replace(/"/g, '&quot;') + '" selected')
+        + opts
         + '</select>';
     return '<div class="day-build-row">'
       + '<div class="day-num-badge" style="' + badgeExtra + '">' + (isRest ? 'R' : (i+1)) + '</div>'
@@ -2824,9 +3003,10 @@ function renderProgDayList() {
   }).join('');
 }
 
-function setProgDayWorkout(i, title) {
-  const sw = db.savedWorkouts.find(w => (w.sessionTitle || w.title) === title);
-  progDays[i].workoutTitle = title;
+function setProgDayWorkout(i, id) {
+  const sw = db.savedWorkouts.find(w => String(w.id) === String(id));
+  progDays[i].workoutId = sw ? sw.id : null;
+  progDays[i].workoutTitle = sw ? (sw.sessionTitle || sw.title || '') : '';
   progDays[i].muscles = sw ? safeJSON(sw.muscles, []) : [];
 }
 
@@ -2839,6 +3019,12 @@ async function saveProgramme() {
   const name = document.getElementById('prog-name').value.trim();
   if(!name) { toast('Enter a programme name.', 'error'); return; }
   if(!progDays.length) { toast('Add at least one day.', 'error'); return; }
+  progDays.forEach(d => {
+    if(d.type !== 'rest' && !d.workoutId && d.workoutTitle) {
+      const m = db.savedWorkouts.find(w => (w.sessionTitle || w.title) === d.workoutTitle);
+      if(m) d.workoutId = m.id;
+    }
+  });
   const daysJson = JSON.stringify(progDays);
   if(editingProgrammeId) {
     const {error} = await sb.from('programmes').update({name, days: daysJson}).eq('id', editingProgrammeId);
@@ -3427,20 +3613,28 @@ function jtRenderSession() {
     }
 
     // Set rows
-    let setRows = '<div style="display:flex;gap:8px;margin-bottom:4px;"><span style="font-size:10px;color:var(--faint);width:36px;"></span><span style="font-size:10px;color:var(--faint);width:72px;">kg</span><span style="font-size:10px;color:var(--faint);width:68px;">reps</span></div>';
+    let setRows = '<div class="set-head"><span class="set-head-sp"></span><span>weight (kg)</span><span>reps</span><span class="set-head-sp"></span></div>';
     if(ex.isCardio) {
-      setRows = '<div class="set-row"><span class="set-num">Time</span><input class="set-inp" type="number" id="jt-' + ei + '-kg-0" placeholder="min" style="width:80px;"></div>';
+      setRows = '<div class="set-row"><span class="set-num">Time</span><input class="set-inp" type="number" inputmode="numeric" id="jt-' + ei + '-kg-0" placeholder="min" style="width:80px;"></div>';
     } else {
       for(let i = 0; i < ex.sets; i++) {
         const prev_set = prev && prev.sets ? prev.sets[i] : null;
         const prefillKg = prev_set && prev_set.kg ? prev_set.kg : '';
         const prefillReps = prev_set && prev_set.reps ? prev_set.reps : '';
-        const prevText = prev_set ? ('prev: ' + (prev_set.kg ? prev_set.kg + 'kg ' : 'BW ') + prev_set.reps + ' reps') : '';
+        const kgId = 'jt-' + ei + '-kg-' + i, repsId = 'jt-' + ei + '-reps-' + i;
         setRows += '<div class="set-row">'
           + '<span class="set-num">Set ' + (i+1) + '</span>'
-          + '<input class="set-inp set-kg" type="number" id="jt-' + ei + '-kg-' + i + '" placeholder="kg" value="' + prefillKg + '" step="0.5" min="0">'
-          + '<input class="set-inp set-reps" type="number" id="jt-' + ei + '-reps-' + i + '" placeholder="reps" value="' + prefillReps + '" min="0">'
-          + (prevText ? '<span class="set-prev">' + prevText + '</span>' : '')
+          + '<div class="stepper">'
+            + '<button type="button" class="step-btn minus" onclick="stepInput(\'' + kgId + '\',-2.5,false)">\u2212</button>'
+            + '<input class="set-inp set-kg" type="number" inputmode="decimal" enterkeyhint="next" id="' + kgId + '" placeholder="kg" value="' + prefillKg + '" step="0.5" min="0">'
+            + '<button type="button" class="step-btn plus" onclick="stepInput(\'' + kgId + '\',2.5,false)">+</button>'
+            + '</div>'
+          + '<div class="stepper">'
+            + '<button type="button" class="step-btn minus" onclick="stepInput(\'' + repsId + '\',-1,false)">\u2212</button>'
+            + '<input class="set-inp set-reps" type="number" inputmode="numeric" enterkeyhint="next" id="' + repsId + '" placeholder="reps" value="' + prefillReps + '" min="0">'
+            + '<button type="button" class="step-btn plus" onclick="stepInput(\'' + repsId + '\',1,false)">+</button>'
+            + '</div>'
+          + (i < ex.sets-1 ? '<button type="button" class="set-fill" title="Copy this set to the ones below" onclick="jtFillDown(' + ei + ',' + i + ')">\u2913</button>' : '<span style="width:34px;flex-shrink:0;"></span>')
           + '</div>';
       }
     }
@@ -3466,6 +3660,17 @@ function jtRenderSession() {
 
 function setJtEquipment(ei, val) {
   if(jtExercises[ei]) jtExercises[ei].equipment = val;
+}
+
+// Copy a Just Train set's weight & reps into the sets below it.
+function jtFillDown(ei, fromIndex){
+  const numSets=(jtExercises[ei]&&jtExercises[ei].sets)||3;
+  const kg=document.getElementById('jt-'+ei+'-kg-'+fromIndex)?.value||'';
+  const reps=document.getElementById('jt-'+ei+'-reps-'+fromIndex)?.value||'';
+  for(let i=fromIndex+1;i<numSets;i++){
+    const k=document.getElementById('jt-'+ei+'-kg-'+i); if(k) k.value=kg;
+    const r=document.getElementById('jt-'+ei+'-reps-'+i); if(r) r.value=reps;
+  }
 }
 
 function jtRemoveExercise(ei) {
@@ -3498,6 +3703,7 @@ async function jtSaveSession() {
     if(!b.duration) return;
     jtExercises.push({
       name: b.type, muscle: 'Cardio', sets: 1, reps: b.duration + ' min', isCardio: true,
+      distanceKm: parseFloat(b.distance) || null, intensity: b.intensity || null,
       loggedSets: { sets: [{kg: parseFloat(b.duration)||0, reps: parseFloat(b.duration)||0}],
         note: [b.intensity, b.distance ? b.distance+'km' : '', b.note].filter(Boolean).join(' · '), kg: null, targetReps: 0 }
     });
