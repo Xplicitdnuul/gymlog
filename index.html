@@ -292,7 +292,6 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
       <div class="nav-group-label" style="margin-top:10px;">Performance</div>
       <div class="nav-item" onclick="showPage('progress')"><span class="nav-icon">↗</span> Progress</div>
       <div class="nav-item" onclick="showPage('body')"><span class="nav-icon">◉</span> Body</div>
-      <div class="nav-item" onclick="showPage('food')"><span class="nav-icon">◎</span> Nutrition</div>
       <div class="nav-group-label" style="margin-top:10px;">Goals &amp; Profile</div>
       <div class="nav-item" onclick="showPage('goals')"><span class="nav-icon">◎</span> Goals</div>
       <div class="nav-item" onclick="showPage('settings')"><span class="nav-icon">⚙</span> Profile</div>
@@ -314,7 +313,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
       <div id="overview-greeting" style="margin-bottom:20px;"></div>
       <div id="overview-active-prog"></div>
       <div id="overview-quickstart"></div>
-      <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px;" id="overview-metrics"></div>
+      <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:14px;" id="overview-metrics"></div>
       <div class="ov-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;">
         <div class="card">
           <div class="card-title">Needs attention</div>
@@ -326,10 +325,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
         </div>
       </div>
       <div class="card" style="margin-top:14px;">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
-          <div class="card-title" style="margin-bottom:0;">Recent sessions</div>
-          <div id="overview-nutrition-inline" style="font-size:12px;color:var(--muted);"></div>
-        </div>
+        <div class="card-title">Recent sessions</div>
         <div id="recent-sessions"></div>
       </div>
     </div>
@@ -491,24 +487,6 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
         </div>
       </div>
 
-    </div>
-
-    <div id="page-food" class="page">
-      <div class="page-title">Nutrition</div>
-      <div class="page-sub">Log your daily macros</div>
-      <div class="card">
-        <div class="card-title">Today's intake</div>
-        <div style="font-size:12px;color:var(--muted);margin-bottom:14px;">Enter your totals for the day — update anytime, the entry will overwrite today's log.</div>
-        <div class="form-row form-4">
-          <div class="form-group"><label class="form-label">Calories (kcal)</label><input type="number" id="food-kcal" placeholder="2200" min="0"></div>
-          <div class="form-group"><label class="form-label">Protein (g)</label><input type="number" id="food-protein" placeholder="160" min="0"></div>
-          <div class="form-group"><label class="form-label">Carbs (g)</label><input type="number" id="food-carbs" placeholder="220" min="0"></div>
-          <div class="form-group"><label class="form-label">Fat (g)</label><input type="number" id="food-fat" placeholder="70" min="0"></div>
-        </div>
-        <button class="btn btn-dark btn-sm" onclick="logFood()">Save today's macros</button>
-      </div>
-      <div class="card"><div class="card-title">Today's summary</div><div id="food-totals"></div></div>
-      <div class="card"><div class="card-title">Macro trend — last 14 days</div><div class="chart-wrap" style="height:200px;"><canvas id="chart-macros"></canvas></div></div>
     </div>
 
     <div id="page-body" class="page">
@@ -705,10 +683,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
           <div class="form-group"><label class="form-label">Name</label><input type="text" id="s-name" placeholder="Your name"></div>
           <div class="form-group"><label class="form-label">Experience level</label><select id="s-level"><option value="beginner">Beginner</option><option value="intermediate" selected>Intermediate</option><option value="advanced">Advanced</option></select></div>
         </div>
-        <div class="form-row form-2">
-          <div class="form-group"><label class="form-label">Default goal</label><select id="s-goal"><option value="strength">Strength</option><option value="hypertrophy" selected>Hypertrophy</option><option value="endurance">Endurance</option></select></div>
-          <div class="form-group"><label class="form-label">Daily calorie target (kcal)</label><input type="number" id="s-calgoal" placeholder="2200"></div>
-        </div>
+        <div class="form-group"><label class="form-label">Default goal</label><select id="s-goal"><option value="strength">Strength</option><option value="hypertrophy" selected>Hypertrophy</option><option value="endurance">Endurance</option></select></div>
         <button class="btn btn-dark btn-sm" onclick="saveProfile()">Save profile</button>
         <span id="profile-saved" style="font-size:12px;color:var(--green);margin-left:10px;display:none;">Saved.</span>
       </div>
@@ -883,7 +858,7 @@ async function signUp() {
     return;
   }
   if(data.user){
-    const {error:spErr}=await sb.from('profiles').upsert({id:data.user.id,name,level:'intermediate',goal:'hypertrophy',cal_goal:2200,rest:JSON.stringify({strength:180,hyp:90,end:60,trans:120})});
+    const {error:spErr}=await sb.from('profiles').upsert({id:data.user.id,name,level:'intermediate',goal:'hypertrophy',rest:JSON.stringify({strength:180,hyp:90,end:60,trans:120})});
     if(spErr) console.warn('Profile create:',spErr);
   }
   await initApp();
@@ -965,7 +940,7 @@ initApp();
 // with INITIAL_SESSION event automatically when a cookie session is found.
 
 // ── DATA LAYER ───────────────────────────────────────────────────
-const defaultDb = { profile:{name:'',level:'intermediate',goal:'hypertrophy',calGoal:2200}, library:[], sessions:[], food:[], body:[], goals:[], rest:{strength:180,hyp:90,end:60,trans:120}, selectedMuscles:[], selectedTime:'60', selectedTimeCardio:'15', muscleSettings:{}, progressFilter:'All', activeSession:null, pendingSession:null, savedWorkouts:[] };
+const defaultDb = { profile:{name:'',level:'intermediate',goal:'hypertrophy'}, library:[], sessions:[], body:[], goals:[], rest:{strength:180,hyp:90,end:60,trans:120}, selectedMuscles:[], selectedTime:'60', selectedTimeCardio:'15', muscleSettings:{}, progressFilter:'All', activeSession:null, pendingSession:null, savedWorkouts:[] };
 let db = {...defaultDb};
 
 let _loadingData = false;
@@ -998,9 +973,6 @@ async function loadUserData() {
   console.log('querying sessions...');
   const sess = await sb.from('sessions').select('*').eq('user_id',uid).order('date');
   console.log('sessions done');
-  console.log('querying food_log...');
-  const food = await sb.from('food_log').select('*').eq('user_id',uid).order('created_at');
-  console.log('food_log done');
   console.log('querying body_log...');
   const body = await sb.from('body_log').select('*').eq('user_id',uid).order('date');
   console.log('body_log done');
@@ -1015,17 +987,16 @@ async function loadUserData() {
   // Parse profile data into db.profile
   if(prof.data){
     const p = prof.data;
-    db.profile = {name:p.name||'', level:p.level||'intermediate', goal:p.goal||'hypertrophy', calGoal:p.cal_goal||2200};
+    db.profile = {name:p.name||'', level:p.level||'intermediate', goal:p.goal||'hypertrophy'};
     try { if(p.rest) db.rest = {...db.rest, ...JSON.parse(p.rest)}; } catch(e) {}
   } else {
     // No profile row yet — create one
-    const {error:autoErr} = await sb.from('profiles').upsert({id:uid, name:'', level:'intermediate', goal:'hypertrophy', cal_goal:2200, rest:JSON.stringify({strength:180,hyp:90,end:60,trans:120})});
+    const {error:autoErr} = await sb.from('profiles').upsert({id:uid, name:'', level:'intermediate', goal:'hypertrophy', rest:JSON.stringify({strength:180,hyp:90,end:60,trans:120})});
     if(autoErr) console.warn('Auto profile create error:', autoErr);
   }
 
   db.library = (lib.data||[]).map(e=>({id:e.id,name:e.name,muscle:e.muscle}));
   db.sessions = (sess.data||[]).filter(s=>!s.is_draft).map(s=>({...s, sessionTitle:s.title||s.sessionTitle||'Session', exercises:safeJSON(s.exercises,[]), muscles:safeJSON(s.muscles,[])}));
-  db.food = (food.data||[]).map(f=>({...f}));
   db.body = (body.data||[]).map(b=>({...b}));
   db.goals = (goals.data||[]).map(g=>({...g}));
   // Restore any in-progress draft session
@@ -1064,16 +1035,16 @@ async function loadUserData() {
 }
 
 async function saveProfile() {
-  const name=document.getElementById('s-name').value, level=document.getElementById('s-level').value, goal=document.getElementById('s-goal').value, calGoal=parseInt(document.getElementById('s-calgoal').value)||2200;
-  db.profile={name,level,goal,calGoal};
-  const {error:profErr}=await sb.from('profiles').upsert({id:currentUser.id,name,level,goal,cal_goal:calGoal,rest:JSON.stringify(db.rest)});if(profErr){dbErr('Save profile',profErr);return;}
+  const name=document.getElementById('s-name').value, level=document.getElementById('s-level').value, goal=document.getElementById('s-goal').value;
+  db.profile={name,level,goal};
+  const {error:profErr}=await sb.from('profiles').upsert({id:currentUser.id,name,level,goal,rest:JSON.stringify(db.rest)});if(profErr){dbErr('Save profile',profErr);return;}
   updateProfileUI();
   document.getElementById('profile-saved').style.display='inline';
   setTimeout(()=>document.getElementById('profile-saved').style.display='none',2000);
 }
 
 async function saveSettings() {
-  const {error:setErr}=await sb.from('profiles').upsert({id:currentUser.id,name:db.profile.name,level:db.profile.level,goal:db.profile.goal,cal_goal:db.profile.calGoal,rest:JSON.stringify(db.rest)});if(setErr){dbErr('Save settings',setErr);}
+  const {error:setErr}=await sb.from('profiles').upsert({id:currentUser.id,name:db.profile.name,level:db.profile.level,goal:db.profile.goal,rest:JSON.stringify(db.rest)});if(setErr){dbErr('Save settings',setErr);}
   document.getElementById('rest-saved').style.display='inline';
   setTimeout(()=>document.getElementById('rest-saved').style.display='none',2000);
 }
@@ -1129,10 +1100,10 @@ function showPage(id) {
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   document.getElementById('page-'+id).classList.add('active');
-  const navMap={justtrain:0,planner:1,log:2,history:3,builder:4,programme:5,library:6,progress:7,body:8,food:9,goals:10,settings:11};
+  const navMap={justtrain:0,planner:1,log:2,history:3,builder:4,programme:5,library:6,progress:7,body:8,goals:9,settings:10};
   const navEl=document.querySelectorAll('.nav-item')[navMap[id]];
   if(navEl) navEl.classList.add('active');
-  const renders={overview:renderOverview,justtrain:renderJustTrain,planner:renderPlanner,log:renderLog,progress:renderProgress,food:renderFood,body:renderBody,builder:renderBuilder,programme:renderProgramme,library:renderLibrary,history:renderHistory,goals:renderGoals,settings:renderSettings};
+  const renders={overview:renderOverview,justtrain:renderJustTrain,planner:renderPlanner,log:renderLog,progress:renderProgress,body:renderBody,builder:renderBuilder,programme:renderProgramme,library:renderLibrary,history:renderHistory,goals:renderGoals,settings:renderSettings};
   if(window.innerWidth<=768) closeSidebar();
   if(renders[id]) Promise.resolve(renders[id]()).catch(e=>console.error('Page render error:',e));
 }
@@ -1144,13 +1115,11 @@ async function refreshData(){
   _refreshing = true;
   try {
   const uid=currentUser.id;
-  const [sess, food, body] = await Promise.all([
+  const [sess, body] = await Promise.all([
     sb.from('sessions').select('*').eq('user_id',uid).order('date'),
-    sb.from('food_log').select('*').eq('user_id',uid).order('created_at'),
     sb.from('body_log').select('*').eq('user_id',uid).order('date'),
   ]);
   if(sess.data) db.sessions=sess.data.filter(s=>!s.is_draft).map(s=>({...s,sessionTitle:s.title||s.sessionTitle||'Session',exercises:safeJSON(s.exercises,[]),muscles:safeJSON(s.muscles,[])}));
-  if(food.data) db.food=food.data;
   if(body.data) db.body=body.data;
   } catch(e){ console.error('refreshData error:',e); } finally { _refreshing=false; }
 }
@@ -1270,8 +1239,6 @@ async function renderOverview() {
   }
 
     // ── METRICS ──
-  const todayFood = db.food.filter(f => f.log_date === today);
-  const totalKcal = todayFood.reduce((s,f) => s+f.kcal, 0);
   const thisMonth = db.sessions.filter(s => {
     const d = new Date(s.date);
     return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
@@ -1301,12 +1268,7 @@ async function renderOverview() {
     + '<div style="font-size:11px;color:var(--muted);margin-bottom:6px;">Body weight</div>'
     + '<div style="font-size:22px;font-weight:300;letter-spacing:-0.5px;">' + (latestWeight?latestWeight+'kg':'\u2014') + '</div>'
     + '<div style="font-size:11px;color:var(--faint);margin-top:4px;">' + (db.body.length?'logged '+fmt(db.body[db.body.length-1].date):'not logged') + '</div>'
-    + '</div>'
-    + '<div class="card" style="padding:12px 14px;">'
-    + '<div style="font-size:11px;color:var(--muted);margin-bottom:6px;">Calories today</div>'
-    + '<div style="font-size:22px;font-weight:300;letter-spacing:-0.5px;">' + totalKcal + '</div>'
-    + '<div style="font-size:11px;color:var(--faint);margin-top:4px;">/ ' + (db.profile.calGoal||2200) + ' goal</div>'
-    + '</div>'
+    + '</div>';
 
   // ── NEEDS ATTENTION (triage: muscle groups overdue for training) ──
   const muscleLastTrained = {};
@@ -1365,11 +1327,6 @@ async function renderOverview() {
   } else {
     rEl.innerHTML = '<p style="color:var(--muted);font-size:13px;">No sessions logged yet.</p>';
   }
-
-  // ── TODAY'S NUTRITION inline badge ──
-  const p = todayFood.reduce((s,f)=>s+f.protein,0);
-  const nutEl = document.getElementById('overview-nutrition-inline');
-  if(nutEl) nutEl.textContent = totalKcal ? totalKcal + ' kcal · ' + p + 'g protein' : 'Not logged today';
 }
 
 
@@ -2555,51 +2512,6 @@ function renderStrengthChart(sessions) {
     data: { labels: allLabels, datasets: alignedDatasets },
     options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: true, position: 'top', align: 'start', labels: { font: { size: 11 }, boxWidth: 8, padding: 10 } } }, scales: { x: { ticks: { color: tc, font: { size: 11 }, maxRotation: 45 }, grid: { display: false }, border: { display: false } }, y: { ticks: { color: tc, callback: v => strengthMode === 'volume' ? (v > 1000 ? (v/1000).toFixed(1)+'k' : v) : v + ' kg' }, grid: { color: gc }, border: { display: false } } } }
   });
-}
-
-
-// ── FOOD ──────────────────────────────────────────────────────────
-async function logFood(){
-  const today=new Date().toISOString().split('T')[0];
-  const kcal=parseInt(document.getElementById('food-kcal').value)||0;
-  const protein=parseInt(document.getElementById('food-protein').value)||0;
-  const carbs=parseInt(document.getElementById('food-carbs').value)||0;
-  const fat=parseInt(document.getElementById('food-fat').value)||0;
-  if(!kcal&&!protein&&!carbs&&!fat){toast('Enter at least one macro value.','error');return;}
-  // Check if entry for today exists — update it, else insert
-  const existing=db.food.find(f=>f.log_date===today);
-  if(existing){
-    const {error:ue}=await sb.from('food_log').update({kcal,protein,carbs,fat}).eq('id',existing.id);
-    if(ue){dbErr('Update food',ue);return;}
-    existing.kcal=kcal;existing.protein=protein;existing.carbs=carbs;existing.fat=fat;
-    toast("Today's macros updated.",'ok');
-  } else {
-    const entry={user_id:currentUser.id,kcal,protein,carbs,fat,log_date:today};
-    const {data:foodData,error:foodErr}=await sb.from('food_log').insert(entry).select().single();
-    if(foodErr){dbErr('Food log',foodErr);return;}
-    if(foodData) db.food.push(foodData);
-    toast("Today's macros saved.",'ok');
-  }
-  renderFood();
-}
-
-let macroChart=null;
-function renderFood(){
-  const today=new Date().toISOString().split('T')[0];
-  const todayFood=db.food.filter(f=>f.log_date===today);
-  const entry=todayFood.length?todayFood[todayFood.length-1]:null;
-  const tot={kcal:entry?entry.kcal:0,protein:entry?entry.protein:0,carbs:entry?entry.carbs:0,fat:entry?entry.fat:0};
-  // Pre-fill form with today's values
-  if(entry){
-    ['kcal','protein','carbs','fat'].forEach(k=>{const el=document.getElementById('food-'+k);if(el&&tot[k])el.value=tot[k];});
-  }
-  const pct=Math.min(100,Math.round(tot.kcal/(db.profile.calGoal||2200)*100));
-  document.getElementById('food-totals').innerHTML='<div style="display:flex;justify-content:space-between;margin-bottom:6px;"><span style="color:var(--muted);">Calories</span><span style="font-weight:500;">'+tot.kcal+' / '+(db.profile.calGoal||2200)+' kcal</span></div><div class="prog-bar" style="height:7px;margin-bottom:14px;"><div class="prog-fill" style="width:'+pct+'%;background:var(--text);"></div></div><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;"><div class="metric"><div class="metric-label">Protein</div><div class="metric-val">'+tot.protein+'g</div></div><div class="metric"><div class="metric-label">Carbs</div><div class="metric-val">'+tot.carbs+'g</div></div><div class="metric"><div class="metric-label">Fat</div><div class="metric-val">'+tot.fat+'g</div></div></div>';
-
-  if(macroChart){try{macroChart.destroy();}catch(e){}}
-  const days=[...Array(14)].map((_,i)=>{const d=new Date();d.setDate(d.getDate()-13+i);return d.toISOString().split('T')[0];});
-  const tc='rgba(0,0,0,0.35)',gc='rgba(0,0,0,0.06)';
-  macroChart=new Chart(document.getElementById('chart-macros'),{type:'bar',data:{labels:days.map(d=>d.slice(5)),datasets:[{label:'Protein',data:days.map(d=>db.food.filter(f=>f.log_date===d).reduce((s,f)=>s+f.protein,0)),backgroundColor:'#2E7D32',stack:'a',borderRadius:2},{label:'Carbs',data:days.map(d=>db.food.filter(f=>f.log_date===d).reduce((s,f)=>s+f.carbs,0)),backgroundColor:'#1A56A0',stack:'a',borderRadius:2},{label:'Fat',data:days.map(d=>db.food.filter(f=>f.log_date===d).reduce((s,f)=>s+f.fat,0)),backgroundColor:'#92600A',stack:'a',borderRadius:2}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:true,labels:{font:{size:11},boxWidth:10}}},scales:{x:{ticks:{color:tc,font:{size:11}},grid:{display:false},border:{display:false},stacked:true},y:{ticks:{color:tc},grid:{color:gc},border:{display:false},stacked:true}}}});
 }
 
 
@@ -4166,7 +4078,6 @@ function renderSettings(){
   document.getElementById('s-name').value=db.profile.name||'';
   document.getElementById('s-level').value=db.profile.level||'intermediate';
   document.getElementById('s-goal').value=db.profile.goal||'hypertrophy';
-  document.getElementById('s-calgoal').value=db.profile.calGoal||2200;
   renderGoalsInSettings();updateRestDisplay();
 }
 function renderGoalsInSettings(){
