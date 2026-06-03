@@ -157,6 +157,8 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
   .step-btn { width:38px; }
   #progress-metrics { grid-template-columns:1fr 1fr !important; }
   .prog-2col { grid-template-columns:1fr !important; }
+  #overview-metrics { grid-template-columns:1fr 1fr !important; }
+  .ov-2col { grid-template-columns:1fr !important; }
 }
 .overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.35); z-index:199; }
 .overlay.show { display:block; }
@@ -311,10 +313,11 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
     <div id="page-overview" class="page active">
       <div id="overview-greeting" style="margin-bottom:20px;"></div>
       <div id="overview-active-prog"></div>
+      <div id="overview-quickstart"></div>
       <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px;" id="overview-metrics"></div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;">
+      <div class="ov-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;">
         <div class="card">
-          <div class="card-title">Muscle status</div>
+          <div class="card-title">Needs attention</div>
           <div id="overview-muscles"></div>
         </div>
         <div class="card">
@@ -1152,6 +1155,20 @@ async function refreshData(){
   } catch(e){ console.error('refreshData error:',e); } finally { _refreshing=false; }
 }
 // ── OVERVIEW ──────────────────────────────────────────────────────
+// Consecutive-week training streak. Rest days never break it; missing a whole week does.
+// The current in-progress week doesn't count against you until it actually ends.
+function weeklyStreak(sessions){
+  if(!sessions || !sessions.length) return 0;
+  const weekStart = d => { const x=new Date(d); const day=x.getDay(); const mon=new Date(x); mon.setDate(x.getDate()-(day===0?6:day-1)); mon.setHours(0,0,0,0); return mon.getTime(); };
+  const weeks = new Set(sessions.map(s => weekStart(s.date)));
+  const WEEK = 7*864e5;
+  let cursor = weekStart(new Date());
+  if(!weeks.has(cursor)) cursor -= WEEK; // haven't trained yet this week — no penalty
+  let n = 0;
+  while(weeks.has(cursor)){ n++; cursor -= WEEK; }
+  return n;
+}
+
 async function renderOverview() {
   await refreshData();
   const today = new Date().toISOString().split('T')[0];
@@ -1161,9 +1178,20 @@ async function renderOverview() {
   const hour = now.getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
   const dateStr = now.toLocaleDateString('en-GB', {weekday:'long', day:'numeric', month:'long', year:'numeric'});
+  const streak = weeklyStreak(db.sessions);
+  const lastSess = db.sessions.length ? db.sessions.reduce((a,b) => new Date(a.date) > new Date(b.date) ? a : b) : null;
+  const daysSinceLast = lastSess ? Math.floor((Date.now() - new Date(lastSess.date)) / 864e5) : null;
+  let nudgeHtml;
+  if(streak >= 1) {
+    nudgeHtml = '<span style="font-size:12px;font-weight:500;padding:2px 9px;border-radius:20px;background:var(--green-bg);color:var(--green);">' + streak + '-week streak</span>';
+  } else if(daysSinceLast != null) {
+    nudgeHtml = '<span style="font-size:12px;font-weight:500;padding:2px 9px;border-radius:20px;background:#FAEEDA;color:#633806;">' + daysSinceLast + ' day' + (daysSinceLast===1?'':'s') + ' since your last session</span>';
+  } else {
+    nudgeHtml = '<span style="font-size:12px;color:var(--muted);">Log your first workout to start a streak</span>';
+  }
   document.getElementById('overview-greeting').innerHTML =
-    '<div style="font-size:22px;font-weight:500;margin-bottom:2px;">' + greeting + (db.profile.name ? ', ' + db.profile.name : '') + '</div>'
-    + '<div style="font-size:13px;color:var(--muted);">' + dateStr + '</div>';
+    '<div style="font-size:22px;font-weight:500;margin-bottom:4px;">' + greeting + (db.profile.name ? ', ' + db.profile.name : '') + '</div>'
+    + '<div style="font-size:13px;color:var(--muted);display:flex;gap:10px;align-items:center;flex-wrap:wrap;"><span>' + dateStr + '</span>' + nudgeHtml + '</div>';
 
   // ── ACTIVE PROGRAMME ──
   const progEl = document.getElementById('overview-active-prog');
@@ -1222,6 +1250,24 @@ async function renderOverview() {
     progEl.innerHTML = '';
   }
 
+  // ── QUICK START (always available — you might want to do something else today) ──
+  const qsEl = document.getElementById('overview-quickstart');
+  if(qsEl) {
+    if(prog) {
+      qsEl.innerHTML = '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px;">'
+        + '<span style="font-size:12px;color:var(--muted);">Doing your own thing today?</span>'
+        + '<button class="btn btn-sm" onclick="showPage(\'justtrain\')">Just Train</button>'
+        + '<button class="btn btn-sm" onclick="showPage(\'planner\')">Generate Workout</button>'
+        + '</div>';
+    } else {
+      qsEl.innerHTML = '<div class="card" style="margin-bottom:14px;"><div class="card-title">Start a workout</div>'
+        + '<div style="display:flex;gap:8px;flex-wrap:wrap;">'
+        + '<button class="btn btn-dark btn-sm" onclick="showPage(\'planner\')">Generate Workout</button>'
+        + '<button class="btn btn-sm" onclick="showPage(\'justtrain\')">Just Train</button>'
+        + '<button class="btn btn-sm" onclick="showPage(\'log\')">Saved workouts</button>'
+        + '</div></div>';
+    }
+  }
 
     // ── METRICS ──
   const todayFood = db.food.filter(f => f.log_date === today);
@@ -1262,7 +1308,7 @@ async function renderOverview() {
     + '<div style="font-size:11px;color:var(--faint);margin-top:4px;">/ ' + (db.profile.calGoal||2200) + ' goal</div>'
     + '</div>'
 
-  // ── MUSCLE STATUS ──
+  // ── NEEDS ATTENTION (triage: muscle groups overdue for training) ──
   const muscleLastTrained = {};
   db.sessions.forEach(s => {
     safeJSON(s.muscles,[]).forEach(m => {
@@ -1271,16 +1317,21 @@ async function renderOverview() {
     });
   });
   const dotColor = days => days <= 4 ? '#639922' : days <= 10 ? '#97C459' : days <= 18 ? '#D3D1C7' : '#E24B4A';
-  document.getElementById('overview-muscles').innerHTML = MUSCLES_W.map(m => {
-    const last = muscleLastTrained[m];
-    const days = last ? Math.floor((Date.now() - last) / 864e5) : 999;
-    return '<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:0.5px solid var(--border);">'
-      + '<span style="font-size:12px;display:flex;align-items:center;gap:6px;">'
-      + '<span style="width:8px;height:8px;border-radius:50%;background:' + dotColor(days) + ';display:inline-block;flex-shrink:0;"></span>'
-      + m + '</span>'
-      + '<span style="font-size:11px;color:var(--faint);">' + (last ? days + 'd ago' : 'never') + '</span>'
-      + '</div>';
-  }).join('');
+  const due = MUSCLES_W
+    .map(m => { const last = muscleLastTrained[m]; const days = last ? Math.floor((Date.now() - last) / 864e5) : 999; return {m, last, days}; })
+    .filter(x => x.days > 7)
+    .sort((a,b) => b.days - a.days)
+    .slice(0, 5);
+  const seeAll = '<div style="margin-top:8px;"><button class="btn btn-sm" style="font-size:12px;" onclick="showPage(\'progress\')">See all muscle groups \u2192</button></div>';
+  document.getElementById('overview-muscles').innerHTML = due.length
+    ? due.map(x =>
+        '<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:0.5px solid var(--border);">'
+        + '<span style="font-size:12px;display:flex;align-items:center;gap:6px;">'
+        + '<span style="width:8px;height:8px;border-radius:50%;background:' + dotColor(x.days) + ';display:inline-block;flex-shrink:0;"></span>'
+        + x.m + '</span>'
+        + '<span style="font-size:11px;color:var(--faint);">' + (x.last ? x.days + 'd ago' : 'never') + '</span>'
+        + '</div>').join('') + seeAll
+    : '<p style="font-size:13px;color:var(--muted);">Every muscle group has been trained in the last week. Nice work.</p>' + seeAll;
 
   // ── GOALS ──
   document.getElementById('overview-goals').innerHTML = db.goals.length
