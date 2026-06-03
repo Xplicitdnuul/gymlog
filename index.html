@@ -1214,7 +1214,7 @@ async function renderOverview() {
       const cls = isDone ? 'done' : isScheduled ? 'current' : isRest ? 'rest' : '';
       // Selected but not the scheduled day — use amber/green highlight
       const selStyle = (isSelected && !isScheduled) ? 'background:#BA7517;color:white;border-color:#BA7517;' : '';
-      return '<div class="day-chip" data-prog="' + prog.id + '" data-day="' + i + '" onclick="selectProgrammeDay(this.dataset.prog,parseInt(this.dataset.day));renderOverview();" style="cursor:pointer;">'
+      return '<div class="day-chip" data-prog="' + prog.id + '" data-day="' + i + '" onclick="selectProgrammeDay(this.dataset.prog,parseInt(this.dataset.day))" style="cursor:pointer;">'
         + '<div class="day-dot ' + cls + '" style="' + selStyle + '">' + num + '</div>'
         + '<div class="day-chip-lbl">' + shortLbl + '</div>'
         + '</div>';
@@ -2044,6 +2044,8 @@ async function saveSession(){
     });
     if(!s.muscles.includes('Cardio')) s.muscles.push('Cardio');
   });
+  // Credit every muscle each logged exercise maps to (expands "Quads, Glutes" etc.)
+  s.muscles = sessionMuscles(s.exercises);
   s.sessionNote=document.getElementById('session-note')?.value||'';
   s.is_draft=false;
   const progStamp = s.programme_id ? {programme_id:String(s.programme_id), programme_day:(s.programme_day!=null?s.programme_day:null)} : {};
@@ -2130,6 +2132,19 @@ function getPrevPeriodSessions() {
     const d = new Date(s.date);
     return d >= prev && d < cutoff;
   });
+}
+
+// Union of all muscle groups worked across a set of exercises, expanding multi-muscle
+// mappings (e.g. "Quads, Glutes") so secondary muscles aren't dropped when a session is saved.
+function sessionMuscles(exercises){
+  const set = new Set();
+  (exercises||[]).forEach(ex => {
+    if(!ex) return;
+    let raw = ex.muscle || '';
+    if(!raw && ex.isCardio) raw = 'Cardio';
+    String(raw).split(',').map(m => m.trim()).filter(Boolean).forEach(m => set.add(m));
+  });
+  return [...set];
 }
 
 function calcVolume(exercises) {
@@ -2901,11 +2916,20 @@ function renderActiveProgramme() {
     + programmeReviewHtml(prog, days);
 }
 
+// The active-programme tracker appears on BOTH the Overview and Programme pages.
+// Re-render whichever one is currently on screen (this was the source of the
+// "buttons do nothing on the home page" bug — they only redrew the Programme page).
+function refreshActiveProgrammeView() {
+  const active = document.querySelector('.page.active');
+  if(active && active.id === 'page-overview') renderOverview();
+  else renderActiveProgramme();
+}
+
 function selectProgrammeDay(progId, dayIndex) {
   const prog = programmes.find(p => String(p.id) === String(progId));
   if(!prog) return;
   prog._selectedDay = dayIndex;
-  renderActiveProgramme();
+  refreshActiveProgrammeView();
 }
 
 function startProgrammeDayByIndex(progId, dayIndex) {
@@ -2934,7 +2958,7 @@ async function skipToDay(progId, dayIndex) {
   prog.current_day = dayIndex;
   prog._selectedDay = dayIndex;
   await sb.from('programmes').update({current_day: dayIndex}).eq('id', prog.id);
-  renderActiveProgramme();
+  refreshActiveProgrammeView();
   toast('Programme updated to day ' + (dayIndex+1) + '.', 'ok');
 }
 
@@ -2999,8 +3023,9 @@ async function advanceProgrammeDay(prog) {
   const days = safeJSON(prog.days, []);
   const next = ((prog.current_day || 0) + 1) % days.length;
   prog.current_day = next;
+  prog._selectedDay = next;
   await sb.from('programmes').update({current_day: next}).eq('id', prog.id);
-  renderActiveProgramme();
+  refreshActiveProgrammeView();
 }
 
 function showProgrammeBuilder(prog) {
@@ -3759,7 +3784,7 @@ async function jtSaveSession() {
         note: [b.intensity, b.distance ? b.distance+'km' : '', b.note].filter(Boolean).join(' · '), kg: null, targetReps: 0 }
     });
   });
-  const muscles = [...new Set(jtExercises.map(e => e.muscle.split(',')[0].trim()))];
+  const muscles = sessionMuscles(jtExercises);
   const title = 'Freestyle — ' + muscles.filter(m => m !== 'Cardio').slice(0,2).join(', ') || 'Freestyle';
 
   const {data, error} = await sb.from('sessions').insert({
@@ -4034,15 +4059,28 @@ async function importLib(){
     const muscles=muscleRaw.split(',').map(m=>m.trim()).filter(Boolean);
     return {name, muscle:muscles.join(', ')};
   });
-  const newEx=parsed.filter(e=>!db.library.find(x=>x.name.toLowerCase()===e.name.toLowerCase()));
-  if(!newEx.length){toast('All exercises already in library.','error');return;}
-  const rows=newEx.map(e=>({user_id:currentUser.id,name:e.name,muscle:e.muscle}));
-  const {data:libData,error:libErr}=await sb.from('library').insert(rows).select();
-  if(libErr){dbErr('Library insert',libErr);return;}
-  if(libData){
-    db.library=[...db.library,...libData.map(d=>({id:d.id,name:d.name,muscle:d.muscle}))].sort((a,b)=>a.name.localeCompare(b.name));
-    toast(newEx.length+' exercises added.','ok');
+  const existing = [], newEx = [];
+  parsed.forEach(e => {
+    const match = db.library.find(x => x.name.toLowerCase() === e.name.toLowerCase());
+    if(match) { if((match.muscle||'') !== e.muscle) existing.push({id: match.id, muscle: e.muscle}); }
+    else newEx.push(e);
+  });
+  if(!newEx.length && !existing.length){ toast('Nothing to import — all exercises already match.','error'); return; }
+  if(newEx.length){
+    const rows = newEx.map(e => ({user_id: currentUser.id, name: e.name, muscle: e.muscle}));
+    const {data:libData, error:libErr} = await sb.from('library').insert(rows).select();
+    if(libErr){ dbErr('Library insert', libErr); return; }
+    if(libData) db.library = [...db.library, ...libData.map(d => ({id:d.id, name:d.name, muscle:d.muscle}))];
   }
+  for(const e of existing){
+    const {error:upErr} = await sb.from('library').update({muscle: e.muscle}).eq('id', e.id);
+    if(!upErr){ const ex = db.library.find(x => x.id === e.id); if(ex) ex.muscle = e.muscle; }
+  }
+  db.library.sort((a,b) => a.name.localeCompare(b.name));
+  const msgs = [];
+  if(newEx.length) msgs.push(newEx.length + ' added');
+  if(existing.length) msgs.push(existing.length + ' updated');
+  toast(msgs.join(' \u00b7 ') + '.', 'ok');
   document.getElementById('lib-paste').value='';renderLibrary();
 }
 async function clearLib(){
