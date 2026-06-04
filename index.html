@@ -169,6 +169,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 .set-num { font-size:11px; color:var(--faint); width:36px; flex-shrink:0; }
 .set-w-toggle { width:48px; background:none; border:none; padding:0; font:inherit; font-size:11px; color:var(--faint); cursor:pointer; text-align:left; }
 .set-w-toggle.warm { color:#92600A; font-weight:600; }
+.wu-row { background:rgba(146,96,10,0.07); border-radius:6px; padding:2px 4px; margin-bottom:2px; }
 .ss-group { border-left:3px solid #185FA5; border-radius:6px; background:rgba(24,95,165,0.035); padding:2px 0 2px 10px; margin-bottom:8px; }
 .ss-label { font-size:11px; font-weight:600; color:#185FA5; text-transform:uppercase; letter-spacing:0.05em; padding:6px 0 2px; }
 .ss-badge { font-size:10px; font-weight:600; color:#185FA5; background:rgba(24,95,165,0.1); border-radius:4px; padding:1px 5px; margin-left:6px; }
@@ -1480,8 +1481,12 @@ function renderWorkoutEditor(w, idx) {
       +'<option value="cardio"'+(isCardio?' selected':'')+'>Cardio</option>'
       +'</select></div>'
       +'</div>'
-      +(isCardio?'':'<div class="form-group" style="margin-top:8px;"><label class="form-label">Equipment</label>'
-          +'<select data-ei="'+ei+'" onchange="weUpdateEquipment(parseInt(this.dataset.ei),this.value)">'+equipmentOptions(ex.equipment)+'</select></div>')
+      +(isCardio?'':'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;">'
+          +'<div class="form-group"><label class="form-label">Equipment</label>'
+          +'<select data-ei="'+ei+'" onchange="weUpdateEquipment(parseInt(this.dataset.ei),this.value)">'+equipmentOptions(ex.equipment)+'</select></div>'
+          +'<div class="form-group"><label class="form-label">Superset group</label>'
+          +'<select data-ei="'+ei+'" onchange="weUpdateGroup(parseInt(this.dataset.ei),this.value)">'+builderGroupOptions(ex.group)+'</select></div>'
+          +'</div>')
       +'</div>';
   }).join('');
 
@@ -1513,6 +1518,7 @@ function weUpdateSets(ei, sets) { editingWorkoutExercises[ei].sets = sets; }
 function weUpdateReps(ei, reps) { editingWorkoutExercises[ei].reps = reps; }
 function weUpdateCardio(ei, isCardio) { editingWorkoutExercises[ei].isCardio = isCardio; }
 function weUpdateEquipment(ei, val) { editingWorkoutExercises[ei].equipment = val; }
+function weUpdateGroup(ei, val) { editingWorkoutExercises[ei].group = val||''; }
 
 function weRemoveExercise(ei) {
   editingWorkoutExercises.splice(ei, 1);
@@ -1834,10 +1840,9 @@ function renderLog() {
       // Draft takes priority — user's current input beats last session
       const prefillKg=draftSet&&draftSet.kg?draftSet.kg:(lastSet&&lastSet.kg?lastSet.kg:'');
       const prefillReps=draftSet&&draftSet.reps?draftSet.reps:(lastSet&&lastSet.reps?lastSet.reps:'');
-      const prefillW=draftSet&&draftSet.warmup;
       const kgId='ex-'+ei+'-kg-'+i, repsId='ex-'+ei+'-reps-'+i;
       setRows+='<div class="set-row">';
-      setRows+='<button type="button" class="set-num set-w-toggle'+(prefillW?' warm':'')+'" id="ex-'+ei+'-w-'+i+'" data-w="'+(prefillW?'1':'0')+'" data-n="'+(i+1)+'" title="Tap to mark as a warm-up set" onclick="toggleWarmup(this)">'+(prefillW?'Warm-up':'Set '+(i+1))+'</button>';
+      setRows+='<span class="set-num">Set '+(i+1)+'</span>';
       setRows+='<div class="stepper">'
         +'<button type="button" class="step-btn minus" onclick="stepInput(\''+kgId+'\',-2.5)">\u2212</button>'
         +'<input class="set-inp set-kg" type="number" inputmode="decimal" enterkeyhint="next" id="'+kgId+'" placeholder="kg" value="'+prefillKg+'" step="0.5" min="0" oninput="autosaveDraft()">'
@@ -1878,6 +1883,16 @@ function renderLog() {
       html2+='<div class="set-row"><span class="set-num">Time</span><input class="set-inp" type="number" inputmode="numeric" id="ex-'+ei+'-kg-0" placeholder="min" value="'+cardioDraft+'" style="width:80px;" oninput="autosaveDraft()"></div>';
     } else {
       html2+='<div class="set-head"><span class="set-head-sp"></span><span>weight (kg)</span><span>reps</span><span class="set-head-sp"></span></div>';
+      const wuHidden=ex.wuHidden;
+      const wuKg=ex.wuDraft&&ex.wuDraft.kg?ex.wuDraft.kg:'';
+      const wuReps=ex.wuDraft&&ex.wuDraft.reps?ex.wuDraft.reps:'';
+      html2+='<div class="set-row wu-row" id="ex-'+ei+'-wu-row" style="'+(wuHidden?'display:none;':'')+'">'
+        +'<span class="set-num" style="color:#92600A;font-weight:600;width:48px;">Warm-up</span>'
+        +'<div class="stepper"><button type="button" class="step-btn minus" onclick="stepInput(\'ex-'+ei+'-wu-kg\',-2.5)">\u2212</button><input class="set-inp set-kg" type="number" inputmode="decimal" id="ex-'+ei+'-wu-kg" placeholder="kg" value="'+wuKg+'" step="0.5" min="0" oninput="autosaveDraft()"><button type="button" class="step-btn plus" onclick="stepInput(\'ex-'+ei+'-wu-kg\',2.5)">+</button></div>'
+        +'<div class="stepper"><button type="button" class="step-btn minus" onclick="stepInput(\'ex-'+ei+'-wu-reps\',-1)">\u2212</button><input class="set-inp set-reps" type="number" inputmode="numeric" id="ex-'+ei+'-wu-reps" placeholder="reps" value="'+wuReps+'" min="0" oninput="autosaveDraft()"><button type="button" class="step-btn plus" onclick="stepInput(\'ex-'+ei+'-wu-reps\',1)">+</button></div>'
+        +'<button type="button" class="set-fill" title="Hide warm-up set" onclick="toggleWarmupRow(\'ex-\','+ei+',false)">\u00d7</button>'
+        +'</div>'
+        +'<div id="ex-'+ei+'-wu-add" style="'+(wuHidden?'':'display:none;')+'margin:0 0 6px 48px;"><button type="button" class="btn btn-sm" style="font-size:11px;padding:3px 8px;" onclick="toggleWarmupRow(\'ex-\','+ei+',true)">+ Add warm-up set</button></div>';
       html2+=setRows;
     }
     html2+=cueHtml;
@@ -1919,13 +1934,14 @@ function swapLogExercise(ei,name){
   renderLog();
 }
 
-// Toggle a set between working and warm-up. Warm-ups don't count toward volume/PRs/e1RM.
-function toggleWarmup(btn, autosave){
-  const w = btn.dataset.w === '1' ? '0' : '1';
-  btn.dataset.w = w;
-  if(w === '1'){ btn.textContent = 'Warm-up'; btn.classList.add('warm'); }
-  else { btn.textContent = 'Set ' + (btn.dataset.n || ''); btn.classList.remove('warm'); }
-  if(autosave !== false && typeof autosaveDraft === 'function') autosaveDraft();
+// Show/hide an exercise's dedicated warm-up row (pure DOM, no re-render so input isn't lost).
+function toggleWarmupRow(prefix, ei, show){
+  const row=document.getElementById(prefix+ei+'-wu-row');
+  const add=document.getElementById(prefix+ei+'-wu-add');
+  if(row) row.style.display = show?'':'none';
+  if(add) add.style.display = show?'none':'';
+  if(prefix==='ex-'){ if(db.activeSession&&db.activeSession.exercises[ei]) db.activeSession.exercises[ei].wuHidden=!show; if(typeof autosaveDraft==='function') autosaveDraft(); }
+  else if(prefix==='jt-'){ if(typeof jtExercises!=='undefined'&&jtExercises[ei]) jtExercises[ei].wuHidden=!show; }
 }
 
 // Nudge a numeric input by delta (used by the +/- steppers). Never goes below 0.
@@ -1997,11 +2013,10 @@ async function autosaveDraft(){
     for(let i=0;i<numSets;i++){
       const kg=parseFloat(document.getElementById('ex-'+ei+'-kg-'+i)?.value)||null;
       const reps=parseInt(document.getElementById('ex-'+ei+'-reps-'+i)?.value)||null;
-      const warm=document.getElementById('ex-'+ei+'-w-'+i)?.dataset.w==='1';
-      const set={kg,reps}; if(warm) set.warmup=true;
-      sets.push(set);
+      sets.push({kg,reps});
     }
     ex.draftSets=sets;
+    ex.wuDraft={kg:parseFloat(document.getElementById('ex-'+ei+'-wu-kg')?.value)||null, reps:parseInt(document.getElementById('ex-'+ei+'-wu-reps')?.value)||null};
     ex.savedNote=document.getElementById('ex-'+ei+'-note')?.value||'';
   });
   s.sessionNote=document.getElementById('session-note')?.value||'';
@@ -2030,8 +2045,12 @@ async function saveSession(){
     for(let i=0;i<numSets;i++){
       const kg=parseFloat(document.getElementById('ex-'+ei+'-kg-'+i)?.value)||null;
       const reps=parseInt(document.getElementById('ex-'+ei+'-reps-'+i)?.value)||null;
-      const warm=document.getElementById('ex-'+ei+'-w-'+i)?.dataset.w==='1';
-      if(kg||reps){ const set={kg,reps}; if(warm) set.warmup=true; sets.push(set); }
+      if(kg||reps) sets.push({kg,reps});
+    }
+    if(!ex.wuHidden){
+      const wkg=parseFloat(document.getElementById('ex-'+ei+'-wu-kg')?.value)||null;
+      const wreps=parseInt(document.getElementById('ex-'+ei+'-wu-reps')?.value)||null;
+      if(wkg||wreps) sets.unshift({kg:wkg,reps:wreps,warmup:true});
     }
     const note=document.getElementById('ex-'+ei+'-note')?.value||'';
     ex.loggedSets={sets,note,kg:sets[0]?.kg,targetReps:parseInt(ex.reps)||0};
@@ -3676,13 +3695,21 @@ function jtRenderSession() {
     if(ex.isCardio) {
       setRows = '<div class="set-row"><span class="set-num">Time</span><input class="set-inp" type="number" inputmode="numeric" id="jt-' + ei + '-kg-0" placeholder="min" style="width:80px;"></div>';
     } else {
+      const wuHidden = ex.wuHidden;
+      setRows += '<div class="set-row wu-row" id="jt-' + ei + '-wu-row" style="' + (wuHidden?'display:none;':'') + '">'
+        + '<span class="set-num" style="color:#92600A;font-weight:600;width:48px;">Warm-up</span>'
+        + '<div class="stepper"><button type="button" class="step-btn minus" onclick="stepInput(\'jt-' + ei + '-wu-kg\',-2.5,false)">\u2212</button><input class="set-inp set-kg" type="number" inputmode="decimal" id="jt-' + ei + '-wu-kg" placeholder="kg" step="0.5" min="0"><button type="button" class="step-btn plus" onclick="stepInput(\'jt-' + ei + '-wu-kg\',2.5,false)">+</button></div>'
+        + '<div class="stepper"><button type="button" class="step-btn minus" onclick="stepInput(\'jt-' + ei + '-wu-reps\',-1,false)">\u2212</button><input class="set-inp set-reps" type="number" inputmode="numeric" id="jt-' + ei + '-wu-reps" placeholder="reps" min="0"><button type="button" class="step-btn plus" onclick="stepInput(\'jt-' + ei + '-wu-reps\',1,false)">+</button></div>'
+        + '<button type="button" class="set-fill" title="Hide warm-up set" onclick="toggleWarmupRow(\'jt-\',' + ei + ',false)">\u00d7</button>'
+        + '</div>'
+        + '<div id="jt-' + ei + '-wu-add" style="' + (wuHidden?'':'display:none;') + 'margin:0 0 6px 48px;"><button type="button" class="btn btn-sm" style="font-size:11px;padding:3px 8px;" onclick="toggleWarmupRow(\'jt-\',' + ei + ',true)">+ Add warm-up set</button></div>';
       for(let i = 0; i < ex.sets; i++) {
         const prev_set = prev && prev.sets ? prev.sets[i] : null;
         const prefillKg = prev_set && prev_set.kg ? prev_set.kg : '';
         const prefillReps = prev_set && prev_set.reps ? prev_set.reps : '';
         const kgId = 'jt-' + ei + '-kg-' + i, repsId = 'jt-' + ei + '-reps-' + i;
         setRows += '<div class="set-row">'
-          + '<button type="button" class="set-num set-w-toggle" id="jt-' + ei + '-w-' + i + '" data-w="0" data-n="' + (i+1) + '" title="Tap to mark as a warm-up set" onclick="toggleWarmup(this,false)">Set ' + (i+1) + '</button>'
+          + '<span class="set-num">Set ' + (i+1) + '</span>'
           + '<div class="stepper">'
             + '<button type="button" class="step-btn minus" onclick="stepInput(\'' + kgId + '\',-2.5,false)">\u2212</button>'
             + '<input class="set-inp set-kg" type="number" inputmode="decimal" enterkeyhint="next" id="' + kgId + '" placeholder="kg" value="' + prefillKg + '" step="0.5" min="0">'
@@ -3750,8 +3777,12 @@ async function jtSaveSession() {
       for(let i = 0; i < ex.sets; i++) {
         const kg = parseFloat(document.getElementById('jt-' + ei + '-kg-' + i)?.value) || null;
         const reps = parseInt(document.getElementById('jt-' + ei + '-reps-' + i)?.value) || null;
-        const warm = document.getElementById('jt-' + ei + '-w-' + i)?.dataset.w === '1';
-        if(kg || reps){ const set={kg, reps}; if(warm) set.warmup=true; sets.push(set); }
+        if(kg || reps) sets.push({kg, reps});
+      }
+      if(!ex.wuHidden){
+        const wkg = parseFloat(document.getElementById('jt-' + ei + '-wu-kg')?.value) || null;
+        const wreps = parseInt(document.getElementById('jt-' + ei + '-wu-reps')?.value) || null;
+        if(wkg || wreps) sets.unshift({kg:wkg, reps:wreps, warmup:true});
       }
     }
     const note = document.getElementById('jt-' + ei + '-note')?.value || '';
