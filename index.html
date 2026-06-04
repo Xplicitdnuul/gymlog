@@ -143,10 +143,11 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 
 /* MOBILE */
 @media (max-width: 768px) {
-  .sidebar { position:fixed; left:-220px; top:0; height:100vh; z-index:200; transition:left 0.22s ease; }
+  .sidebar { position:fixed; left:-220px; top:0; height:100vh; z-index:200; transition:left 0.22s ease; padding-top:56px; }
   .sidebar.open { left:0; }
+  .sidebar .logo { display:none; }
   .main { margin-left:0 !important; }
-  .page { padding:20px 16px 80px; }
+  .page { padding:60px 16px 80px; }
   .metric-grid { grid-template-columns:1fr 1fr; }
   .form-2,.form-3,.form-4 { grid-template-columns:1fr; }
   #muscle-settings-list > div { grid-template-columns:1fr 1fr !important; }
@@ -162,8 +163,11 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 }
 .overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.35); z-index:199; }
 .overlay.show { display:block; }
-.hamburger { display:none; position:fixed; top:14px; left:14px; z-index:300; background:var(--surface); border:0.5px solid var(--border-md); border-radius:var(--radius-sm); padding:7px 10px; cursor:pointer; font-size:18px; line-height:1; }
-@media (max-width:768px) { .hamburger { display:block; } .app { flex-direction:column; } }
+.topbar { display:none; }
+.topbar-title { font-family:var(--font-display); font-size:18px; letter-spacing:-0.3px; cursor:pointer; }
+.topbar-title span { font-style:italic; }
+.hamburger { background:none; border:none; cursor:pointer; font-size:22px; line-height:1; padding:6px 10px; color:var(--text); }
+@media (max-width:768px) { .hamburger { display:block; } .app { flex-direction:column; } .topbar { display:flex; align-items:center; gap:6px; position:fixed; top:0; left:0; right:0; height:48px; padding:0 8px; background:var(--surface); border-bottom:0.5px solid var(--border); z-index:300; } }
 
 .set-row { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
 .set-num { font-size:11px; color:var(--faint); width:48px; flex-shrink:0; white-space:nowrap; }
@@ -281,7 +285,10 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 
 <!-- APP -->
 <div class="app" id="app">
-  <button class="hamburger" onclick="toggleSidebar()" id="hamburger">☰</button>
+  <div class="topbar">
+    <button class="hamburger" onclick="toggleSidebar()" id="hamburger" aria-label="Menu">☰</button>
+    <div class="topbar-title" onclick="showPage('overview')">Gym<span>log</span></div>
+  </div>
   <div class="overlay" id="overlay" onclick="closeSidebar()"></div>
   <aside class="sidebar">
     <div class="logo" onclick="showPage('overview')" style="cursor:pointer;">Gym<span>log</span></div>
@@ -1064,6 +1071,10 @@ function equipmentOptions(cur){
   cur=cur||'';
   return '<option value="">Equipment…</option>'+EQUIPMENT.map(e=>'<option value="'+e+'"'+(e===cur?' selected':'')+'>'+e+'</option>').join('');
 }
+// +/- weight increment by equipment: dumbbells & kettlebells go up in 2 kg, everything else 2.5.
+function weightStep(equipment){
+  return (equipment==='Dumbbell'||equipment==='Kettlebell') ? 2 : 2.5;
+}
 // Most recent equipment the user logged for a given movement (for pre-selecting).
 function lastEquipmentFor(name){
   for(let i=db.sessions.length-1;i>=0;i--){
@@ -1810,6 +1821,17 @@ function renderLog() {
     gi=gj;
   }
 
+  // Default collapse state: everything collapsed except the first unit (first exercise,
+  // or the whole first superset group if exercise 0 is grouped). Persisted per-exercise
+  // via ex.collapsed once the user toggles, so a re-render (e.g. after a swap) keeps state.
+  const expandSet=new Set();
+  if(s.exercises.length){
+    const g0=s.exercises[0].group||'';
+    let end0=0;
+    if(g0){ while(end0<s.exercises.length-1 && (s.exercises[end0+1].group||'')===g0) end0++; }
+    for(let k=0;k<=end0;k++) expandSet.add(k);
+  }
+
   s.exercises.forEach((ex,ei)=>{
     if(!ex.isCardio) ex.equipment = ex.equipment || lastEquipmentFor(ex.name) || '';
     const prev=getPrevData(ex.name, ex.equipment);
@@ -1833,6 +1855,7 @@ function renderLog() {
     }
 
     // Set rows — prefer draft data if resuming, else pre-fill from last session
+    const wStep=weightStep(ex.equipment);
     let setRows='';
     for(let i=0;i<numSets;i++){
       const draftSet=ex.draftSets?ex.draftSets[i]:null;
@@ -1844,9 +1867,9 @@ function renderLog() {
       setRows+='<div class="set-row">';
       setRows+='<span class="set-num">Set '+(i+1)+'</span>';
       setRows+='<div class="stepper">'
-        +'<button type="button" class="step-btn minus" onclick="stepInput(\''+kgId+'\',-2.5)">\u2212</button>'
-        +'<input class="set-inp set-kg" type="number" inputmode="decimal" enterkeyhint="next" id="'+kgId+'" placeholder="kg" value="'+prefillKg+'" step="0.5" min="0" oninput="autosaveDraft()">'
-        +'<button type="button" class="step-btn plus" onclick="stepInput(\''+kgId+'\',2.5)">+</button>'
+        +'<button type="button" class="step-btn minus" onclick="stepInput(\''+kgId+'\',-'+wStep+')">\u2212</button>'
+        +'<input class="set-inp set-kg" type="number" inputmode="decimal" enterkeyhint="next" id="'+kgId+'" placeholder="kg" value="'+prefillKg+'" step="'+wStep+'" min="0" oninput="autosaveDraft()">'
+        +'<button type="button" class="step-btn plus" onclick="stepInput(\''+kgId+'\','+wStep+')">+</button>'
         +'</div>';
       setRows+='<div class="stepper">'
         +'<button type="button" class="step-btn minus" onclick="stepInput(\''+repsId+'\',-1)">\u2212</button>'
@@ -1864,12 +1887,13 @@ function renderLog() {
       :'';
 
     if(groupInfo[ei] && groupInfo[ei].isStart) html2+='<div class="ss-group"><div class="ss-label">'+groupInfo[ei].label+'</div>';
+    const exExpanded = (ex.collapsed===undefined) ? expandSet.has(ei) : !ex.collapsed;
     html2+='<div class="ex-block">';
     html2+='<div class="ex-head" onclick="toggleExBlock('+ei+')">';
     html2+='<span style="font-size:14px;font-weight:500;">'+ex.name+'</span>';
-    html2+='<span style="display:flex;align-items:center;gap:8px;"><span class="'+(ex.isCardio?'tag-cardio':ex.isRepeat?'tag-repeat':'tag-new')+'">'+(ex.isCardio?'cardio':ex.isRepeat?'repeated':'fresh pick')+'</span><span class="ex-caret" id="excaret-'+ei+'" style="color:var(--faint);font-size:13px;">\u25be</span></span>';
+    html2+='<span style="display:flex;align-items:center;gap:8px;"><span class="'+(ex.isCardio?'tag-cardio':ex.isRepeat?'tag-repeat':'tag-new')+'">'+(ex.isCardio?'cardio':ex.isRepeat?'repeated':'fresh pick')+'</span><span class="ex-caret" id="excaret-'+ei+'" style="color:var(--faint);font-size:13px;">'+(exExpanded?'\u25be':'\u25b8')+'</span></span>';
     html2+='</div>';
-    html2+='<div class="ex-body" id="exbody-'+ei+'">';
+    html2+='<div class="ex-body" id="exbody-'+ei+'"'+(exExpanded?'':' style="display:none;"')+'>';
     html2+='<div style="font-size:12px;color:var(--muted);margin-bottom:8px;">'+(ex.isCardio?ex.muscle+' &middot; '+ex.reps:ex.muscle+' &middot; target '+numSets+' sets &times; '+ex.reps)+'</div>';
     if(!ex.isCardio){
       html2+='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">'
@@ -1888,7 +1912,7 @@ function renderLog() {
       const wuReps=ex.wuDraft&&ex.wuDraft.reps?ex.wuDraft.reps:'';
       html2+='<div class="set-row wu-row" id="ex-'+ei+'-wu-row" style="'+(wuHidden?'display:none;':'')+'">'
         +'<span class="set-num" style="color:#92600A;font-weight:600;width:48px;">Warm-up</span>'
-        +'<div class="stepper"><button type="button" class="step-btn minus" onclick="stepInput(\'ex-'+ei+'-wu-kg\',-2.5)">\u2212</button><input class="set-inp set-kg" type="number" inputmode="decimal" id="ex-'+ei+'-wu-kg" placeholder="kg" value="'+wuKg+'" step="0.5" min="0" oninput="autosaveDraft()"><button type="button" class="step-btn plus" onclick="stepInput(\'ex-'+ei+'-wu-kg\',2.5)">+</button></div>'
+        +'<div class="stepper"><button type="button" class="step-btn minus" onclick="stepInput(\'ex-'+ei+'-wu-kg\',-'+wStep+')">\u2212</button><input class="set-inp set-kg" type="number" inputmode="decimal" id="ex-'+ei+'-wu-kg" placeholder="kg" value="'+wuKg+'" step="'+wStep+'" min="0" oninput="autosaveDraft()"><button type="button" class="step-btn plus" onclick="stepInput(\'ex-'+ei+'-wu-kg\','+wStep+')">+</button></div>'
         +'<div class="stepper"><button type="button" class="step-btn minus" onclick="stepInput(\'ex-'+ei+'-wu-reps\',-1)">\u2212</button><input class="set-inp set-reps" type="number" inputmode="numeric" id="ex-'+ei+'-wu-reps" placeholder="reps" value="'+wuReps+'" min="0" oninput="autosaveDraft()"><button type="button" class="step-btn plus" onclick="stepInput(\'ex-'+ei+'-wu-reps\',1)">+</button></div>'
         +'<button type="button" class="set-fill" title="Hide warm-up set" onclick="toggleWarmupRow(\'ex-\','+ei+',false)">\u00d7</button>'
         +'</div>'
@@ -1914,6 +1938,7 @@ function setLogEquipment(ei,val){
   if(db.activeSession&&db.activeSession.exercises[ei]){
     db.activeSession.exercises[ei].equipment=val;
     autosaveDraft();
+    renderLog();
   }
 }
 
@@ -1970,13 +1995,31 @@ function fillDown(ei, fromIndex){
 }
 
 // Collapse / expand a single exercise on the Log screen (pure DOM toggle — no re-render, so typed values are never lost).
+// Indices that collapse/expand together: the consecutive run of exercises sharing a
+// superset group. A lone or ungrouped exercise returns just itself.
+function logGroupMembers(ei){
+  const exs = db.activeSession ? db.activeSession.exercises : [];
+  if(!exs[ei]) return [ei];
+  const g = exs[ei].group||'';
+  if(!g) return [ei];
+  let start=ei; while(start>0 && (exs[start-1].group||'')===g) start--;
+  let end=ei; while(end<exs.length-1 && (exs[end+1].group||'')===g) end++;
+  if(end===start) return [ei];
+  const members=[]; for(let k=start;k<=end;k++) members.push(k);
+  return members;
+}
+
 function toggleExBlock(ei){
-  const b=document.getElementById('exbody-'+ei);
-  const c=document.getElementById('excaret-'+ei);
-  if(!b) return;
-  const collapsed=b.style.display==='none';
-  b.style.display=collapsed?'':'none';
-  if(c) c.textContent=collapsed?'\u25be':'\u25b8';
+  const b0=document.getElementById('exbody-'+ei);
+  if(!b0) return;
+  const show=b0.style.display==='none'; // currently collapsed -> expand (and vice-versa)
+  logGroupMembers(ei).forEach(m=>{
+    const b=document.getElementById('exbody-'+m);
+    const c=document.getElementById('excaret-'+m);
+    if(b) b.style.display=show?'':'none';
+    if(c) c.textContent=show?'\u25be':'\u25b8';
+    if(db.activeSession && db.activeSession.exercises[m]) db.activeSession.exercises[m].collapsed=!show;
+  });
 }
 
 function toggleCue(id){
@@ -3696,9 +3739,10 @@ function jtRenderSession() {
       setRows = '<div class="set-row"><span class="set-num">Time</span><input class="set-inp" type="number" inputmode="numeric" id="jt-' + ei + '-kg-0" placeholder="min" style="width:80px;"></div>';
     } else {
       const wuHidden = ex.wuHidden;
+      const wStep = weightStep(ex.equipment);
       setRows += '<div class="set-row wu-row" id="jt-' + ei + '-wu-row" style="' + (wuHidden?'display:none;':'') + '">'
         + '<span class="set-num" style="color:#92600A;font-weight:600;width:48px;">Warm-up</span>'
-        + '<div class="stepper"><button type="button" class="step-btn minus" onclick="stepInput(\'jt-' + ei + '-wu-kg\',-2.5,false)">\u2212</button><input class="set-inp set-kg" type="number" inputmode="decimal" id="jt-' + ei + '-wu-kg" placeholder="kg" step="0.5" min="0"><button type="button" class="step-btn plus" onclick="stepInput(\'jt-' + ei + '-wu-kg\',2.5,false)">+</button></div>'
+        + '<div class="stepper"><button type="button" class="step-btn minus" onclick="stepInput(\'jt-' + ei + '-wu-kg\',-' + wStep + ',false)">\u2212</button><input class="set-inp set-kg" type="number" inputmode="decimal" id="jt-' + ei + '-wu-kg" placeholder="kg" step="' + wStep + '" min="0"><button type="button" class="step-btn plus" onclick="stepInput(\'jt-' + ei + '-wu-kg\',' + wStep + ',false)">+</button></div>'
         + '<div class="stepper"><button type="button" class="step-btn minus" onclick="stepInput(\'jt-' + ei + '-wu-reps\',-1,false)">\u2212</button><input class="set-inp set-reps" type="number" inputmode="numeric" id="jt-' + ei + '-wu-reps" placeholder="reps" min="0"><button type="button" class="step-btn plus" onclick="stepInput(\'jt-' + ei + '-wu-reps\',1,false)">+</button></div>'
         + '<button type="button" class="set-fill" title="Hide warm-up set" onclick="toggleWarmupRow(\'jt-\',' + ei + ',false)">\u00d7</button>'
         + '</div>'
@@ -3711,9 +3755,9 @@ function jtRenderSession() {
         setRows += '<div class="set-row">'
           + '<span class="set-num">Set ' + (i+1) + '</span>'
           + '<div class="stepper">'
-            + '<button type="button" class="step-btn minus" onclick="stepInput(\'' + kgId + '\',-2.5,false)">\u2212</button>'
-            + '<input class="set-inp set-kg" type="number" inputmode="decimal" enterkeyhint="next" id="' + kgId + '" placeholder="kg" value="' + prefillKg + '" step="0.5" min="0">'
-            + '<button type="button" class="step-btn plus" onclick="stepInput(\'' + kgId + '\',2.5,false)">+</button>'
+            + '<button type="button" class="step-btn minus" onclick="stepInput(\'' + kgId + '\',-' + wStep + ',false)">\u2212</button>'
+            + '<input class="set-inp set-kg" type="number" inputmode="decimal" enterkeyhint="next" id="' + kgId + '" placeholder="kg" value="' + prefillKg + '" step="' + wStep + '" min="0">'
+            + '<button type="button" class="step-btn plus" onclick="stepInput(\'' + kgId + '\',' + wStep + ',false)">+</button>'
             + '</div>'
           + '<div class="stepper">'
             + '<button type="button" class="step-btn minus" onclick="stepInput(\'' + repsId + '\',-1,false)">\u2212</button>'
