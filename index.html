@@ -167,6 +167,11 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 
 .set-row { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
 .set-num { font-size:11px; color:var(--faint); width:36px; flex-shrink:0; }
+.set-w-toggle { width:48px; background:none; border:none; padding:0; font:inherit; font-size:11px; color:var(--faint); cursor:pointer; text-align:left; }
+.set-w-toggle.warm { color:#92600A; font-weight:600; }
+.ss-group { border-left:3px solid #185FA5; border-radius:6px; background:rgba(24,95,165,0.035); padding:2px 0 2px 10px; margin-bottom:8px; }
+.ss-label { font-size:11px; font-weight:600; color:#185FA5; text-transform:uppercase; letter-spacing:0.05em; padding:6px 0 2px; }
+.ss-badge { font-size:10px; font-weight:600; color:#185FA5; background:rgba(24,95,165,0.1); border-radius:4px; padding:1px 5px; margin-left:6px; }
 .set-kg { width:72px; }
 .set-reps { width:68px; }
 .set-prev { font-size:11px; color:var(--faint); white-space:nowrap; }
@@ -1761,7 +1766,7 @@ function getPrevData(name, equipment){
     const s=db.sessions[i];
     if(!s.exercises) continue;
     const ex=s.exercises.find(e=>e.name===name&&(e.equipment||'')===eq&&e.loggedSets&&e.loggedSets.sets&&e.loggedSets.sets.length);
-    if(ex) return ex.loggedSets;
+    if(ex) return {...ex.loggedSets, sets: ex.loggedSets.sets.filter(st=>!st.warmup)};
   }
   return null;
 }
@@ -1782,6 +1787,22 @@ function renderLog() {
   if(isDraft) html2+='<div class="draft-banner"><span>Autosaved draft — your progress is safe.</span></div>';
   html2+='<div style="margin-bottom:10px;"><button class="btn btn-sm" style="border-color:#9FE1CB;color:#0F6E56;background:#E1F5EE;" onclick="addCardioBlock()">+ Add cardio</button></div>';
   html2+='<div id="cardio-blocks"></div>';
+
+  const swapOpts = '<option value="">Swap exercise\u2026</option>' + (db.library||[]).slice().sort((a,b)=>a.name.localeCompare(b.name)).map(l=>'<option value="'+l.name.replace(/"/g,'&quot;')+'">'+l.name.replace(/</g,'&lt;')+'</option>').join('');
+
+  // Detect runs of consecutive exercises sharing a superset group (light display only — each still logs normally)
+  const groupInfo = [];
+  for(let gi=0; gi<s.exercises.length;){
+    const g = s.exercises[gi].group||'';
+    if(!g){ groupInfo[gi]=null; gi++; continue; }
+    let gj=gi; while(gj<s.exercises.length && (s.exercises[gj].group||'')===g) gj++;
+    const len=gj-gi;
+    if(len>=2){
+      const label = len===2?'Superset':len===3?'Tri-set':'Giant set / circuit';
+      for(let k=gi;k<gj;k++) groupInfo[k]={label, isStart:k===gi, isEnd:k===gj-1};
+    } else { groupInfo[gi]=null; }
+    gi=gj;
+  }
 
   s.exercises.forEach((ex,ei)=>{
     if(!ex.isCardio) ex.equipment = ex.equipment || lastEquipmentFor(ex.name) || '';
@@ -1813,9 +1834,10 @@ function renderLog() {
       // Draft takes priority — user's current input beats last session
       const prefillKg=draftSet&&draftSet.kg?draftSet.kg:(lastSet&&lastSet.kg?lastSet.kg:'');
       const prefillReps=draftSet&&draftSet.reps?draftSet.reps:(lastSet&&lastSet.reps?lastSet.reps:'');
+      const prefillW=draftSet&&draftSet.warmup;
       const kgId='ex-'+ei+'-kg-'+i, repsId='ex-'+ei+'-reps-'+i;
       setRows+='<div class="set-row">';
-      setRows+='<span class="set-num">Set '+(i+1)+'</span>';
+      setRows+='<button type="button" class="set-num set-w-toggle'+(prefillW?' warm':'')+'" id="ex-'+ei+'-w-'+i+'" data-w="'+(prefillW?'1':'0')+'" data-n="'+(i+1)+'" title="Tap to mark as a warm-up set" onclick="toggleWarmup(this)">'+(prefillW?'Warm-up':'Set '+(i+1))+'</button>';
       setRows+='<div class="stepper">'
         +'<button type="button" class="step-btn minus" onclick="stepInput(\''+kgId+'\',-2.5)">\u2212</button>'
         +'<input class="set-inp set-kg" type="number" inputmode="decimal" enterkeyhint="next" id="'+kgId+'" placeholder="kg" value="'+prefillKg+'" step="0.5" min="0" oninput="autosaveDraft()">'
@@ -1836,6 +1858,7 @@ function renderLog() {
       ?'<button class="cue-toggle" onclick="toggleCue('+('cue-'+ei)+')">▸ Form cue</button><div class="cue-body" id="cue-'+ei+'">'+cue+'</div>'
       :'';
 
+    if(groupInfo[ei] && groupInfo[ei].isStart) html2+='<div class="ss-group"><div class="ss-label">'+groupInfo[ei].label+'</div>';
     html2+='<div class="ex-block">';
     html2+='<div class="ex-head" onclick="toggleExBlock('+ei+')">';
     html2+='<span style="font-size:14px;font-weight:500;">'+ex.name+'</span>';
@@ -1844,7 +1867,10 @@ function renderLog() {
     html2+='<div class="ex-body" id="exbody-'+ei+'">';
     html2+='<div style="font-size:12px;color:var(--muted);margin-bottom:8px;">'+(ex.isCardio?ex.muscle+' &middot; '+ex.reps:ex.muscle+' &middot; target '+numSets+' sets &times; '+ex.reps)+'</div>';
     if(!ex.isCardio){
-      html2+='<div style="margin-bottom:8px;"><select class="set-inp" data-ei="'+ei+'" onchange="setLogEquipment(parseInt(this.dataset.ei),this.value)" style="width:auto;min-width:150px;font-size:12px;padding:5px 8px;">'+equipmentOptions(ex.equipment)+'</select></div>';
+      html2+='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">'
+        +'<select class="set-inp" data-ei="'+ei+'" onchange="setLogEquipment(parseInt(this.dataset.ei),this.value)" style="width:auto;min-width:140px;font-size:12px;padding:5px 8px;">'+equipmentOptions(ex.equipment)+'</select>'
+        +'<select class="set-inp" data-ei="'+ei+'" onchange="swapLogExercise(parseInt(this.dataset.ei),this.value)" style="width:auto;min-width:140px;font-size:12px;padding:5px 8px;color:var(--muted);">'+swapOpts+'</select>'
+        +'</div>';
     }
     html2+=banner;
     if(ex.isCardio){
@@ -1858,6 +1884,7 @@ function renderLog() {
     html2+='<input class="note-inp" type="text" id="ex-'+ei+'-note" placeholder="Note for this exercise..." value="'+( ex.savedNote||'')+'" oninput="autosaveDraft()">';
     html2+='</div>';
     html2+='</div>';
+    if(groupInfo[ei] && groupInfo[ei].isEnd) html2+='</div>';
   });
 
   html2+='</div>';
@@ -1873,6 +1900,32 @@ function setLogEquipment(ei,val){
     db.activeSession.exercises[ei].equipment=val;
     autosaveDraft();
   }
+}
+
+// Swap a planned exercise for any library exercise mid-session. Keeps the slot's set/rep
+// target and superset group; clears prior input since it's a different movement.
+function swapLogExercise(ei,name){
+  if(!db.activeSession||!name) return;
+  const ex=db.activeSession.exercises[ei];
+  if(!ex) return;
+  const lib=db.library.find(l=>l.name===name);
+  ex.name=name;
+  if(lib) ex.muscle=lib.muscle;
+  ex.equipment=lastEquipmentFor(name)||'';
+  ex.isRepeat=false;
+  delete ex.draftSets;
+  delete ex.loggedSets;
+  autosaveDraft();
+  renderLog();
+}
+
+// Toggle a set between working and warm-up. Warm-ups don't count toward volume/PRs/e1RM.
+function toggleWarmup(btn, autosave){
+  const w = btn.dataset.w === '1' ? '0' : '1';
+  btn.dataset.w = w;
+  if(w === '1'){ btn.textContent = 'Warm-up'; btn.classList.add('warm'); }
+  else { btn.textContent = 'Set ' + (btn.dataset.n || ''); btn.classList.remove('warm'); }
+  if(autosave !== false && typeof autosaveDraft === 'function') autosaveDraft();
 }
 
 // Nudge a numeric input by delta (used by the +/- steppers). Never goes below 0.
@@ -1944,7 +1997,9 @@ async function autosaveDraft(){
     for(let i=0;i<numSets;i++){
       const kg=parseFloat(document.getElementById('ex-'+ei+'-kg-'+i)?.value)||null;
       const reps=parseInt(document.getElementById('ex-'+ei+'-reps-'+i)?.value)||null;
-      sets.push({kg,reps});
+      const warm=document.getElementById('ex-'+ei+'-w-'+i)?.dataset.w==='1';
+      const set={kg,reps}; if(warm) set.warmup=true;
+      sets.push(set);
     }
     ex.draftSets=sets;
     ex.savedNote=document.getElementById('ex-'+ei+'-note')?.value||'';
@@ -1975,7 +2030,8 @@ async function saveSession(){
     for(let i=0;i<numSets;i++){
       const kg=parseFloat(document.getElementById('ex-'+ei+'-kg-'+i)?.value)||null;
       const reps=parseInt(document.getElementById('ex-'+ei+'-reps-'+i)?.value)||null;
-      if(kg||reps) sets.push({kg,reps});
+      const warm=document.getElementById('ex-'+ei+'-w-'+i)?.dataset.w==='1';
+      if(kg||reps){ const set={kg,reps}; if(warm) set.warmup=true; sets.push(set); }
     }
     const note=document.getElementById('ex-'+ei+'-note')?.value||'';
     ex.loggedSets={sets,note,kg:sets[0]?.kg,targetReps:parseInt(ex.reps)||0};
@@ -2104,12 +2160,18 @@ function sessionMuscles(exercises){
   return [...set];
 }
 
+// Working (non-warm-up) logged sets for an exercise. Warm-ups are excluded from
+// all volume / PR / e1RM calculations so they don't inflate progress numbers.
+function workingSets(ex){
+  const sets = (ex && ex.loggedSets && ex.loggedSets.sets) || (ex && ex.draftSets) || [];
+  return sets.filter(st => st && !st.warmup);
+}
+
 function calcVolume(exercises) {
   let v = 0;
   (exercises||[]).forEach(ex => {
     if(ex.isCardio) return;
-    const sets = ex.loggedSets?.sets || ex.draftSets || [];
-    sets.forEach(st => {
+    workingSets(ex).forEach(st => {
       if(st && st.kg && st.reps) v += st.kg * st.reps;
     });
   });
@@ -2481,11 +2543,11 @@ function renderStrengthChart(sessions) {
       // Store ISO date for correct sorting, display label separately
       const isoDate = s.date.split('T')[0];
       if(strengthMode === 'weight') {
-        const maxKg = Math.max(...ex.loggedSets.sets.filter(st => st.kg).map(st => st.kg));
+        const maxKg = Math.max(...workingSets(ex).filter(st => st.kg).map(st => st.kg), 0);
         if(maxKg > 0) pts.push({ iso: isoDate, display: fmt(s.date), y: maxKg });
       } else if(strengthMode === 'e1rm') {
-        // Epley estimated 1-rep max: weight × (1 + reps/30), best set in the session
-        const e1 = Math.max(...ex.loggedSets.sets.filter(st => st.kg && st.reps).map(st => st.kg * (1 + st.reps/30)), 0);
+        // Epley estimated 1-rep max: weight × (1 + reps/30), best working set in the session
+        const e1 = Math.max(...workingSets(ex).filter(st => st.kg && st.reps).map(st => st.kg * (1 + st.reps/30)), 0);
         if(e1 > 0) pts.push({ iso: isoDate, display: fmt(s.date), y: Math.round(e1*10)/10 });
       } else {
         const vol = calcVolume([ex]);
@@ -2587,17 +2649,26 @@ function renderBuilderList(){
   el.innerHTML = builderExercises.map((ex,i)=>
     '<div style="display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:0.5px solid var(--border);">'
     +'<div>'
-    +'<div style="font-size:13px;font-weight:500;">'+ex.name+'</div>'
+    +'<div style="font-size:13px;font-weight:500;">'+ex.name+(ex.group?'<span class="ss-badge">SS '+ex.group+'</span>':'')+'</div>'
     +'<div style="font-size:11px;color:var(--muted);">'+ex.muscle+' &middot; '+ex.sets+' sets &times; '+ex.reps+'</div>'
     +(ex.isCardio?'':'<select data-i="'+i+'" onchange="builderUpdateEquipment(parseInt(this.dataset.i),this.value)" style="margin-top:5px;width:auto;min-width:140px;font-size:11px;padding:4px 7px;border:0.5px solid var(--border-md);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);font-family:var(--font);">'+equipmentOptions(ex.equipment)+'</select>')
     +'</div>'
     +'<div style="display:flex;gap:8px;align-items:center;">'
+    +(ex.isCardio?'':'<select data-i="'+i+'" title="Group with adjacent exercises as a superset" onchange="setBuilderGroup(parseInt(this.dataset.i),this.value)" style="width:auto;font-size:11px;padding:3px 5px;border:0.5px solid var(--border-md);border-radius:var(--radius-sm);background:var(--surface);color:var(--muted);font-family:var(--font);">'+builderGroupOptions(ex.group)+'</select>')
     +'<button onclick="builderMoveUp('+i+')" style="background:none;border:0.5px solid var(--border);border-radius:4px;padding:2px 7px;cursor:pointer;color:var(--muted);">↑</button>'
     +'<button onclick="builderMoveDown('+i+')" style="background:none;border:0.5px solid var(--border);border-radius:4px;padding:2px 7px;cursor:pointer;color:var(--muted);">↓</button>'
     +'<button onclick="builderRemove('+i+')" style="background:none;border:none;cursor:pointer;color:var(--faint);font-size:16px;">×</button>'
     +'</div>'
     +'</div>'
   ).join('');
+}
+
+function builderGroupOptions(cur){
+  return '<option value="">solo</option>' + ['A','B','C','D','E'].map(g=>'<option value="'+g+'"'+((cur||'')===g?' selected':'')+'>SS '+g+'</option>').join('');
+}
+function setBuilderGroup(i,val){
+  if(builderExercises[i]) builderExercises[i].group = val||'';
+  renderBuilderList();
 }
 
 function builderUpdateEquipment(i,val){
@@ -3306,14 +3377,14 @@ function isPRSession(s) {
   const exercises = safeJSON(s.exercises, []);
   return exercises.some(ex => {
     if(ex.isCardio || !ex.loggedSets?.sets?.length) return false;
-    const maxKg = Math.max(...ex.loggedSets.sets.filter(st => st.kg).map(st => st.kg || 0));
+    const maxKg = Math.max(...workingSets(ex).filter(st => st.kg).map(st => st.kg || 0), 0);
     if(!maxKg) return false;
     const allPrev = db.sessions
       .filter(prev => new Date(prev.date) < new Date(s.date))
       .flatMap(prev => safeJSON(prev.exercises, []))
       .filter(e => e.name === ex.name && (e.equipment||'')===(ex.equipment||'') && e.loggedSets?.sets?.length);
     const prevMax = allPrev.length
-      ? Math.max(...allPrev.flatMap(e => e.loggedSets.sets.filter(st => st.kg).map(st => st.kg || 0)))
+      ? Math.max(...allPrev.flatMap(e => workingSets(e).filter(st => st.kg).map(st => st.kg || 0)), 0)
       : 0;
     return maxKg > prevMax;
   });
@@ -3611,7 +3682,7 @@ function jtRenderSession() {
         const prefillReps = prev_set && prev_set.reps ? prev_set.reps : '';
         const kgId = 'jt-' + ei + '-kg-' + i, repsId = 'jt-' + ei + '-reps-' + i;
         setRows += '<div class="set-row">'
-          + '<span class="set-num">Set ' + (i+1) + '</span>'
+          + '<button type="button" class="set-num set-w-toggle" id="jt-' + ei + '-w-' + i + '" data-w="0" data-n="' + (i+1) + '" title="Tap to mark as a warm-up set" onclick="toggleWarmup(this,false)">Set ' + (i+1) + '</button>'
           + '<div class="stepper">'
             + '<button type="button" class="step-btn minus" onclick="stepInput(\'' + kgId + '\',-2.5,false)">\u2212</button>'
             + '<input class="set-inp set-kg" type="number" inputmode="decimal" enterkeyhint="next" id="' + kgId + '" placeholder="kg" value="' + prefillKg + '" step="0.5" min="0">'
@@ -3679,7 +3750,8 @@ async function jtSaveSession() {
       for(let i = 0; i < ex.sets; i++) {
         const kg = parseFloat(document.getElementById('jt-' + ei + '-kg-' + i)?.value) || null;
         const reps = parseInt(document.getElementById('jt-' + ei + '-reps-' + i)?.value) || null;
-        if(kg || reps) sets.push({kg, reps});
+        const warm = document.getElementById('jt-' + ei + '-w-' + i)?.dataset.w === '1';
+        if(kg || reps){ const set={kg, reps}; if(warm) set.warmup=true; sets.push(set); }
       }
     }
     const note = document.getElementById('jt-' + ei + '-note')?.value || '';
