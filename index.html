@@ -157,7 +157,9 @@ html.mobile-layout input, html.mobile-layout select, html.mobile-layout textarea
 html.mobile-layout .set-inp, html.mobile-layout .note-inp { font-size:17px; }
 html.mobile-layout .set-inp { height:56px; }
 html.mobile-layout .step-btn, html.mobile-layout .set-fill { height:56px; }
-html.mobile-layout .step-btn { width:38px; font-size:24px; }
+html.mobile-layout .step-btn { width:34px; font-size:22px; }
+html.mobile-layout .stepper .set-inp { min-width:32px; }
+html.mobile-layout .set-row, html.mobile-layout .set-head { gap:6px; }
 html.mobile-layout .set-head > span:not(.set-head-sp) { font-size:12px; }
 html.mobile-layout .set-row { margin-bottom:12px; }
 html.mobile-layout .wu-row { padding:6px 0; }
@@ -1917,9 +1919,9 @@ function renderLog() {
     html2+='<div class="ex-body" id="exbody-'+ei+'"'+(exExpanded?'':' style="display:none;"')+'>';
     html2+='<div style="font-size:12px;color:var(--muted);margin-bottom:8px;">'+(ex.isCardio?ex.muscle+' &middot; '+ex.reps:ex.muscle+' &middot; target '+numSets+' sets &times; '+ex.reps)+'</div>';
     if(!ex.isCardio){
-      html2+='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">'
-        +'<select class="set-inp" data-ei="'+ei+'" onchange="setLogEquipment(parseInt(this.dataset.ei),this.value)" style="width:auto;min-width:140px;font-size:12px;padding:5px 8px;">'+equipmentOptions(ex.equipment)+'</select>'
-        +'<select class="set-inp" data-ei="'+ei+'" onchange="swapLogExercise(parseInt(this.dataset.ei),this.value)" style="width:auto;min-width:140px;font-size:12px;padding:5px 8px;color:var(--muted);">'+swapOpts+'</select>'
+      html2+='<div style="display:flex;gap:8px;margin-bottom:8px;">'
+        +'<select class="set-inp" data-ei="'+ei+'" onchange="setLogEquipment(parseInt(this.dataset.ei),this.value)" style="flex:1;min-width:0;width:auto;font-size:12px;padding:5px 8px;">'+equipmentOptions(ex.equipment)+'</select>'
+        +'<select class="set-inp" data-ei="'+ei+'" onchange="swapLogExercise(parseInt(this.dataset.ei),this.value)" style="flex:1;min-width:0;width:auto;font-size:12px;padding:5px 8px;color:var(--muted);">'+swapOpts+'</select>'
         +'</div>';
     }
     html2+=banner;
