@@ -142,32 +142,32 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--text);}
 #toast.ok { background:#2E7D32; }
 
 /* MOBILE */
-@media (max-width: 768px) {
-  .sidebar { position:fixed; left:-220px; top:0; height:100vh; z-index:200; transition:left 0.22s ease; padding-top:56px; }
-  .sidebar.open { left:0; }
-  .sidebar .logo { display:none; }
-  .main { margin-left:0 !important; }
-  .page { padding:60px 16px 80px; }
-  .metric-grid { grid-template-columns:1fr 1fr; }
-  .form-2,.form-3,.form-4 { grid-template-columns:1fr; }
-  #muscle-settings-list > div { grid-template-columns:1fr 1fr !important; }
-  input, select, textarea { font-size:16px; }
-  .set-inp, .note-inp { font-size:16px; }
-  .set-inp { height:44px; }
-  .step-btn, .set-fill { height:44px; }
-  .step-btn { width:38px; }
-  #progress-metrics { grid-template-columns:1fr 1fr !important; }
-  .prog-2col { grid-template-columns:1fr !important; }
-  #overview-metrics { grid-template-columns:1fr 1fr !important; }
-  .ov-2col { grid-template-columns:1fr !important; }
-}
+html.mobile-layout .sidebar { position:fixed; left:-220px; top:0; height:100vh; z-index:200; transition:left 0.22s ease; padding-top:56px; }
+html.mobile-layout .sidebar.open { left:0; }
+html.mobile-layout .sidebar .logo { display:none; }
+html.mobile-layout .main { margin-left:0 !important; }
+html.mobile-layout .page { padding:60px 16px 80px; }
+html.mobile-layout .metric-grid { grid-template-columns:1fr 1fr; }
+html.mobile-layout .form-2, html.mobile-layout .form-3, html.mobile-layout .form-4 { grid-template-columns:1fr; }
+html.mobile-layout #muscle-settings-list > div { grid-template-columns:1fr 1fr !important; }
+html.mobile-layout input, html.mobile-layout select, html.mobile-layout textarea { font-size:16px; }
+html.mobile-layout .set-inp, html.mobile-layout .note-inp { font-size:16px; }
+html.mobile-layout .set-inp { height:44px; }
+html.mobile-layout .step-btn, html.mobile-layout .set-fill { height:44px; }
+html.mobile-layout .step-btn { width:38px; }
+html.mobile-layout #progress-metrics { grid-template-columns:1fr 1fr !important; }
+html.mobile-layout .prog-2col { grid-template-columns:1fr !important; }
+html.mobile-layout #overview-metrics { grid-template-columns:1fr 1fr !important; }
+html.mobile-layout .ov-2col { grid-template-columns:1fr !important; }
 .overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.35); z-index:199; }
 .overlay.show { display:block; }
 .topbar { display:none; }
 .topbar-title { font-family:var(--font-display); font-size:18px; letter-spacing:-0.3px; cursor:pointer; }
 .topbar-title span { font-style:italic; }
 .hamburger { background:none; border:none; cursor:pointer; font-size:22px; line-height:1; padding:6px 10px; color:var(--text); }
-@media (max-width:768px) { .hamburger { display:block; } .app { flex-direction:column; } .topbar { display:flex; align-items:center; gap:6px; position:fixed; top:0; left:0; right:0; height:48px; padding:0 8px; background:var(--surface); border-bottom:0.5px solid var(--border); z-index:300; } }
+html.mobile-layout .hamburger { display:block; }
+html.mobile-layout .app { flex-direction:column; }
+html.mobile-layout .topbar { display:flex; align-items:center; gap:6px; position:fixed; top:0; left:0; right:0; height:48px; padding:0 8px; background:var(--surface); border-bottom:0.5px solid var(--border); z-index:300; }
 
 .set-row { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
 .set-num { font-size:11px; color:var(--faint); width:48px; flex-shrink:0; white-space:nowrap; }
@@ -879,6 +879,18 @@ async function signUp() {
 }
 
 
+// Decide mobile vs desktop layout. Uses the viewport width, but ALSO treats any touch
+// device on a non-desktop-sized screen as mobile — so a phone that requests the "desktop
+// site" (which fakes a ~980px width) still collapses the sidebar behind the menu.
+function setLayoutMode(){
+  const mobile = window.matchMedia('(max-width:768px)').matches
+    || ((navigator.maxTouchPoints||0) > 0 && window.matchMedia('(max-width:1099px)').matches);
+  document.documentElement.classList.toggle('mobile-layout', mobile);
+}
+setLayoutMode();
+window.addEventListener('resize', setLayoutMode);
+window.addEventListener('orientationchange', setLayoutMode);
+
 function toggleSidebar(){
   const sb=document.querySelector('.sidebar');
   const ov=document.getElementById('overlay');
@@ -1121,7 +1133,7 @@ function showPage(id) {
   const navEl=document.querySelectorAll('.nav-item')[navMap[id]];
   if(navEl) navEl.classList.add('active');
   const renders={overview:renderOverview,justtrain:renderJustTrain,planner:renderPlanner,log:renderLog,progress:renderProgress,body:renderBody,builder:renderBuilder,programme:renderProgramme,library:renderLibrary,history:renderHistory,goals:renderGoals,settings:renderSettings};
-  if(window.innerWidth<=768) closeSidebar();
+  if(document.documentElement.classList.contains('mobile-layout')) closeSidebar();
   if(renders[id]) Promise.resolve(renders[id]()).catch(e=>console.error('Page render error:',e));
 }
 
