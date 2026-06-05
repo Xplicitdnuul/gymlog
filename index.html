@@ -1181,6 +1181,7 @@ function weeklyStreak(sessions){
 
 async function renderOverview() {
   await refreshData();
+  reconcileProgrammeProgress();
   const today = new Date().toISOString().split('T')[0];
   const now = new Date();
 
@@ -2906,8 +2907,33 @@ function programmeReviewHtml(prog, days){
     + '</div>';
 }
 
+// If the programme's current day's workout has actually been completed — whether started
+// from the tracker (stamped) or just loaded directly from saved workouts (matched by title)
+// — roll the pointer to the next day. Forward-only, idempotent, and persisted.
+function reconcileProgrammeProgress(){
+  if(!activeProgrammeId) return;
+  const prog = programmes.find(p => String(p.id) === String(activeProgrammeId));
+  if(!prog) return;
+  const days = safeJSON(prog.days, []);
+  if(days.length < 2) return;
+  const cur = prog.current_day || 0;
+  const day = days[cur];
+  if(!day || day.type === 'rest') return;
+  const sessions = (db.sessions || []).filter(s => !s.is_draft);
+  if(!sessions.length) return;
+  const latest = sessions.reduce((a,b) => new Date(b.date) > new Date(a.date) ? b : a);
+  const byStamp = latest.programme_id && String(latest.programme_id) === String(prog.id) && latest.programme_day === cur;
+  const byTitle = day.workoutTitle && (latest.sessionTitle === day.workoutTitle || latest.title === day.workoutTitle);
+  if(!byStamp && !byTitle) return;
+  const next = (cur + 1) % days.length;
+  prog.current_day = next;
+  if(typeof prog._selectedDay === 'undefined' || prog._selectedDay === cur) prog._selectedDay = next;
+  sb.from('programmes').update({current_day: next}).eq('id', prog.id);
+}
+
 function renderActiveProgramme() {
   const el = document.getElementById('active-programme-section');
+  reconcileProgrammeProgress();
   const prog = programmes.find(p => String(p.id) === String(activeProgrammeId));
   if(!prog) { el.innerHTML = ''; return; }
   const days = safeJSON(prog.days, []);
