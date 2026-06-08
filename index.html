@@ -1501,7 +1501,11 @@ function renderWorkoutEditor(w, idx) {
       +'<option value="'+ex.name.replace(/"/g,'&quot;')+'">'+ex.name+'</option>'
       +libOptions
       +'</select></div>'
-      +'<button data-ei="'+ei+'" onclick="weRemoveExercise(parseInt(this.dataset.ei))" style="background:none;border:none;cursor:pointer;color:var(--color-text-tertiary);font-size:18px;align-self:flex-end;padding-bottom:6px;">\u00d7</button>'
+      +'<div style="display:flex;align-items:flex-end;gap:4px;padding-bottom:6px;">'
+      +'<button data-ei="'+ei+'" onclick="weMoveExercise(parseInt(this.dataset.ei),-1)" title="Move up" style="background:none;border:0.5px solid var(--border-md);border-radius:4px;cursor:pointer;color:var(--muted);padding:4px 8px;font-size:13px;line-height:1;'+(ei===0?'opacity:0.3;pointer-events:none;':'')+'">\u2191</button>'
+      +'<button data-ei="'+ei+'" onclick="weMoveExercise(parseInt(this.dataset.ei),1)" title="Move down" style="background:none;border:0.5px solid var(--border-md);border-radius:4px;cursor:pointer;color:var(--muted);padding:4px 8px;font-size:13px;line-height:1;'+(ei===editingWorkoutExercises.length-1?'opacity:0.3;pointer-events:none;':'')+'">\u2193</button>'
+      +'<button data-ei="'+ei+'" onclick="weRemoveExercise(parseInt(this.dataset.ei))" title="Remove" style="background:none;border:none;cursor:pointer;color:var(--color-text-tertiary);font-size:18px;line-height:1;padding:0 4px;">\u00d7</button>'
+      +'</div>'
       +'</div>'
       // Sets / reps row
       +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">'
@@ -1558,6 +1562,15 @@ function weUpdateGroup(ei, val) { editingWorkoutExercises[ei].group = val||''; }
 
 function weRemoveExercise(ei) {
   editingWorkoutExercises.splice(ei, 1);
+  const w = db.savedWorkouts.find(w => String(w.id) === String(editingWorkoutId));
+  if(w) renderWorkoutEditor(w, db.savedWorkouts.indexOf(w));
+}
+
+function weMoveExercise(ei, dir) {
+  const j = ei + dir;
+  if(j < 0 || j >= editingWorkoutExercises.length) return;
+  const arr = editingWorkoutExercises;
+  [arr[ei], arr[j]] = [arr[j], arr[ei]];
   const w = db.savedWorkouts.find(w => String(w.id) === String(editingWorkoutId));
   if(w) renderWorkoutEditor(w, db.savedWorkouts.indexOf(w));
 }
