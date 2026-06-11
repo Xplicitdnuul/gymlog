@@ -171,6 +171,12 @@ html.mobile-layout #progress-metrics { grid-template-columns:1fr 1fr !important;
 html.mobile-layout .prog-2col { grid-template-columns:1fr !important; }
 html.mobile-layout #overview-metrics { grid-template-columns:1fr 1fr !important; }
 html.mobile-layout .ov-2col { grid-template-columns:1fr !important; }
+/* iOS Safari auto-zooms whenever a focused field's font-size is < 16px. This guarantees
+   >=16px on any touch device — independent of the layout-detection class — so tapping a
+   kg/reps box never triggers that zoom. Pinch / page zoom still work as normal. */
+@media (pointer: coarse) {
+  input, textarea, .set-inp, .note-inp { font-size: 16px; }
+}
 .overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.35); z-index:199; }
 .overlay.show { display:block; }
 .topbar { display:none; }
@@ -2249,6 +2255,46 @@ function getPrevPeriodSessions() {
 
 // Union of all muscle groups worked across a set of exercises, expanding multi-muscle
 // mappings (e.g. "Quads, Glutes") so secondary muscles aren't dropped when a session is saved.
+// Classify a workout by its training focus, for the calendar overview. Looks at which
+// region each (non-cardio) exercise targets — based on its muscle tags — and picks the
+// dominant one. Returns Upper / Lower / Full body / Core / Cardio (Other only if empty).
+const WORKOUT_UPPER = ['Chest','Back','Shoulders','Biceps','Triceps','Traps','Forearms'];
+const WORKOUT_LOWER = ['Legs','Quads','Hamstrings','Glutes','Adductors','Calves'];
+const CATEGORY_COLORS = {
+  'Upper':     '#1A56A0',
+  'Lower':     '#BA7517',
+  'Full body': '#7B61C4',
+  'Core':      '#5F5E5A',
+  'Cardio':    '#0F6E56',
+  'Other':     '#888780'
+};
+function categorizeWorkout(exercises){
+  let upper=0, lower=0, core=0, cardio=0;
+  (exercises||[]).forEach(ex => {
+    if(!ex) return;
+    if(ex.isCardio){ cardio++; return; }
+    const muscles = String(ex.muscle||'').split(',').map(m => m.trim()).filter(Boolean);
+    let region = null;
+    for(const m of muscles){
+      if(WORKOUT_UPPER.includes(m)){ region='upper'; break; }
+      if(WORKOUT_LOWER.includes(m)){ region='lower'; break; }
+      if(m === 'Core'){ region='core'; break; }
+      // 'Plyometrics' or anything unrecognised → keep scanning for a real muscle tag
+    }
+    if(region==='upper') upper++;
+    else if(region==='lower') lower++;
+    else if(region==='core') core++;
+  });
+  const strength = upper + lower + core;
+  if(strength === 0) return cardio > 0 ? 'Cardio' : 'Other';
+  if(cardio > strength) return 'Cardio';
+  // Both halves meaningfully worked → full body
+  if(upper > 0 && lower > 0 && Math.min(upper,lower) >= Math.max(upper,lower) * 0.4) return 'Full body';
+  if(upper >= lower && upper >= core) return 'Upper';
+  if(lower >= upper && lower >= core) return 'Lower';
+  return 'Core';
+}
+
 function sessionMuscles(exercises){
   const set = new Set();
   (exercises||[]).forEach(ex => {
@@ -2308,24 +2354,6 @@ async function renderProgress() {
 
   // ── CALENDAR ──
   const calEl = document.getElementById('cal-grid');
-  const MUSCLE_COLORS = {
-    'Chest':      '#2E7D32',
-    'Back':       '#1A56A0',
-    'Shoulders':  '#7B61C4',
-    'Legs':       '#BA7517',
-    'Hamstrings': '#BA7517',
-    'Quads':      '#BA7517',
-    'Glutes':     '#BA7517',
-    'Biceps':     '#993C1D',
-    'Triceps':    '#993C1D',
-    'Arms':       '#993C1D',
-    'Core':       '#5F5E5A',
-    'Calves':     '#5F5E5A',
-    'Traps':      '#5F5E5A',
-    'Spinning':   '#0F6E56',
-    'Running':    '#0F6E56',
-    'Cardio':     '#0F6E56',
-  };
 
   // Build PR map — which dates had a PR
   const prDates = new Set();
@@ -2367,11 +2395,11 @@ async function renderProgress() {
 
     let cellHtml = '';
     if(daySessions.length) {
-      // Primary muscle = first muscle of first session
-      const primaryMuscle = safeJSON(daySessions[0].muscles, [])[0] || '';
-      const color = MUSCLE_COLORS[primaryMuscle] || '#888780';
+      const dayExercises = daySessions.flatMap(s => s.exercises || []);
+      const category = categorizeWorkout(dayExercises);
+      const color = CATEGORY_COLORS[category] || '#888780';
       const prDot = hasPR ? '<span style="position:absolute;top:2px;right:2px;width:4px;height:4px;border-radius:50%;background:#EF9F27;display:block;"></span>' : '';
-      cellHtml = '<div style="position:relative;width:100%;height:100%;background:' + color + ';border-radius:3px;opacity:0.85;" title="' + (daySessions[0].sessionTitle || primaryMuscle || 'Session') + (hasPR ? ' ★' : '') + '">' + prDot + '</div>';
+      cellHtml = '<div style="position:relative;width:100%;height:100%;background:' + color + ';border-radius:3px;opacity:0.85;" title="' + (daySessions[0].sessionTitle || category) + ' \u2014 ' + category + (hasPR ? ' \u2605' : '') + '">' + prDot + '</div>';
     } else {
       cellHtml = '<div style="width:100%;height:100%;background:var(--bg);border-radius:3px;"></div>';
     }
@@ -2381,11 +2409,11 @@ async function renderProgress() {
   // Update legend to show muscle colours + PR dot
   const legendEl = document.getElementById('cal-legend');
   if(legendEl) {
-    const legendMuscles = [
-      ['Chest','#2E7D32'],['Back','#1A56A0'],['Shoulders','#7B61C4'],
-      ['Legs','#BA7517'],['Arms','#993C1D'],['Cardio','#0F6E56'],['Other','#888780']
+    const legendCats = [
+      ['Upper','#1A56A0'],['Lower','#BA7517'],['Full body','#7B61C4'],
+      ['Core','#5F5E5A'],['Cardio','#0F6E56']
     ];
-    legendEl.innerHTML = legendMuscles.map(([m,c]) =>
+    legendEl.innerHTML = legendCats.map(([m,c]) =>
       '<span style="display:flex;align-items:center;gap:3px;font-size:11px;color:var(--muted);">'
       + '<span style="width:9px;height:9px;border-radius:2px;background:' + c + ';display:inline-block;opacity:0.85;"></span>' + m + '</span>'
     ).join('') + '<span style="display:flex;align-items:center;gap:3px;font-size:11px;color:var(--muted);margin-left:4px;">'
