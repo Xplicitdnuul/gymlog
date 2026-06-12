@@ -897,6 +897,20 @@ async function signUp() {
 }
 
 
+// iOS Safari auto-zooms the viewport when a focused input's EFFECTIVE rendered font size
+// is under 16px — so with the aA page-zoom at 90%, even our 17px fields fall under the
+// threshold and trigger it. Capping maximum-scale suppresses that focus auto-zoom at any
+// page-zoom level. Since iOS 10, Safari deliberately ignores this cap for user pinch-zoom
+// (accessibility), and the aA page-zoom is independent of it — so manual zooming still
+// works exactly as before. Scoped to iOS only so Android pinch-zoom is never restricted.
+(function(){
+  const iOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  if(!iOS) return;
+  const m = document.querySelector('meta[name="viewport"]');
+  if(m && !/maximum-scale/.test(m.content)) m.content += ', maximum-scale=1';
+})();
+
 // Decide mobile vs desktop layout. Uses the viewport width, but ALSO treats any touch
 // device on a non-desktop-sized screen as mobile — so a phone that requests the "desktop
 // site" (which fakes a ~980px width) still collapses the sidebar behind the menu.
