@@ -522,6 +522,19 @@ html.mobile-layout .topbar { display:flex; align-items:center; gap:6px; position
         </div>
       </div>
 
+      <div class="card" id="card-ai-report">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+          <div class="card-title" style="margin-bottom:0;">Coach review</div>
+          <span id="ai-report-age" style="font-size:11px;color:var(--faint);"></span>
+        </div>
+        <p style="font-size:13px;color:var(--muted);margin-bottom:10px;">An honest read on your training — what's working, what's slipping, and what to do next. Refreshes weekly.</p>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+          <button class="btn btn-dark btn-sm" id="ai-report-btn" onclick="generateProgressReport(false)">Show my review</button>
+          <span id="ai-report-status" style="font-size:12px;color:var(--muted);"></span>
+        </div>
+        <div id="ai-report-content" style="margin-top:12px;"></div>
+      </div>
+
     </div>
 
     <div id="page-body" class="page">
@@ -1259,6 +1272,10 @@ function relatedMuscles(muscle){
   return [...set];
 }
 const MUSCLES_C=['Spinning','Running','Incline walking'];
+// Model for planning/analysis features. Voice import deliberately stays on Sonnet:
+// strict extraction with many hard rules is where Haiku measurably fails.
+const AI_MODEL='claude-haiku-4-5-20251001';
+const AI_MODEL_EXTRACTION='claude-sonnet-4-6';
 const EQUIPMENT=['Bodyweight','Barbell','Dumbbell','Kettlebell','Machine','Cable','Smith machine','Resistance band','Suspension/TRX','Other'];
 // How the exercise was performed. This is part of the history-matching key alongside
 // equipment: a unilateral 20kg press is not comparable to a bilateral 40kg press, so
@@ -2007,7 +2024,7 @@ async function generateSession(auto) {
     +'Return ONLY valid JSON, no markdown, no extra text:\n'
     +'{"sessionTitle":"...","exercises":[{"name":"...","muscle":"...","sets":3,"reps":"10 reps","isRepeat":false,"isCardio":false,"tip":"..."}],"coachNote":"..."}';
   try {
-    const res=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:2000,messages:[{role:'user',content:prompt}]})});
+    const res=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:AI_MODEL,max_tokens:2000,messages:[{role:'user',content:prompt}]})});
     const data=await res.json();
     const txt=data.content.map(b=>b.text||'').join('').replace(/```json|```/g,'').trim();
     let session;
@@ -2692,8 +2709,167 @@ function calcVolume(exercises) {
   return Math.round(v);
 }
 
+// ── AI COACH REVIEW (Progress page) ───────────────────────────────
+// Cached for a week: a report is a summary of trends, and trends don't move day to day,
+// so regenerating on every visit would cost money and say the same thing.
+function progressReportKey(){ return 'gymlog_progress_report_' + (currentUser ? currentUser.id : 'anon'); }
+const REPORT_MAX_AGE_DAYS = 7;
+
+function buildProgressContext(){
+  const now = Date.now();
+  const win = d => db.sessions.filter(s => !s.is_draft && (now - new Date(s.date))/864e5 <= d);
+  const between = (a,b) => db.sessions.filter(s => { const d=(now-new Date(s.date))/864e5; return d>a && d<=b; });
+
+  // Frequency, this 4 weeks vs the 4 before
+  const cur4 = win(28), prev4 = between(28,56);
+  const freq = 'Last 4 weeks: ' + cur4.length + ' sessions. Previous 4 weeks: ' + prev4.length + '.';
+
+  // Volume per muscle, current vs previous 4 weeks — the imbalance signal
+  const volFor = list => {
+    const v = {};
+    list.forEach(s => (s.exercises||[]).forEach(ex => {
+      const kg = calcVolume([ex]); if(!kg) return;
+      const lib = (db.library||[]).find(l => l.name === ex.name);
+      const raw = (lib && lib.muscle) ? lib.muscle : (ex.muscle||'');
+      String(raw).split(',').map(m=>m.trim()).filter(Boolean).forEach(m => { v[m] = (v[m]||0) + kg; });
+    }));
+    return v;
+  };
+  const vNow = volFor(cur4), vPrev = volFor(prev4);
+  const volTxt = MUSCLES_W.map(m => {
+    const a = Math.round(vNow[m]||0), b = Math.round(vPrev[m]||0);
+    if(!a && !b) return null;
+    return '- ' + m + ': ' + a + 'kg this 4wk vs ' + b + 'kg prior 4wk';
+  }).filter(Boolean).join('\n') || 'No volume logged.';
+
+  // e1RM trend per exercise: earliest vs latest working-set estimate
+  const series = {};
+  db.sessions.forEach(s => (s.exercises||[]).forEach(ex => {
+    if(!ex || ex.isCardio || isIsometric(ex)) return;
+    const sets = workingSets(ex).filter(st => st.kg && st.reps);
+    if(!sets.length) return;
+    const e1 = Math.max(...sets.map(st => st.kg * (1 + st.reps/30)));
+    const key = ex.name + (ex.modifier?' ('+ex.modifier+')':'');
+    (series[key] = series[key] || []).push({d:new Date(s.date), e1});
+  }));
+  const trendTxt = Object.keys(series).map(k => {
+    const pts = series[k].sort((a,b)=>a.d-b.d);
+    if(pts.length < 2) return null;
+    const first = pts[0], last = pts[pts.length-1];
+    const pct = first.e1 ? Math.round((last.e1-first.e1)/first.e1*100) : 0;
+    const weeks = Math.max(1, Math.round((last.d-first.d)/(7*864e5)));
+    return '- ' + k + ': est 1RM ' + Math.round(first.e1) + 'kg → ' + Math.round(last.e1) + 'kg ('
+      + (pct>=0?'+':'') + pct + '% over ' + weeks + ' weeks, ' + pts.length + ' sessions)';
+  }).filter(Boolean).join('\n') || 'Not enough repeat data for trends yet.';
+
+  // Bodyweight trend
+  let bwTxt = 'No bodyweight logged.';
+  if((db.body||[]).length >= 2){
+    const b = db.body.slice().sort((a,b)=>new Date(a.date)-new Date(b.date));
+    bwTxt = b[0].weight + 'kg → ' + b[b.length-1].weight + 'kg over ' + b.length + ' entries.';
+  }
+
+  // Cardio minutes, 4wk vs prior
+  const cardioMin = list => list.reduce((t,s)=>t+(s.exercises||[]).filter(e=>e.isCardio)
+    .reduce((x,e)=>x+(parseFloat(e.reps)||(e.loggedSets&&e.loggedSets.sets&&e.loggedSets.sets[0]?e.loggedSets.sets[0].kg:0)||0),0),0);
+  const cardioTxt = Math.round(cardioMin(cur4)) + ' min this 4wk vs ' + Math.round(cardioMin(prev4)) + ' min prior 4wk.';
+
+  const t = buildTrainingContext();
+  return {freq, volTxt, trendTxt, bwTxt, cardioTxt,
+    exerciseLog: t.exerciseLog, recencyTxt: t.recencyTxt, programmeTxt: t.programmeTxt,
+    goals: db.goals.map(g=>g.text).join(', ') || 'None set'};
+}
+
+async function generateProgressReport(force){
+  const btn=document.getElementById('ai-report-btn');
+  const status=document.getElementById('ai-report-status');
+  const out=document.getElementById('ai-report-content');
+  const ageEl=document.getElementById('ai-report-age');
+
+  // Serve the cached report if it's less than a week old — no API call at all
+  let cached=null;
+  try { cached=JSON.parse(localStorage.getItem(progressReportKey())||'null'); } catch(e){}
+  if(!force && cached && cached.generatedAt){
+    const ageDays=(Date.now()-new Date(cached.generatedAt).getTime())/864e5;
+    if(ageDays < REPORT_MAX_AGE_DAYS){
+      renderProgressReport(cached);
+      status.textContent='';
+      return;
+    }
+  }
+
+  if(!db.sessions.length){ toast('Log a few sessions first.','error'); return; }
+  btn.disabled=true;
+  status.innerHTML='<span class="loading"><span></span><span></span><span></span></span>';
+  const c=buildProgressContext();
+  const prompt='You are an experienced strength coach reviewing a client\'s training data. Be encouraging '
+    +'but honest — this person wants the truth, not flattery.\n\n'
+    +'GOALS: '+c.goals+'\n'
+    +'FREQUENCY: '+c.freq+'\n'
+    +'PROGRAMME: '+c.programmeTxt+'\n'
+    +'BODYWEIGHT: '+c.bwTxt+'\n'
+    +'CARDIO: '+c.cardioTxt+'\n\n'
+    +'STRENGTH TRENDS (estimated 1RM, warm-ups excluded):\n'+c.trendTxt+'\n\n'
+    +'VOLUME BY MUSCLE (kg lifted):\n'+c.volTxt+'\n\n'
+    +'RECENT EXERCISE LOG (infer which muscles were actually worked from these movement names —\n'
+    +'the user\'s own muscle tags may be incomplete):\n'+c.exerciseLog+'\n\n'
+    +'TAG-DERIVED DAYS SINCE TRAINED (rough hint only, may be wrong):\n'+c.recencyTxt+'\n\n'
+    +'RULES:\n'
+    +'- Every positive must cite a real number from the data. Never manufacture praise.\n'
+    +'- For each gap, explain the MECHANISM of the long-term cost (e.g. "a 4:1 quad:hamstring ratio\n'
+    +'  tends to cap squat progress and raises strain risk when running volume climbs"), not just that\n'
+    +'  it is imbalanced. Be direct about why it matters without being discouraging.\n'
+    +'- If the data is too thin for a conclusion, say so instead of inventing a trend.\n'
+    +'- Actions must be specific and small enough to start this week.\n'
+    +'- Keep each item to 1-2 sentences. No filler, no generic advice that would apply to anyone.\n'
+    +'Return ONLY valid JSON, no markdown:\n'
+    +'{"headline":"one sentence, the single most important thing right now",'
+    +'"working":["..."],"drifting":["..."],"next":["..."]}';
+  try {
+    const res=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({model:AI_MODEL,max_tokens:1500,messages:[{role:'user',content:prompt}]})});
+    const data=await res.json();
+    const txt=data.content.map(b=>b.text||'').join('').replace(/```json|```/g,'').trim();
+    const rep=JSON.parse(txt);
+    rep.generatedAt=new Date().toISOString();
+    try { localStorage.setItem(progressReportKey(), JSON.stringify(rep)); } catch(e){}
+    renderProgressReport(rep);
+    status.textContent='';
+  } catch(e){
+    console.error(e); status.textContent='';
+    toast('Could not generate the review. Try again.','error');
+  }
+  btn.disabled=false;
+}
+
+function renderProgressReport(rep){
+  const out=document.getElementById('ai-report-content');
+  const ageEl=document.getElementById('ai-report-age');
+  const btn=document.getElementById('ai-report-btn');
+  if(!out||!rep) return;
+  const list=(arr,color)=> (arr||[]).map(x=>'<li style="margin-bottom:6px;">'+x+'</li>').join('');
+  out.innerHTML=
+    (rep.headline?'<div class="banner banner-blue" style="margin-bottom:12px;font-weight:500;">'+rep.headline+'</div>':'')
+    +((rep.working||[]).length?'<div style="font-size:12px;font-weight:600;color:#2E7D32;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">Working</div><ul style="font-size:13px;padding-left:18px;margin-bottom:12px;">'+list(rep.working)+'</ul>':'')
+    +((rep.drifting||[]).length?'<div style="font-size:12px;font-weight:600;color:#92600A;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">Worth attention</div><ul style="font-size:13px;padding-left:18px;margin-bottom:12px;">'+list(rep.drifting)+'</ul>':'')
+    +((rep.next||[]).length?'<div style="font-size:12px;font-weight:600;color:#185FA5;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">Do next</div><ul style="font-size:13px;padding-left:18px;margin-bottom:8px;">'+list(rep.next)+'</ul>':'')
+    +'<div style="font-size:11px;color:var(--faint);margin-top:8px;">'
+    +'Generated '+(rep.generatedAt?fmt(rep.generatedAt):'just now')
+    +' \u00b7 <a href="#" onclick="event.preventDefault();generateProgressReport(true);" style="color:var(--muted);">generate a new one</a></div>';
+  if(ageEl && rep.generatedAt){
+    const d=Math.floor((Date.now()-new Date(rep.generatedAt).getTime())/864e5);
+    ageEl.textContent=d<=0?'updated today':d+'d old';
+  }
+  if(btn) btn.style.display='none';
+}
+
 async function renderProgress() {
   await refreshData();
+  // Show an existing cached review immediately — this never triggers an API call
+  try {
+    const c=JSON.parse(localStorage.getItem(progressReportKey())||'null');
+    if(c && c.generatedAt) renderProgressReport(c);
+  } catch(e){}
   const sessions = getFilteredSessions();
   const prev = getPrevPeriodSessions();
 
@@ -3741,7 +3917,7 @@ async function generateProgramme() {
   ];
   try {
     const res = await fetch('/api/chat', {method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({model:'claude-sonnet-4-6', max_tokens:2000, messages:[{role:'user', content:lines.join('\n')}]})});
+      body: JSON.stringify({model:AI_MODEL, max_tokens:2000, messages:[{role:'user', content:lines.join('\n')}]})});
     const data = await res.json();
     const txt = data.content.map(b => b.text||'').join('').replace(/```json|```/g,'').trim();
     const prog = JSON.parse(txt);
@@ -3797,7 +3973,7 @@ async function getExerciseSuggestions() {
   ];
   try {
     const res = await fetch('/api/chat', {method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({model:'claude-haiku-4-5-20251001', max_tokens:2000, messages:[{role:'user', content:lines.join('\n')}]})});
+      body: JSON.stringify({model:AI_MODEL, max_tokens:2000, messages:[{role:'user', content:lines.join('\n')}]})});
     const data = await res.json();
     const txt = data.content.map(b => b.text||'').join('').replace(/```json|```/g,'').trim();
     const parsed = JSON.parse(txt);
@@ -4588,7 +4764,7 @@ async function jtParseVoice(){
   try {
     const res = await fetch('/api/chat', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ model:'claude-sonnet-4-6', max_tokens:2000, messages:[{role:'user', content:prompt}] })
+      body: JSON.stringify({ model:AI_MODEL_EXTRACTION, max_tokens:2000, messages:[{role:'user', content:prompt}] })
     });
     const data = await res.json();
     const txt = data.content.map(b => b.text || '').join('').replace(/```json|```/g,'').trim();
