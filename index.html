@@ -3,6 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>Gymlog</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
@@ -752,6 +755,14 @@ html.mobile-layout .topbar { display:flex; align-items:center; gap:6px; position
         <button class="btn btn-sm" style="margin-top:12px;" onclick="saveSettings()">Save settings</button>
         <span id="rest-saved" style="font-size:12px;color:var(--green);margin-left:10px;display:none;">Saved.</span>
       </div>
+      <div class="card">
+        <div class="card-title">App version</div>
+        <p style="font-size:13px;color:var(--muted);margin-bottom:10px;">
+          Running <b id="settings-version">–</b> (build <span id="settings-build">–</span>).
+          If a change you expect is missing, your browser is probably showing a cached copy — force a refresh.
+        </p>
+        <button class="btn btn-sm" onclick="forceRefresh()">Force refresh</button>
+      </div>
     </div>
   </main>
 </div>
@@ -761,7 +772,8 @@ html.mobile-layout .topbar { display:flex; align-items:center; gap:6px; position
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.5.2';
+const APP_VERSION = '1.6.1';
+const BUILD_STAMP = '2026-06-08b';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -935,6 +947,94 @@ function setLayoutMode(){
 setLayoutMode();
 window.addEventListener('resize', setLayoutMode);
 window.addEventListener('orientationchange', setLayoutMode);
+
+// Reload bypassing the browser cache. Safari aggressively caches this single-file app, so
+// a plain refresh can keep serving an old build — this clears caches and appends a
+// changing query string, which forces a genuine fetch.
+async function forceRefresh(){
+  try {
+    if(window.caches && caches.keys){
+      const keys = await caches.keys();
+      await Promise.all(keys.map(k => caches.delete(k)));
+    }
+  } catch(e){ /* caches unavailable — the query string below still does the work */ }
+  const url = new URL(window.location.href);
+  url.searchParams.set('v', Date.now());
+  window.location.replace(url.toString());
+}
+
+function forceRefreshInfo(){
+  const v = document.getElementById('settings-version');
+  const b = document.getElementById('settings-build');
+  if(v) v.textContent = APP_VERSION;
+  if(b) b.textContent = BUILD_STAMP;
+}
+
+// ── WARM-UP SETS (multiple per exercise) ──────────────────────────
+const MAX_WARMUP_SETS = 5;
+// Normalise legacy shapes: older drafts stored a single {wuDraft} plus a wuHidden flag.
+function warmupDrafts(ex){
+  if(!ex) return [];
+  if(!Array.isArray(ex.wuDrafts)){
+    if(ex.wuHidden) ex.wuDrafts = [];
+    else if(ex.wuDraft) ex.wuDrafts = [{kg:ex.wuDraft.kg||'', reps:ex.wuDraft.reps||''}];
+    else ex.wuDrafts = [{kg:'', reps:''}]; // one row by default
+  }
+  return ex.wuDrafts;
+}
+// Build the warm-up rows for one exercise. prefix is 'ex-' (Log) or 'jt-' (Just Train).
+function warmupRowsHtml(prefix, ei, ex, wStep){
+  const rows = warmupDrafts(ex);
+  const save = prefix==='ex-' ? 'autosaveDraft()' : 'jtSaveDraft()';
+  const stepArg = prefix==='ex-' ? '' : ',false';
+  let html = '';
+  rows.forEach((w, wi) => {
+    const kgId = prefix+ei+'-wu-kg-'+wi, repsId = prefix+ei+'-wu-reps-'+wi;
+    html += '<div class="set-row wu-row">'
+      + '<span class="set-num" style="color:#92600A;font-weight:600;width:48px;">'+(rows.length>1?'W'+(wi+1):'Warm-up')+'</span>'
+      + '<div class="stepper"><button type="button" class="step-btn minus" onclick="stepInput(\''+kgId+'\',-'+wStep+stepArg+')">\u2212</button>'
+      + '<input class="set-inp set-kg" type="number" inputmode="decimal" id="'+kgId+'" placeholder="kg" value="'+(w.kg||'')+'" step="'+wStep+'" min="0" oninput="'+save+'">'
+      + '<button type="button" class="step-btn plus" onclick="stepInput(\''+kgId+'\','+wStep+stepArg+')">+</button></div>'
+      + '<div class="stepper"><button type="button" class="step-btn minus" onclick="stepInput(\''+repsId+'\',-1'+stepArg+')">\u2212</button>'
+      + '<input class="set-inp set-reps" type="number" inputmode="numeric" id="'+repsId+'" placeholder="reps" value="'+(w.reps||'')+'" min="0" oninput="'+save+'">'
+      + '<button type="button" class="step-btn plus" onclick="stepInput(\''+repsId+'\',1'+stepArg+')">+</button></div>'
+      + '<button type="button" class="set-fill" title="Remove this warm-up set" onclick="removeWarmupRow(\''+prefix+'\','+ei+','+wi+')">\u00d7</button>'
+      + '</div>';
+  });
+  if(rows.length < MAX_WARMUP_SETS){
+    html += '<div style="margin:0 0 6px 48px;"><button type="button" class="btn btn-sm" style="font-size:11px;padding:3px 8px;" onclick="addWarmupRow(\''+prefix+'\','+ei+')">+ Add warm-up set</button></div>';
+  }
+  return html;
+}
+function warmupExerciseAt(prefix, ei){
+  if(prefix==='ex-') return db.activeSession ? db.activeSession.exercises[ei] : null;
+  return (typeof jtExercises!=='undefined') ? jtExercises[ei] : null;
+}
+function captureThen(prefix){
+  if(prefix==='ex-'){ if(typeof autosaveDraft==='function') autosaveDraft(); renderLog(); }
+  else { if(typeof jtCaptureInputs==='function') jtCaptureInputs(); if(typeof jtSaveDraft==='function') jtSaveDraft(); jtRenderSession(); }
+}
+function addWarmupRow(prefix, ei){
+  const ex = warmupExerciseAt(prefix, ei);
+  if(!ex) return;
+  const rows = warmupDrafts(ex);
+  if(rows.length >= MAX_WARMUP_SETS) return;
+  if(prefix==='ex-'){ if(typeof autosaveDraft==='function') autosaveDraft(); }
+  else if(typeof jtCaptureInputs==='function') jtCaptureInputs();
+  warmupDrafts(ex).push({kg:'', reps:''});
+  ex.wuHidden = false;
+  captureThen(prefix);
+}
+function removeWarmupRow(prefix, ei, wi){
+  const ex = warmupExerciseAt(prefix, ei);
+  if(!ex) return;
+  if(prefix==='ex-'){ if(typeof autosaveDraft==='function') autosaveDraft(); }
+  else if(typeof jtCaptureInputs==='function') jtCaptureInputs();
+  const rows = warmupDrafts(ex);
+  rows.splice(wi, 1);
+  ex.wuHidden = rows.length === 0;
+  captureThen(prefix);
+}
 
 function toggleSidebar(){
   const sb=document.querySelector('.sidebar');
@@ -2027,16 +2127,7 @@ function renderLog() {
     } else {
       const isoEx=isIsometric(ex);
       html2+='<div class="set-head"><span class="set-head-sp"></span><span>weight (kg)</span><span>'+(isoEx?'hold (sec)':'reps')+'</span><span class="set-head-sp"></span></div>';
-      const wuHidden=ex.wuHidden;
-      const wuKg=ex.wuDraft&&ex.wuDraft.kg?ex.wuDraft.kg:'';
-      const wuReps=ex.wuDraft&&ex.wuDraft.reps?ex.wuDraft.reps:'';
-      html2+='<div class="set-row wu-row" id="ex-'+ei+'-wu-row" style="'+(wuHidden?'display:none;':'')+'">'
-        +'<span class="set-num" style="color:#92600A;font-weight:600;width:48px;">Warm-up</span>'
-        +'<div class="stepper"><button type="button" class="step-btn minus" onclick="stepInput(\'ex-'+ei+'-wu-kg\',-'+wStep+')">\u2212</button><input class="set-inp set-kg" type="number" inputmode="decimal" id="ex-'+ei+'-wu-kg" placeholder="kg" value="'+wuKg+'" step="'+wStep+'" min="0" oninput="autosaveDraft()"><button type="button" class="step-btn plus" onclick="stepInput(\'ex-'+ei+'-wu-kg\','+wStep+')">+</button></div>'
-        +'<div class="stepper"><button type="button" class="step-btn minus" onclick="stepInput(\'ex-'+ei+'-wu-reps\',-1)">\u2212</button><input class="set-inp set-reps" type="number" inputmode="numeric" id="ex-'+ei+'-wu-reps" placeholder="reps" value="'+wuReps+'" min="0" oninput="autosaveDraft()"><button type="button" class="step-btn plus" onclick="stepInput(\'ex-'+ei+'-wu-reps\',1)">+</button></div>'
-        +'<button type="button" class="set-fill" title="Hide warm-up set" onclick="toggleWarmupRow(\'ex-\','+ei+',false)">\u00d7</button>'
-        +'</div>'
-        +'<div id="ex-'+ei+'-wu-add" style="'+(wuHidden?'':'display:none;')+'margin:0 0 6px 48px;"><button type="button" class="btn btn-sm" style="font-size:11px;padding:3px 8px;" onclick="toggleWarmupRow(\'ex-\','+ei+',true)">+ Add warm-up set</button></div>';
+      html2+=warmupRowsHtml('ex-', ei, ex, wStep);
       html2+=setRows;
     }
     html2+=cueHtml;
@@ -2085,16 +2176,6 @@ function swapLogExercise(ei,name){
   delete ex.loggedSets;
   autosaveDraft();
   renderLog();
-}
-
-// Show/hide an exercise's dedicated warm-up row (pure DOM, no re-render so input isn't lost).
-function toggleWarmupRow(prefix, ei, show){
-  const row=document.getElementById(prefix+ei+'-wu-row');
-  const add=document.getElementById(prefix+ei+'-wu-add');
-  if(row) row.style.display = show?'':'none';
-  if(add) add.style.display = show?'none':'';
-  if(prefix==='ex-'){ if(db.activeSession&&db.activeSession.exercises[ei]) db.activeSession.exercises[ei].wuHidden=!show; if(typeof autosaveDraft==='function') autosaveDraft(); }
-  else if(prefix==='jt-'){ if(typeof jtExercises!=='undefined'&&jtExercises[ei]) jtExercises[ei].wuHidden=!show; if(typeof jtSaveDraft==='function') jtSaveDraft(); }
 }
 
 // Nudge a numeric input by delta (used by the +/- steppers). Never goes below 0.
@@ -2189,7 +2270,12 @@ async function autosaveDraft(){
       sets.push({kg,reps});
     }
     ex.draftSets=sets;
-    ex.wuDraft={kg:parseFloat(document.getElementById('ex-'+ei+'-wu-kg')?.value)||null, reps:parseInt(document.getElementById('ex-'+ei+'-wu-reps')?.value)||null};
+    const wuRows=warmupDrafts(ex);
+    for(let w=0;w<wuRows.length;w++){
+      const wk=document.getElementById('ex-'+ei+'-wu-kg-'+w);
+      const wr=document.getElementById('ex-'+ei+'-wu-reps-'+w);
+      if(wk||wr) wuRows[w]={kg:wk?wk.value:'', reps:wr?wr.value:''};
+    }
     ex.savedNote=document.getElementById('ex-'+ei+'-note')?.value||'';
   });
   s.sessionNote=document.getElementById('session-note')?.value||'';
@@ -2220,9 +2306,10 @@ async function saveSession(){
       const reps=parseInt(document.getElementById('ex-'+ei+'-reps-'+i)?.value)||null;
       if(kg||reps) sets.push({kg,reps});
     }
-    if(!ex.wuHidden){
-      const wkg=parseFloat(document.getElementById('ex-'+ei+'-wu-kg')?.value)||null;
-      const wreps=parseInt(document.getElementById('ex-'+ei+'-wu-reps')?.value)||null;
+    const wuAll=warmupDrafts(ex);
+    for(let w=wuAll.length-1;w>=0;w--){
+      const wkg=parseFloat(document.getElementById('ex-'+ei+'-wu-kg-'+w)?.value)||null;
+      const wreps=parseInt(document.getElementById('ex-'+ei+'-wu-reps-'+w)?.value)||null;
       if(wkg||wreps) sets.unshift({kg:wkg,reps:wreps,warmup:true});
     }
     const note=document.getElementById('ex-'+ei+'-note')?.value||'';
@@ -3820,15 +3907,25 @@ function cancelHistoryEdit(id) {
 // ── JUST TRAIN ────────────────────────────────────────────────────
 let jtExercises = []; // {name, muscle, sets, isCardio, loggedSets:[]}
 
-function renderJustTrain() {
+async function renderJustTrain() {
   const musclePick = document.getElementById('jt-muscle-pick');
   const pick = document.getElementById('jt-ex-pick');
   if(!pick) return;
 
-  // Muscle dropdown: every muscle any library exercise is tagged with (exercises carry
-  // several, e.g. "Quads, Glutes", so a movement legitimately appears under each).
+  // The library drives the exercise list; if it hasn't loaded yet, fetch it rather than
+  // presenting an empty picker.
+  if(!db.library.length && currentUser){
+    try {
+      const {data} = await sb.from('library').select('*').eq('user_id',currentUser.id).order('name');
+      if(data) db.library = data.map(e=>({id:e.id, name:e.name, muscle:e.muscle}));
+    } catch(e){ console.warn('library reload failed', e); }
+  }
+
+  // Muscle dropdown: the standard muscle groups ALWAYS appear, unioned with any extra tags
+  // the library introduces (e.g. "Plyometrics"). Deriving this from db.library alone left
+  // the list empty whenever the library hadn't loaded yet.
   if(musclePick){
-    const muscles = new Set();
+    const muscles = new Set([...MUSCLES_W, ...MUSCLES_C]);
     db.library.forEach(e => String(e.muscle||'').split(',').map(m=>m.trim()).filter(Boolean).forEach(m=>muscles.add(m)));
     const prev = musclePick.value || '__all';
     musclePick.innerHTML = '<option value="__all">All exercises</option>'
@@ -3859,9 +3956,16 @@ function jtPopulateExercisePick(){
   } else if(sel === '__all'){
     list = db.library.slice().sort((a,b)=>a.name.localeCompare(b.name));
   } else {
+    const selLower = sel.toLowerCase();
     list = db.library
       .filter(e => String(e.muscle||'').split(',').map(m=>m.trim()).includes(sel))
       .sort((a,b)=>a.name.localeCompare(b.name));
+    // Nothing tagged exactly? Fall back to a looser match (e.g. "Legs" vs "Quads, Glutes")
+    if(!list.length){
+      list = db.library
+        .filter(e => String(e.muscle||'').toLowerCase().includes(selLower))
+        .sort((a,b)=>a.name.localeCompare(b.name));
+    }
   }
   const seenNames = new Set();
   const opts = list.filter(e => { if(seenNames.has(e.name)) return false; seenNames.add(e.name); return true; })
@@ -3954,9 +4058,12 @@ function jtCaptureInputs(){
       sets.push({kg:kg?kg.value:'', reps:reps?reps.value:''});
     }
     if(sets.length) ex.draftSets=sets;
-    const wk=document.getElementById('jt-'+ei+'-wu-kg');
-    const wr=document.getElementById('jt-'+ei+'-wu-reps');
-    if(wk||wr) ex.wuDraft={kg:wk?wk.value:'', reps:wr?wr.value:''};
+    const wuRows=warmupDrafts(ex);
+    for(let w=0;w<wuRows.length;w++){
+      const wk=document.getElementById('jt-'+ei+'-wu-kg-'+w);
+      const wr=document.getElementById('jt-'+ei+'-wu-reps-'+w);
+      if(wk||wr) wuRows[w]={kg:wk?wk.value:'', reps:wr?wr.value:''};
+    }
   });
 }
 
@@ -4017,17 +4124,8 @@ function jtRenderSession() {
     if(ex.isCardio) {
       setRows = '<div class="set-row"><span class="set-num">Time</span><input class="set-inp" type="number" inputmode="numeric" id="jt-' + ei + '-kg-0" placeholder="min" value="' + (ex.draftMinutes || '') + '" style="width:80px;" oninput="jtSaveDraft()"></div>';
     } else {
-      const wuHidden = ex.wuHidden;
       const wStep = weightStep(ex.equipment);
-      const wuKg = ex.wuDraft && ex.wuDraft.kg ? ex.wuDraft.kg : '';
-      const wuReps = ex.wuDraft && ex.wuDraft.reps ? ex.wuDraft.reps : '';
-      setRows += '<div class="set-row wu-row" id="jt-' + ei + '-wu-row" style="' + (wuHidden?'display:none;':'') + '">'
-        + '<span class="set-num" style="color:#92600A;font-weight:600;width:48px;">Warm-up</span>'
-        + '<div class="stepper"><button type="button" class="step-btn minus" onclick="stepInput(\'jt-' + ei + '-wu-kg\',-' + wStep + ',false)">\u2212</button><input class="set-inp set-kg" type="number" inputmode="decimal" id="jt-' + ei + '-wu-kg" placeholder="kg" value="' + wuKg + '" step="' + wStep + '" min="0" oninput="jtSaveDraft()"><button type="button" class="step-btn plus" onclick="stepInput(\'jt-' + ei + '-wu-kg\',' + wStep + ',false)">+</button></div>'
-        + '<div class="stepper"><button type="button" class="step-btn minus" onclick="stepInput(\'jt-' + ei + '-wu-reps\',-1,false)">\u2212</button><input class="set-inp set-reps" type="number" inputmode="numeric" id="jt-' + ei + '-wu-reps" placeholder="reps" value="' + wuReps + '" min="0" oninput="jtSaveDraft()"><button type="button" class="step-btn plus" onclick="stepInput(\'jt-' + ei + '-wu-reps\',1,false)">+</button></div>'
-        + '<button type="button" class="set-fill" title="Hide warm-up set" onclick="toggleWarmupRow(\'jt-\',' + ei + ',false)">\u00d7</button>'
-        + '</div>'
-        + '<div id="jt-' + ei + '-wu-add" style="' + (wuHidden?'':'display:none;') + 'margin:0 0 6px 48px;"><button type="button" class="btn btn-sm" style="font-size:11px;padding:3px 8px;" onclick="toggleWarmupRow(\'jt-\',' + ei + ',true)">+ Add warm-up set</button></div>';
+      setRows += warmupRowsHtml('jt-', ei, ex, wStep);
       for(let i = 0; i < ex.sets; i++) {
         const prev_set = prev && prev.sets ? prev.sets[i] : null;
         // If we captured this row, its value is authoritative — including a deliberately
@@ -4179,7 +4277,7 @@ async function jtParseVoice(){
         name: lib.name, muscle: lib.muscle, sets: Math.max(sets.length, 1),
         isCardio, equipment: isCardio ? '' : equipment, modifier,
         reps: isCardio ? '30 min' : '10 reps',
-        wuHidden: true, // dictated sets are working sets; no warm-up row assumed
+        wuHidden: true, wuDrafts: [], // dictated sets are working sets; no warm-up assumed
         draftSets: sets.map(s => ({ kg: s.kg == null ? '' : String(s.kg), reps: s.reps == null ? '' : String(s.reps) }))
       });
       added.push(lib.name);
@@ -4261,9 +4359,10 @@ async function jtSaveSession() {
         const reps = parseInt(document.getElementById('jt-' + ei + '-reps-' + i)?.value) || null;
         if(kg || reps) sets.push({kg, reps});
       }
-      if(!ex.wuHidden){
-        const wkg = parseFloat(document.getElementById('jt-' + ei + '-wu-kg')?.value) || null;
-        const wreps = parseInt(document.getElementById('jt-' + ei + '-wu-reps')?.value) || null;
+      const wuAll = warmupDrafts(ex);
+      for(let w = wuAll.length-1; w >= 0; w--){
+        const wkg = parseFloat(document.getElementById('jt-' + ei + '-wu-kg-' + w)?.value) || null;
+        const wreps = parseInt(document.getElementById('jt-' + ei + '-wu-reps-' + w)?.value) || null;
         if(wkg || wreps) sets.unshift({kg:wkg, reps:wreps, warmup:true});
       }
     }
@@ -4665,7 +4764,7 @@ function renderSettings(){
   document.getElementById('s-name').value=db.profile.name||'';
   document.getElementById('s-level').value=db.profile.level||'intermediate';
   document.getElementById('s-goal').value=db.profile.goal||'hypertrophy';
-  renderGoalsInSettings();updateRestDisplay();
+  renderGoalsInSettings();updateRestDisplay();forceRefreshInfo();
 }
 function renderGoalsInSettings(){
   document.getElementById('goals-list').innerHTML=db.goals.length?db.goals.map(g=>`<div class="goal-row"><div><div style="font-size:13px;font-weight:500;">${g.text}</div><div style="font-size:11px;color:var(--muted);">${g.current_best||'No baseline'}</div></div><div style="display:flex;align-items:center;gap:8px;"><div class="prog-bar" style="width:70px;"><div class="prog-fill" style="width:${g.pct||0}%;background:var(--green);"></div></div><span style="font-size:12px;color:var(--green);font-weight:500;">${g.pct||0}%</span><button onclick="deleteGoal(${g.id})" style="background:none;border:none;cursor:pointer;color:var(--faint);font-size:15px;">×</button></div></div>`).join(''):'<p style="color:var(--muted);font-size:13px;">No goals set yet.</p>';
