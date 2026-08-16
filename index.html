@@ -1845,6 +1845,23 @@ function getPrevData(name, equipment){
   }
   return null;
 }
+// Most recent logged data for this movement under DIFFERENT equipment. Used only to show a
+// hint when there's no history for the selected equipment — never to prefill, since e.g.
+// 60kg barbell and 60kg dumbbell are not the same load.
+function getPrevDataOtherEquipment(name, equipment){
+  const eq=equipment||'';
+  for(let i=db.sessions.length-1;i>=0;i--){
+    const s=db.sessions[i];
+    if(!s.exercises) continue;
+    const ex=s.exercises.find(e=>e.name===name&&(e.equipment||'')!==eq&&e.loggedSets&&e.loggedSets.sets&&e.loggedSets.sets.length);
+    if(ex){
+      const sets=ex.loggedSets.sets.filter(st=>!st.warmup);
+      if(sets.length) return {equipment:ex.equipment||'no equipment set', sets};
+    }
+  }
+  return null;
+}
+
 function renderLog() {
   const el=document.getElementById('log-content');
   if(!db.activeSession){
@@ -1909,7 +1926,13 @@ function renderLog() {
       }
       if(prev.note) banner+='<div style="font-size:12px;color:var(--muted);font-style:italic;margin-bottom:8px;">Last note: &ldquo;'+prev.note+'&rdquo;</div>';
     } else {
-      banner='<div class="banner banner-gray" style="margin-bottom:10px;">First time logging this exercise — enter your starting numbers below.</div>';
+      const other=getPrevDataOtherEquipment(ex.name, ex.equipment);
+      if(other){
+        const ref=other.sets.map(st=>(st.kg||'?')+'\u00d7'+(st.reps||'?')).join(', ');
+        banner='<div class="banner banner-gray" style="margin-bottom:10px;">No history with this equipment yet. Last time on <b>'+other.equipment+'</b>: '+ref+' \u2014 enter numbers for this setup.</div>';
+      } else {
+        banner='<div class="banner banner-gray" style="margin-bottom:10px;">First time logging this exercise — enter your starting numbers below.</div>';
+      }
     }
 
     // Set rows — prefer draft data if resuming, else pre-fill from last session
@@ -3754,6 +3777,7 @@ function jtAddExercise() {
   const muscle = opt ? (opt.dataset.muscle || opt.parentElement.label || 'General') : 'General';
   const sets = parseInt(document.getElementById('jt-sets-pick').value) || 3;
   const isCardio = muscle.toLowerCase().includes('cardio');
+  jtCaptureInputs();
   jtExercises.push({ name, muscle, sets, isCardio, equipment: isCardio ? '' : (lastEquipmentFor(name)||''), reps: isCardio ? '30 min' : '10 reps' });
   pick.value = '';
   jtRenderSession();
@@ -3809,6 +3833,31 @@ function jtSyncCardioDisplay() {
 }
 
 
+// Read every on-screen Just Train input back into jtExercises. JT has no DB draft, so this
+// MUST be called before anything that re-renders (add/remove exercise, equipment change),
+// otherwise the rebuild repopulates from last-session history and typed values are lost.
+function jtCaptureInputs(){
+  (jtExercises||[]).forEach((ex,ei)=>{
+    if(!ex) return;
+    if(ex.isCardio){
+      const m=document.getElementById('jt-'+ei+'-kg-0');
+      if(m) ex.draftMinutes=m.value||'';
+      return;
+    }
+    const sets=[];
+    for(let i=0;i<(ex.sets||3);i++){
+      const kg=document.getElementById('jt-'+ei+'-kg-'+i);
+      const reps=document.getElementById('jt-'+ei+'-reps-'+i);
+      if(!kg&&!reps) continue;
+      sets.push({kg:kg?kg.value:'', reps:reps?reps.value:''});
+    }
+    if(sets.length) ex.draftSets=sets;
+    const wk=document.getElementById('jt-'+ei+'-wu-kg');
+    const wr=document.getElementById('jt-'+ei+'-wu-reps');
+    if(wk||wr) ex.wuDraft={kg:wk?wk.value:'', reps:wr?wr.value:''};
+  });
+}
+
 function jtRenderSession() {
   const el = document.getElementById('jt-session-content');
   const actEl = document.getElementById('jt-actions');
@@ -3835,27 +3884,38 @@ function jtRenderSession() {
         banner = '<div class="banner banner-amber" style="margin-bottom:8px;"><b>Hold steady</b> — some sets fell short last time.</div>';
       }
     } else {
-      banner = '<div class="banner banner-gray" style="margin-bottom:8px;">First time — enter your starting numbers.</div>';
+      const other = getPrevDataOtherEquipment(ex.name, ex.equipment);
+      if(other){
+        const ref = other.sets.map(st => (st.kg||'?') + '\u00d7' + (st.reps||'?')).join(', ');
+        banner = '<div class="banner banner-gray" style="margin-bottom:8px;">No history with this equipment yet. Last time on <b>' + other.equipment + '</b>: ' + ref + '.</div>';
+      } else {
+        banner = '<div class="banner banner-gray" style="margin-bottom:8px;">First time — enter your starting numbers.</div>';
+      }
     }
 
     // Set rows
     let setRows = '<div class="set-head"><span class="set-head-sp"></span><span>weight (kg)</span><span>reps</span><span class="set-head-sp"></span></div>';
     if(ex.isCardio) {
-      setRows = '<div class="set-row"><span class="set-num">Time</span><input class="set-inp" type="number" inputmode="numeric" id="jt-' + ei + '-kg-0" placeholder="min" style="width:80px;"></div>';
+      setRows = '<div class="set-row"><span class="set-num">Time</span><input class="set-inp" type="number" inputmode="numeric" id="jt-' + ei + '-kg-0" placeholder="min" value="' + (ex.draftMinutes || '') + '" style="width:80px;"></div>';
     } else {
       const wuHidden = ex.wuHidden;
       const wStep = weightStep(ex.equipment);
+      const wuKg = ex.wuDraft && ex.wuDraft.kg ? ex.wuDraft.kg : '';
+      const wuReps = ex.wuDraft && ex.wuDraft.reps ? ex.wuDraft.reps : '';
       setRows += '<div class="set-row wu-row" id="jt-' + ei + '-wu-row" style="' + (wuHidden?'display:none;':'') + '">'
         + '<span class="set-num" style="color:#92600A;font-weight:600;width:48px;">Warm-up</span>'
-        + '<div class="stepper"><button type="button" class="step-btn minus" onclick="stepInput(\'jt-' + ei + '-wu-kg\',-' + wStep + ',false)">\u2212</button><input class="set-inp set-kg" type="number" inputmode="decimal" id="jt-' + ei + '-wu-kg" placeholder="kg" step="' + wStep + '" min="0"><button type="button" class="step-btn plus" onclick="stepInput(\'jt-' + ei + '-wu-kg\',' + wStep + ',false)">+</button></div>'
-        + '<div class="stepper"><button type="button" class="step-btn minus" onclick="stepInput(\'jt-' + ei + '-wu-reps\',-1,false)">\u2212</button><input class="set-inp set-reps" type="number" inputmode="numeric" id="jt-' + ei + '-wu-reps" placeholder="reps" min="0"><button type="button" class="step-btn plus" onclick="stepInput(\'jt-' + ei + '-wu-reps\',1,false)">+</button></div>'
+        + '<div class="stepper"><button type="button" class="step-btn minus" onclick="stepInput(\'jt-' + ei + '-wu-kg\',-' + wStep + ',false)">\u2212</button><input class="set-inp set-kg" type="number" inputmode="decimal" id="jt-' + ei + '-wu-kg" placeholder="kg" value="' + wuKg + '" step="' + wStep + '" min="0"><button type="button" class="step-btn plus" onclick="stepInput(\'jt-' + ei + '-wu-kg\',' + wStep + ',false)">+</button></div>'
+        + '<div class="stepper"><button type="button" class="step-btn minus" onclick="stepInput(\'jt-' + ei + '-wu-reps\',-1,false)">\u2212</button><input class="set-inp set-reps" type="number" inputmode="numeric" id="jt-' + ei + '-wu-reps" placeholder="reps" value="' + wuReps + '" min="0"><button type="button" class="step-btn plus" onclick="stepInput(\'jt-' + ei + '-wu-reps\',1,false)">+</button></div>'
         + '<button type="button" class="set-fill" title="Hide warm-up set" onclick="toggleWarmupRow(\'jt-\',' + ei + ',false)">\u00d7</button>'
         + '</div>'
         + '<div id="jt-' + ei + '-wu-add" style="' + (wuHidden?'':'display:none;') + 'margin:0 0 6px 48px;"><button type="button" class="btn btn-sm" style="font-size:11px;padding:3px 8px;" onclick="toggleWarmupRow(\'jt-\',' + ei + ',true)">+ Add warm-up set</button></div>';
       for(let i = 0; i < ex.sets; i++) {
         const prev_set = prev && prev.sets ? prev.sets[i] : null;
-        const prefillKg = prev_set && prev_set.kg ? prev_set.kg : '';
-        const prefillReps = prev_set && prev_set.reps ? prev_set.reps : '';
+        // If we captured this row, its value is authoritative — including a deliberately
+        // cleared field. Only fall back to last session's numbers when nothing was captured.
+        const captured = ex.draftSets && i < ex.draftSets.length ? ex.draftSets[i] : null;
+        const prefillKg = captured ? (captured.kg || '') : (prev_set && prev_set.kg ? prev_set.kg : '');
+        const prefillReps = captured ? (captured.reps || '') : (prev_set && prev_set.reps ? prev_set.reps : '');
         const kgId = 'jt-' + ei + '-kg-' + i, repsId = 'jt-' + ei + '-reps-' + i;
         setRows += '<div class="set-row">'
           + '<span class="set-num">Set ' + (i+1) + '</span>'
@@ -3894,7 +3954,11 @@ function jtRenderSession() {
 }
 
 function setJtEquipment(ei, val) {
-  if(jtExercises[ei]) jtExercises[ei].equipment = val;
+  if(jtExercises[ei]) {
+    jtCaptureInputs();
+    jtExercises[ei].equipment = val;
+    jtRenderSession();
+  }
 }
 
 // Copy a Just Train set's weight & reps into the sets below it.
@@ -3909,6 +3973,7 @@ function jtFillDown(ei, fromIndex){
 }
 
 function jtRemoveExercise(ei) {
+  jtCaptureInputs();
   jtExercises.splice(ei, 1);
   jtRenderSession();
 }
