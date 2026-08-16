@@ -632,6 +632,22 @@ html.mobile-layout .topbar { display:flex; align-items:center; gap:6px; position
           <span id="sug-status" style="font-size:13px;color:var(--muted);align-self:center;"></span>
         </div>
       </div>
+      <div class="card">
+        <div class="card-title">Merge exercises</div>
+        <p style="font-size:13px;color:var(--muted);margin-bottom:10px;">Fold a redundant variant into its base movement — e.g. <em>One-legged Leg Press</em> into <em>Leg Press</em> tagged Unilateral. All past sessions and saved workouts are rewritten, so history is preserved.</p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div class="form-group" style="margin-bottom:0;"><label class="form-label">Merge this (removed)</label>
+            <select id="merge-src"><option value="">Choose exercise…</option></select></div>
+          <div class="form-group" style="margin-bottom:0;"><label class="form-label">Into this (kept)</label>
+            <select id="merge-dst"><option value="">Choose exercise…</option></select></div>
+        </div>
+        <div class="form-group" style="margin-top:8px;"><label class="form-label">Tag the merged history as</label>
+          <select id="merge-mod"></select></div>
+        <div style="display:flex;gap:10px;margin-top:10px;align-items:center;">
+          <button class="btn btn-dark btn-sm" onclick="mergeExercises()" id="merge-btn">Merge</button>
+          <span id="merge-status" style="font-size:13px;color:var(--muted);"></span>
+        </div>
+      </div>
       <div class="card"><div class="card-title">Library — <span id="lib-count">0</span> exercises</div><div id="lib-display" style="display:flex;flex-wrap:wrap;gap:7px;"></div></div>
     </div>
 
@@ -4912,6 +4928,92 @@ async function clearLib(){
   const{error:clErr}=await sb.from('library').delete().eq('user_id',currentUser.id);if(clErr){dbErr('Clear library',clErr);return;}
   db.library=[];renderLibrary();
 }
+function populateMergeSelects(){
+  const src=document.getElementById('merge-src'), dst=document.getElementById('merge-dst'), mod=document.getElementById('merge-mod');
+  if(!src||!dst) return;
+  const opts=db.library.slice().sort((a,b)=>a.name.localeCompare(b.name))
+    .map(e=>'<option value="'+e.name.replace(/"/g,'&quot;')+'">'+e.name+'</option>').join('');
+  const keepSrc=src.value, keepDst=dst.value;
+  src.innerHTML='<option value="">Choose exercise\u2026</option>'+opts;
+  dst.innerHTML='<option value="">Choose exercise\u2026</option>'+opts;
+  src.value=keepSrc; dst.value=keepDst;
+  if(mod && !mod.options.length) mod.innerHTML=modifierOptions('Unilateral');
+}
+
+// Fold one library exercise into another, rewriting every stored reference so no history
+// is lost. The modifier is applied to the rewritten entries — without it, one-legged work
+// would merge into the bilateral record and corrupt both PR histories.
+async function mergeExercises(){
+  const srcName=document.getElementById('merge-src').value;
+  const dstName=document.getElementById('merge-dst').value;
+  const modifier=document.getElementById('merge-mod').value||'';
+  const status=document.getElementById('merge-status');
+  const btn=document.getElementById('merge-btn');
+  if(!srcName||!dstName){ toast('Choose both exercises.','error'); return; }
+  if(srcName===dstName){ toast('Those are the same exercise.','error'); return; }
+  const dstLib=db.library.find(e=>e.name===dstName);
+  const srcLib=db.library.find(e=>e.name===srcName);
+  if(!dstLib||!srcLib) return;
+
+  if(!confirm('Merge "'+srcName+'" into "'+dstName+'"'+(modifier?' tagged '+modifier:'')+'?\n\n'
+    + 'Every past session and saved workout using "'+srcName+'" will be rewritten, and "'+srcName+'" removed from your library. This cannot be undone.')) return;
+
+  btn.disabled=true; status.textContent='Rewriting history\u2026';
+  let sessionsChanged=0, workoutsChanged=0;
+  try {
+    // 1. Rewrite logged sessions
+    for(const s of db.sessions){
+      const exs=safeJSON(s.exercises,[]);
+      let touched=false;
+      exs.forEach(ex=>{
+        if(ex && ex.name===srcName){
+          ex.name=dstLib.name;
+          ex.muscle=dstLib.muscle;
+          if(modifier && !ex.modifier) ex.modifier=modifier;
+          touched=true;
+        }
+      });
+      if(touched){
+        const {error}=await sb.from('sessions').update({exercises:JSON.stringify(exs), muscles:JSON.stringify(sessionMuscles(exs))}).eq('id',s.id);
+        if(error){ dbErr('Merge (session)',error); btn.disabled=false; status.textContent=''; return; }
+        s.exercises=exs;
+        sessionsChanged++;
+        status.textContent='Rewriting history\u2026 '+sessionsChanged+' session'+(sessionsChanged>1?'s':'');
+      }
+    }
+    // 2. Rewrite saved workouts
+    for(const w of (db.savedWorkouts||[])){
+      const exs=safeJSON(w.exercises,[]);
+      let touched=false;
+      exs.forEach(ex=>{
+        if(ex && ex.name===srcName){
+          ex.name=dstLib.name; ex.muscle=dstLib.muscle;
+          if(modifier && !ex.modifier) ex.modifier=modifier;
+          touched=true;
+        }
+      });
+      if(touched){
+        const {error}=await sb.from('saved_workouts').update({exercises:JSON.stringify(exs)}).eq('id',w.id);
+        if(error){ dbErr('Merge (workout)',error); btn.disabled=false; status.textContent=''; return; }
+        w.exercises=exs; workoutsChanged++;
+      }
+    }
+    // 3. Teach the old name as an alias so dictation still resolves it
+    await saveExAlias(srcName, dstLib.name);
+    // 4. Remove the now-redundant library entry
+    const {error:delErr}=await sb.from('library').delete().eq('id',srcLib.id);
+    if(delErr){ dbErr('Merge (library)',delErr); btn.disabled=false; status.textContent=''; return; }
+    db.library=db.library.filter(e=>e.id!==srcLib.id);
+
+    status.textContent='';
+    btn.disabled=false;
+    await renderLibrary();
+    toast('Merged \u2014 '+sessionsChanged+' session'+(sessionsChanged===1?'':'s')+' and '+workoutsChanged+' saved workout'+(workoutsChanged===1?'':'s')+' updated.');
+  } catch(e){
+    console.error(e); dbErr('Merge', e); btn.disabled=false; status.textContent='';
+  }
+}
+
 async function renderLibrary(){
   if(!currentUser) return;
   document.getElementById('lib-count').textContent='...';
@@ -4920,6 +5022,7 @@ async function renderLibrary(){
   if(error){dbErr('Load library',error);return;}
   db.library=(data||[]).map(e=>({id:e.id,name:e.name,muscle:e.muscle}));
   document.getElementById('lib-count').textContent=db.library.length;
+  populateMergeSelects();
   if(!db.library.length){
     document.getElementById('lib-display').innerHTML='<p style="font-size:13px;color:var(--muted);">No exercises yet. Paste your list above and click Import.</p>';
     return;
