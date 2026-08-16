@@ -1154,6 +1154,14 @@ function lastEquipmentFor(name){
   }
   return '';
 }
+// Date key in LOCAL time. Never use toISOString() for this: it converts to UTC, so a
+// session logged at 00:30 in Denmark (UTC+1/+2) would be stamped as the previous day,
+// silently corrupting streaks, adherence, "days since" and calendar placement.
+function localDateKey(d){
+  const x = (d instanceof Date) ? d : new Date(d);
+  if(isNaN(x)) return '';
+  return x.getFullYear() + '-' + String(x.getMonth()+1).padStart(2,'0') + '-' + String(x.getDate()).padStart(2,'0');
+}
 const fmt=d=>new Date(d).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});
 const fmtSecs=s=>{if(s<60)return s+'s';if(s%60===0)return(s/60)+'m';return Math.floor(s/60)+'m '+(s%60)+'s';};
 
@@ -1227,7 +1235,7 @@ function weeklyStreak(sessions){
 async function renderOverview() {
   await refreshData();
   reconcileProgrammeProgress();
-  const today = new Date().toISOString().split('T')[0];
+  const today = localDateKey(new Date());
   const now = new Date();
 
   // ── GREETING ──
@@ -2086,7 +2094,7 @@ function toggleWarmupRow(prefix, ei, show){
   if(row) row.style.display = show?'':'none';
   if(add) add.style.display = show?'none':'';
   if(prefix==='ex-'){ if(db.activeSession&&db.activeSession.exercises[ei]) db.activeSession.exercises[ei].wuHidden=!show; if(typeof autosaveDraft==='function') autosaveDraft(); }
-  else if(prefix==='jt-'){ if(typeof jtExercises!=='undefined'&&jtExercises[ei]) jtExercises[ei].wuHidden=!show; }
+  else if(prefix==='jt-'){ if(typeof jtExercises!=='undefined'&&jtExercises[ei]) jtExercises[ei].wuHidden=!show; if(typeof jtSaveDraft==='function') jtSaveDraft(); }
 }
 
 // Nudge a numeric input by delta (used by the +/- steppers). Never goes below 0.
@@ -2100,6 +2108,8 @@ function stepInput(id, delta, autosave){
   if(v<0) v=0;
   el.value=v;
   if(autosave!==false && typeof autosaveDraft==='function') autosaveDraft();
+  // Steppers change values without firing oninput, so JT must be told explicitly
+  else if(String(id).startsWith('jt-') && typeof jtSaveDraft==='function') jtSaveDraft();
 }
 
 // Copy a set's weight & reps into every set below it (within the same exercise).
@@ -2435,7 +2445,7 @@ async function renderProgress() {
   // Build PR map — which dates had a PR
   const prDates = new Set();
   db.sessions.forEach(s => {
-    const dateKey = s.date ? s.date.split('T')[0] : null;
+    const dateKey = s.date ? localDateKey(s.date) : null;
     if(!dateKey) return;
     const exercises = safeJSON(s.exercises, []);
     const hasPR = exercises.some(ex => {
@@ -2457,7 +2467,7 @@ async function renderProgress() {
   // Build date → session map
   const dateSessionMap = {};
   db.sessions.forEach(s => {
-    const key = s.date ? s.date.split('T')[0] : null;
+    const key = s.date ? localDateKey(s.date) : null;
     if(!key) return;
     if(!dateSessionMap[key]) dateSessionMap[key] = [];
     dateSessionMap[key].push(s);
@@ -2466,7 +2476,7 @@ async function renderProgress() {
   calEl.innerHTML = '';
   for(let i = 181; i >= 0; i--) {
     const d = new Date(); d.setDate(d.getDate() - i);
-    const key = d.toISOString().split('T')[0];
+    const key = localDateKey(d);
     const daySessions = dateSessionMap[key] || [];
     const hasPR = prDates.has(key);
 
@@ -2652,7 +2662,7 @@ function renderVolumeChart(sessions) {
     const day = d.getDay(); // 0=Sun, 1=Mon ...
     const monday = new Date(d);
     monday.setDate(d.getDate() - (day === 0 ? 6 : day - 1));
-    const key = monday.toISOString().split('T')[0];
+    const key = localDateKey(monday);
     if(!weeks.includes(key)) {
       weeks.push(key);
       weekStarts.push(monday);
@@ -2665,7 +2675,7 @@ function renderVolumeChart(sessions) {
         const d = new Date(s.date);
         const day = d.getDay();
         const mon = new Date(d); mon.setDate(d.getDate() - (day===0?6:day-1));
-        const sw = mon.toISOString().split('T')[0];
+        const sw = localDateKey(mon);
         return sw === wk && (s.muscles||[]).includes(muscle);
       }).reduce((sum, s) => {
         return sum + (s.exercises||[]).filter(e => e.muscle === muscle || (e.muscle||'').includes(muscle)).reduce((vs, ex) => vs + calcVolume([ex]), 0);
@@ -2709,10 +2719,10 @@ function renderCardioChart(sessions){
     const d = new Date(); d.setDate(d.getDate() - i*7);
     const day = d.getDay();
     const monday = new Date(d); monday.setDate(d.getDate() - (day===0?6:day-1));
-    const key = monday.toISOString().split('T')[0];
+    const key = localDateKey(monday);
     if(!weeks.includes(key)) weeks.push(key);
   }
-  const weekKey = dateStr => { const d=new Date(dateStr); const day=d.getDay(); const mon=new Date(d); mon.setDate(d.getDate()-(day===0?6:day-1)); return mon.toISOString().split('T')[0]; };
+  const weekKey = dateStr => { const d=new Date(dateStr); const day=d.getDay(); const mon=new Date(d); mon.setDate(d.getDate()-(day===0?6:day-1)); return localDateKey(mon); };
   const minutesData = weeks.map(wk => sessions.filter(s => weekKey(s.date)===wk).reduce((sum,s)=> sum + (s.exercises||[]).reduce((a,ex)=>a+cardioMinutes(ex),0), 0));
   const distData = weeks.map(wk => Math.round(sessions.filter(s => weekKey(s.date)===wk).reduce((sum,s)=> sum + (s.exercises||[]).reduce((a,ex)=>a+cardioDistance(ex),0), 0)*10)/10);
   const hasDist = distData.some(v => v>0);
@@ -2746,7 +2756,7 @@ function renderStrengthChart(sessions) {
       const ex = (s.exercises||[]).find(e => e.name === exName && (e.equipment||'')===exEquip && e.loggedSets?.sets?.length);
       if(!ex) return;
       // Store ISO date for correct sorting, display label separately
-      const isoDate = s.date.split('T')[0];
+      const isoDate = localDateKey(s.date);
       if(strengthMode === 'weight') {
         const maxKg = Math.max(...workingSets(ex).filter(st => st.kg).map(st => st.kg), 0);
         if(maxKg > 0) pts.push({ iso: isoDate, display: fmt(s.date), y: maxKg });
@@ -2785,14 +2795,14 @@ function renderStrengthChart(sessions) {
 // ── BODY ──────────────────────────────────────────────────────────
 async function logBody(){
   const weight=parseFloat(document.getElementById('body-weight').value);if(!weight)return;
-  const entry={user_id:currentUser.id,date:document.getElementById('body-date').value||new Date().toISOString().split('T')[0],weight,fat:parseFloat(document.getElementById('body-fat').value)||null,chest:parseFloat(document.getElementById('meas-chest').value)||null,waist:parseFloat(document.getElementById('meas-waist').value)||null,hips:parseFloat(document.getElementById('meas-hips').value)||null,bicep:parseFloat(document.getElementById('meas-bicep').value)||null,thigh:parseFloat(document.getElementById('meas-thigh').value)||null,shoulder:parseFloat(document.getElementById('meas-shoulder').value)||null,calf:parseFloat(document.getElementById('meas-calf').value)||null,neck:parseFloat(document.getElementById('meas-neck').value)||null};
+  const entry={user_id:currentUser.id,date:document.getElementById('body-date').value||localDateKey(new Date()),weight,fat:parseFloat(document.getElementById('body-fat').value)||null,chest:parseFloat(document.getElementById('meas-chest').value)||null,waist:parseFloat(document.getElementById('meas-waist').value)||null,hips:parseFloat(document.getElementById('meas-hips').value)||null,bicep:parseFloat(document.getElementById('meas-bicep').value)||null,thigh:parseFloat(document.getElementById('meas-thigh').value)||null,shoulder:parseFloat(document.getElementById('meas-shoulder').value)||null,calf:parseFloat(document.getElementById('meas-calf').value)||null,neck:parseFloat(document.getElementById('meas-neck').value)||null};
   const {data:bodyData,error:bodyErr}=await sb.from('body_log').insert(entry).select().single();
   if(bodyErr){dbErr('Body log',bodyErr);return;}if(bodyData){db.body.push(bodyData);db.body.sort((a,b)=>new Date(a.date)-new Date(b.date));toast('Measurements saved.','ok');}
   renderBody();
 }
 let wChart=null,fChart=null;
 function renderBody(){
-  document.getElementById('body-date').value=new Date().toISOString().split('T')[0];
+  document.getElementById('body-date').value=localDateKey(new Date());
   if(wChart){try{wChart.destroy();}catch(e){}}if(fChart){try{fChart.destroy();}catch(e){}}
   const tc='rgba(0,0,0,0.35)',gc='rgba(0,0,0,0.06)';
   wChart=new Chart(document.getElementById('chart-weight'),{type:'line',data:{labels:db.body.map(b=>b.date),datasets:[{data:db.body.map(b=>b.weight),borderColor:'#1A1A18',backgroundColor:'transparent',tension:0.3,pointRadius:3,pointBackgroundColor:'#1A1A18'}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{color:tc,font:{size:11}},grid:{display:false},border:{display:false}},y:{ticks:{color:tc,callback:v=>v+'kg'},grid:{color:gc},border:{display:false}}}}});
@@ -3827,6 +3837,7 @@ function renderJustTrain() {
     musclePick.value = [...musclePick.options].some(o=>o.value===prev) ? prev : '__all';
   }
   jtPopulateExercisePick();
+  if(!jtExercises.length && jtRestoreDraft()) toast('Restored your unsaved Just Train session.');
   jtRenderSession();
 }
 
@@ -3950,6 +3961,7 @@ function jtCaptureInputs(){
 }
 
 function jtRenderSession() {
+  jtSaveDraft();
   const el = document.getElementById('jt-session-content');
   const actEl = document.getElementById('jt-actions');
   if(!jtExercises.length) {
@@ -4003,7 +4015,7 @@ function jtRenderSession() {
     const isoEx = isIsometric(ex);
     let setRows = '<div class="set-head"><span class="set-head-sp"></span><span>weight (kg)</span><span>' + (isoEx?'hold (sec)':'reps') + '</span><span class="set-head-sp"></span></div>';
     if(ex.isCardio) {
-      setRows = '<div class="set-row"><span class="set-num">Time</span><input class="set-inp" type="number" inputmode="numeric" id="jt-' + ei + '-kg-0" placeholder="min" value="' + (ex.draftMinutes || '') + '" style="width:80px;"></div>';
+      setRows = '<div class="set-row"><span class="set-num">Time</span><input class="set-inp" type="number" inputmode="numeric" id="jt-' + ei + '-kg-0" placeholder="min" value="' + (ex.draftMinutes || '') + '" style="width:80px;" oninput="jtSaveDraft()"></div>';
     } else {
       const wuHidden = ex.wuHidden;
       const wStep = weightStep(ex.equipment);
@@ -4011,8 +4023,8 @@ function jtRenderSession() {
       const wuReps = ex.wuDraft && ex.wuDraft.reps ? ex.wuDraft.reps : '';
       setRows += '<div class="set-row wu-row" id="jt-' + ei + '-wu-row" style="' + (wuHidden?'display:none;':'') + '">'
         + '<span class="set-num" style="color:#92600A;font-weight:600;width:48px;">Warm-up</span>'
-        + '<div class="stepper"><button type="button" class="step-btn minus" onclick="stepInput(\'jt-' + ei + '-wu-kg\',-' + wStep + ',false)">\u2212</button><input class="set-inp set-kg" type="number" inputmode="decimal" id="jt-' + ei + '-wu-kg" placeholder="kg" value="' + wuKg + '" step="' + wStep + '" min="0"><button type="button" class="step-btn plus" onclick="stepInput(\'jt-' + ei + '-wu-kg\',' + wStep + ',false)">+</button></div>'
-        + '<div class="stepper"><button type="button" class="step-btn minus" onclick="stepInput(\'jt-' + ei + '-wu-reps\',-1,false)">\u2212</button><input class="set-inp set-reps" type="number" inputmode="numeric" id="jt-' + ei + '-wu-reps" placeholder="reps" value="' + wuReps + '" min="0"><button type="button" class="step-btn plus" onclick="stepInput(\'jt-' + ei + '-wu-reps\',1,false)">+</button></div>'
+        + '<div class="stepper"><button type="button" class="step-btn minus" onclick="stepInput(\'jt-' + ei + '-wu-kg\',-' + wStep + ',false)">\u2212</button><input class="set-inp set-kg" type="number" inputmode="decimal" id="jt-' + ei + '-wu-kg" placeholder="kg" value="' + wuKg + '" step="' + wStep + '" min="0" oninput="jtSaveDraft()"><button type="button" class="step-btn plus" onclick="stepInput(\'jt-' + ei + '-wu-kg\',' + wStep + ',false)">+</button></div>'
+        + '<div class="stepper"><button type="button" class="step-btn minus" onclick="stepInput(\'jt-' + ei + '-wu-reps\',-1,false)">\u2212</button><input class="set-inp set-reps" type="number" inputmode="numeric" id="jt-' + ei + '-wu-reps" placeholder="reps" value="' + wuReps + '" min="0" oninput="jtSaveDraft()"><button type="button" class="step-btn plus" onclick="stepInput(\'jt-' + ei + '-wu-reps\',1,false)">+</button></div>'
         + '<button type="button" class="set-fill" title="Hide warm-up set" onclick="toggleWarmupRow(\'jt-\',' + ei + ',false)">\u00d7</button>'
         + '</div>'
         + '<div id="jt-' + ei + '-wu-add" style="' + (wuHidden?'':'display:none;') + 'margin:0 0 6px 48px;"><button type="button" class="btn btn-sm" style="font-size:11px;padding:3px 8px;" onclick="toggleWarmupRow(\'jt-\',' + ei + ',true)">+ Add warm-up set</button></div>';
@@ -4029,12 +4041,12 @@ function jtRenderSession() {
           + '<span class="set-num">Set ' + (i+1) + '</span>'
           + '<div class="stepper">'
             + '<button type="button" class="step-btn minus" onclick="stepInput(\'' + kgId + '\',-' + wStep + ',false)">\u2212</button>'
-            + '<input class="set-inp set-kg" type="number" inputmode="decimal" enterkeyhint="next" id="' + kgId + '" placeholder="kg" value="' + prefillKg + '" step="' + wStep + '" min="0">'
+            + '<input class="set-inp set-kg" type="number" inputmode="decimal" enterkeyhint="next" id="' + kgId + '" placeholder="kg" value="' + prefillKg + '" step="' + wStep + '" min="0" oninput="jtSaveDraft()">'
             + '<button type="button" class="step-btn plus" onclick="stepInput(\'' + kgId + '\',' + wStep + ',false)">+</button>'
             + '</div>'
           + '<div class="stepper">'
             + '<button type="button" class="step-btn minus" onclick="stepInput(\'' + repsId + '\',-1,false)">\u2212</button>'
-            + '<input class="set-inp set-reps" type="number" inputmode="numeric" enterkeyhint="next" id="' + repsId + '" placeholder="' + (isoEx?'sec':'reps') + '" value="' + prefillReps + '" min="0">'
+            + '<input class="set-inp set-reps" type="number" inputmode="numeric" enterkeyhint="next" id="' + repsId + '" placeholder="' + (isoEx?'sec':'reps') + '" value="' + prefillReps + '" min="0" oninput="jtSaveDraft()">'
             + '<button type="button" class="step-btn plus" onclick="stepInput(\'' + repsId + '\',1,false)">+</button>'
             + '</div>'
           + (i < ex.sets-1 ? '<button type="button" class="set-fill" title="Copy this set to the ones below" onclick="jtFillDown(' + ei + ',' + i + ')">\u2913</button>' : '<span style="width:34px;flex-shrink:0;"></span>')
@@ -4065,7 +4077,7 @@ function jtRenderSession() {
       + banner
       + setRows
       + cueHtml
-      + '<input class="note-inp" type="text" id="jt-' + ei + '-note" value="' + String(ex.draftNote||'').replace(/"/g,'&quot;') + '" placeholder="Note for this exercise...">'
+      + '<input class="note-inp" type="text" id="jt-' + ei + '-note" value="' + String(ex.draftNote||'').replace(/"/g,'&quot;') + '" placeholder="Note for this exercise..." oninput="jtSaveDraft()">'
       + '</div>'
       + (gInfo && gInfo.isEnd ? '</div>' : '');
   }).join('');
@@ -4076,6 +4088,40 @@ function jtRenderSession() {
 // reliable enough for this extraction) and constrains every name to the user's library —
 // unmatched names are dropped and reported rather than silently invented. Nothing is
 // saved: parsed exercises land in the normal Just Train UI for review and correction.
+async // ── JUST TRAIN DRAFT PERSISTENCE ──────────────────────────────────
+// JT holds its session in memory only, so a reload or Safari evicting the tab mid-workout
+// used to lose everything. Draft is stored locally (per user) and restored on load.
+// localStorage rather than the sessions table, so it can't collide with the Log screen's
+// single is_draft row. Device-local by design — a gym session belongs to the phone in hand.
+function jtDraftKey(){ return 'gymlog_jt_draft_' + (currentUser ? currentUser.id : 'anon'); }
+let _jtDraftTimer = null;
+function jtSaveDraft(){
+  if(typeof jtCaptureInputs === 'function') jtCaptureInputs();
+  clearTimeout(_jtDraftTimer);
+  _jtDraftTimer = setTimeout(() => {
+    try {
+      if(!jtExercises.length){ localStorage.removeItem(jtDraftKey()); return; }
+      localStorage.setItem(jtDraftKey(), JSON.stringify({ savedAt: new Date().toISOString(), exercises: jtExercises }));
+    } catch(e){ console.warn('JT draft save failed', e); }
+  }, 600);
+}
+function jtClearDraft(){
+  clearTimeout(_jtDraftTimer);
+  try { localStorage.removeItem(jtDraftKey()); } catch(e){}
+}
+function jtRestoreDraft(){
+  try {
+    const raw = localStorage.getItem(jtDraftKey());
+    if(!raw) return false;
+    const d = JSON.parse(raw);
+    if(!d || !Array.isArray(d.exercises) || !d.exercises.length) return false;
+    // Drop stale drafts so an abandoned session doesn't resurface days later
+    if(d.savedAt && (Date.now() - new Date(d.savedAt).getTime()) > 36*3600e3){ jtClearDraft(); return false; }
+    jtExercises = d.exercises;
+    return true;
+  } catch(e){ return false; }
+}
+
 async function jtParseVoice(){
   const ta = document.getElementById('jt-voice-text');
   const btn = document.getElementById('jt-voice-btn');
@@ -4191,6 +4237,7 @@ function jtFillDown(ei, fromIndex){
     const k=document.getElementById('jt-'+ei+'-kg-'+i); if(k) k.value=kg;
     const r=document.getElementById('jt-'+ei+'-reps-'+i); if(r) r.value=reps;
   }
+  jtSaveDraft();
 }
 
 function jtRemoveExercise(ei) {
@@ -4251,6 +4298,7 @@ async function jtSaveSession() {
   if(data) db.sessions.push({...data, sessionTitle: title, exercises: jtExercises, muscles});
 
   jtExercises = [];
+  jtClearDraft();
   resetCardioBlocks();
   const jtCardioEl = document.getElementById('jt-cardio-blocks');
   if(jtCardioEl) jtCardioEl.innerHTML = '';
@@ -4261,6 +4309,7 @@ async function jtSaveSession() {
 function jtDiscardSession() {
   if(!confirm('Discard this session?')) return;
   jtExercises = [];
+  jtClearDraft();
   resetCardioBlocks();
   const jtCardioEl = document.getElementById('jt-cardio-blocks');
   if(jtCardioEl) jtCardioEl.innerHTML = '';
@@ -4374,7 +4423,7 @@ function exportHistoryCSV() {
   rows.push(['Date','Session title','Muscles','Exercise','Sets','Set','kg','Reps','Exercise note','Session note'].join(','));
 
   db.sessions.forEach(s => {
-    const date = s.date ? s.date.split('T')[0] : '';
+    const date = s.date ? localDateKey(s.date) : '';
     const title = (s.sessionTitle || s.title || '').replace(/,/g, ';');
     const muscles = safeJSON(s.muscles, []).join('; ').replace(/,/g, ';');
     const sessionNote = (s.note || '').replace(/,/g, ';').replace(/\n/g, ' ');
@@ -4417,7 +4466,7 @@ function exportHistoryCSV() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = 'gymlog-history-' + new Date().toISOString().split('T')[0] + '.csv';
+  a.download = 'gymlog-history-' + localDateKey(new Date()) + '.csv';
   a.click();
   URL.revokeObjectURL(url);
   toast('Exported ' + db.sessions.length + ' sessions.', 'ok');
