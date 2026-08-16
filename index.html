@@ -772,8 +772,8 @@ html.mobile-layout .topbar { display:flex; align-items:center; gap:6px; position
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.6.1';
-const BUILD_STAMP = '2026-06-08b';
+const APP_VERSION = '1.6.2';
+const BUILD_STAMP = '2026-06-08c';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -2070,6 +2070,7 @@ function renderLog() {
 
     // Set rows — prefer draft data if resuming, else pre-fill from last session
     const wStep=weightStep(ex.equipment);
+    const isoEx=isIsometric(ex);
     let setRows='';
     for(let i=0;i<numSets;i++){
       const draftSet=ex.draftSets?ex.draftSets[i]:null;
@@ -2125,7 +2126,6 @@ function renderLog() {
       const cardioDraft=ex.draftSets&&ex.draftSets[0]?ex.draftSets[0].kg:'';
       html2+='<div class="set-row"><span class="set-num">Time</span><input class="set-inp" type="number" inputmode="numeric" id="ex-'+ei+'-kg-0" placeholder="min" value="'+cardioDraft+'" style="width:80px;" oninput="autosaveDraft()"></div>';
     } else {
-      const isoEx=isIsometric(ex);
       html2+='<div class="set-head"><span class="set-head-sp"></span><span>weight (kg)</span><span>'+(isoEx?'hold (sec)':'reps')+'</span><span class="set-head-sp"></span></div>';
       html2+=warmupRowsHtml('ex-', ei, ex, wStep);
       html2+=setRows;
@@ -4186,7 +4186,7 @@ function jtRenderSession() {
 // reliable enough for this extraction) and constrains every name to the user's library —
 // unmatched names are dropped and reported rather than silently invented. Nothing is
 // saved: parsed exercises land in the normal Just Train UI for review and correction.
-async // ── JUST TRAIN DRAFT PERSISTENCE ──────────────────────────────────
+// ── JUST TRAIN DRAFT PERSISTENCE ──────────────────────────────────
 // JT holds its session in memory only, so a reload or Safari evicting the tab mid-workout
 // used to lose everything. Draft is stored locally (per user) and restored on load.
 // localStorage rather than the sessions table, so it can't collide with the Log screen's
