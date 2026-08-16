@@ -3812,6 +3812,7 @@ function openHistoryEdit(id) {
     + '<div style="display:flex;gap:8px;">'
     + '<button class="btn btn-dark btn-sm" data-sid="' + id + '" onclick="saveHistoryEdit(this.dataset.sid)">Save changes</button>'
     + '<button class="btn btn-sm" data-sid="' + id + '" onclick="cancelHistoryEdit(this.dataset.sid)">Cancel</button>'
+    + '<button class="btn btn-sm" data-sid="' + id + '" onclick="deleteHistorySession(this.dataset.sid)" style="margin-left:auto;color:#B3261E;border-color:rgba(179,38,30,0.35);">Delete</button>'
     + '</div>';
 
   container.appendChild(editDiv);
@@ -3827,6 +3828,25 @@ function heUpdateEx(id, ei, name, muscle) {
     if(muscle) exercises[ei].muscle = muscle;
     s.exercises = exercises;
   }
+}
+
+// Permanently remove a logged session. Irreversible, so it asks first and names the
+// session — deleting the wrong workout silently would be worse than an extra tap.
+async function deleteHistorySession(id){
+  const s = db.sessions.find(s => String(s.id) === String(id));
+  if(!s) return;
+  const label = (s.sessionTitle || s.title || 'this session') + ' — ' + fmt(s.date);
+  if(!confirm('Delete "' + label + '" permanently?\n\nThis cannot be undone, and it will affect your volume, PRs and streak.')) return;
+
+  const {error} = await sb.from('sessions').delete().eq('id', s.id);
+  if(error){ dbErr('Delete session', error); return; }
+
+  db.sessions = db.sessions.filter(x => String(x.id) !== String(id));
+  const panel = document.getElementById('hist-edit-' + id);
+  if(panel) panel.remove();
+  if(String(historyExpandedId) === String(id)) historyExpandedId = null;
+  renderHistoryList();
+  toast('Session deleted.');
 }
 
 function heUpdateModifier(id, ei, val) {
