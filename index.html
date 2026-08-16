@@ -1110,7 +1110,7 @@ initApp();
 // with INITIAL_SESSION event automatically when a cookie session is found.
 
 // ── DATA LAYER ───────────────────────────────────────────────────
-const defaultDb = { profile:{name:'',level:'intermediate',goal:'hypertrophy'}, library:[], sessions:[], body:[], goals:[], rest:{strength:180,hyp:90,end:60,trans:120}, selectedMuscles:[], selectedTime:'60', selectedTimeCardio:'15', muscleSettings:{}, progressFilter:'All', activeSession:null, pendingSession:null, savedWorkouts:[] };
+const defaultDb = { profile:{name:'',level:'intermediate',goal:'hypertrophy'}, library:[], sessions:[], body:[], goals:[], aliases:{}, rest:{strength:180,hyp:90,end:60,trans:120}, selectedMuscles:[], selectedTime:'60', selectedTimeCardio:'15', muscleSettings:{}, progressFilter:'All', activeSession:null, pendingSession:null, savedWorkouts:[] };
 let db = {...defaultDb};
 
 let _loadingData = false;
@@ -1152,6 +1152,9 @@ async function loadUserData() {
   console.log('querying draft...');
   const draft = await sb.from('sessions').select('*').eq('user_id',uid).eq('is_draft',true).order('created_at').limit(1);
   console.log('draft done');
+  // Exercise aliases — non-fatal: if the migration hasn't been run, matching just falls
+  // back to fuzzy logic instead of breaking the whole load.
+  try { await fetchExAliases(); } catch(e){ console.warn('aliases unavailable', e); db.aliases = db.aliases || {}; }
   console.log('loadUserData results - prof:', prof.error||prof.data?.name, 'lib:', lib.data?.length, 'sess:', sess.data?.length, 'lib error:', lib.error, 'sess error:', sess.error);
 
   // Parse profile data into db.profile
@@ -4336,15 +4339,45 @@ function normalizeExName(s){
     .replace(/\s+/g,' ').trim();
 }
 function exAliasKey(){ return 'gymlog_ex_aliases_' + (currentUser ? currentUser.id : 'anon'); }
-function loadExAliases(){
-  try { return JSON.parse(localStorage.getItem(exAliasKey()) || '{}') || {}; } catch(e){ return {}; }
+// Aliases live in Supabase (table: exercise_aliases) so they follow you across devices.
+// db.aliases is the in-memory cache — a plain {normalisedPhrase: libraryName} map.
+function loadExAliases(){ return db.aliases || {}; }
+
+async function fetchExAliases(){
+  if(!currentUser) return {};
+  const {data, error} = await sb.from('exercise_aliases').select('alias,exercise_name').eq('user_id', currentUser.id);
+  if(error){ console.warn('alias load failed', error); return db.aliases || {}; }
+  const map = {};
+  (data||[]).forEach(r => { map[r.alias] = r.exercise_name; });
+  db.aliases = map;
+  await migrateLocalAliases();
+  return db.aliases;
 }
-function saveExAlias(spoken, libName){
-  try {
-    const a = loadExAliases();
-    a[normalizeExName(spoken)] = libName;
-    localStorage.setItem(exAliasKey(), JSON.stringify(a));
-  } catch(e){ console.warn('alias save failed', e); }
+
+// One-time lift of any aliases taught before they were stored server-side.
+async function migrateLocalAliases(){
+  let local = {};
+  try { local = JSON.parse(localStorage.getItem(exAliasKey()) || '{}') || {}; } catch(e){ return; }
+  const keys = Object.keys(local);
+  if(!keys.length) return;
+  const rows = keys.filter(k => !db.aliases[k])
+    .map(k => ({user_id: currentUser.id, alias: k, exercise_name: local[k]}));
+  if(rows.length){
+    const {error} = await sb.from('exercise_aliases').upsert(rows, {onConflict:'user_id,alias'});
+    if(error){ console.warn('alias migration failed', error); return; }
+    rows.forEach(r => { db.aliases[r.alias] = r.exercise_name; });
+  }
+  try { localStorage.removeItem(exAliasKey()); } catch(e){}
+}
+
+async function saveExAlias(spoken, libName){
+  const key = normalizeExName(spoken);
+  if(!key || !currentUser) return;
+  if(!db.aliases) db.aliases = {};
+  db.aliases[key] = libName; // optimistic: matching works immediately
+  const {error} = await sb.from('exercise_aliases')
+    .upsert({user_id: currentUser.id, alias: key, exercise_name: libName}, {onConflict:'user_id,alias'});
+  if(error) console.warn('alias save failed', error);
 }
 // Returns the library entry for a spoken/AI name, or null. Deliberately conservative:
 // a weak fuzzy score returns null so the user is asked rather than given a wrong exercise.
@@ -4416,7 +4449,7 @@ function jtRenderUnmatched(){
       }).join('');
 }
 
-function jtResolveUnmatched(ui){
+async function jtResolveUnmatched(ui){
   const u = _jtPendingUnmatched[ui];
   if(!u) return;
   const sel = document.getElementById('jt-unm-' + ui);
@@ -4425,7 +4458,7 @@ function jtResolveUnmatched(ui){
   const lib = (db.library||[]).find(e => e.name === name);
   if(!lib) return;
 
-  saveExAlias(u.spoken, lib.name); // learn it, so next time it matches automatically
+  await saveExAlias(u.spoken, lib.name); // learn it, so next time it matches automatically
   const isCardio = String(lib.muscle||'').toLowerCase().includes('cardio');
   jtCaptureInputs();
   jtExercises.push({
