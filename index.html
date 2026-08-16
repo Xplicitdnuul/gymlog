@@ -412,7 +412,8 @@ html.mobile-layout .topbar { display:flex; align-items:center; gap:6px; position
         </div>
         <div id="planner-estimate" class="banner banner-blue" style="margin-top:12px;"></div>
         <div style="display:flex;gap:10px;margin-top:14px;">
-          <button class="btn btn-dark" id="gen-btn" onclick="generateSession()">Generate session ↗</button>
+          <button class="btn btn-dark" id="gen-btn" onclick="generateSession(false)">Generate session ↗</button>
+          <button class="btn" id="gen-auto-btn" onclick="generateSession(true)" title="Ignore the selection above and let the AI choose based on your history and goals">Suggest for me ✨</button>
           <span id="gen-status" style="font-size:13px;color:var(--muted);align-self:center;"></span>
         </div>
       </div>
@@ -1836,28 +1837,142 @@ async function saveSavedWorkouts(workout){
   return data;
 }
 
-async function generateSession() {
-  if(!db.selectedMuscles.length){alert('Pick at least one muscle group.');return;}
+// Everything the generator should know about how training has actually been going.
+// Previously the prompt only got "exercise names from the last 5 sessions to avoid",
+// which is why it couldn't prioritise stale muscles or suggest a working weight.
+function buildTrainingContext(){
+  // 1. Days since each tracked muscle was last trained (999 = never)
+  const recency = MUSCLES_W.map(m => ({muscle:m, days:daysSince(m)}))
+    .sort((a,b) => b.days - a.days);
+  const recencyTxt = recency
+    .map(r => '- ' + r.muscle + ': ' + (r.days>=999 ? 'never trained' : r.days + 'd ago'))
+    .join('\n');
+
+  // 2. Last working set per exercise+equipment+modifier, so it can propose a load
+  const lastLoads = [];
+  const seen = new Set();
+  for(let i=db.sessions.length-1; i>=0 && lastLoads.length<40; i--){
+    (db.sessions[i].exercises||[]).forEach(ex=>{
+      if(!ex || ex.isCardio) return;
+      const key = ex.name+'|'+(ex.equipment||'')+'|'+(ex.modifier||'');
+      if(seen.has(key)) return;
+      const sets = workingSets(ex);
+      if(!sets.length) return;
+      seen.add(key);
+      const best = sets.reduce((a,b)=>((b.kg||0)>(a.kg||0)?b:a), sets[0]);
+      const hitAll = ex.loggedSets && ex.loggedSets.targetReps
+        ? sets.every(st => (st.reps||0) >= ex.loggedSets.targetReps) : null;
+      lastLoads.push(ex.name
+        + (ex.equipment?' ['+ex.equipment+']':'')
+        + (ex.modifier?' ('+ex.modifier+')':'')
+        + ': ' + (best.kg!=null?best.kg+'kg':'bodyweight') + ' x ' + (best.reps||'?')
+        + ' across ' + sets.length + ' set(s)'
+        + (hitAll===true?' — all target reps hit':'')
+        + (hitAll===false?' — fell short of target':''));
+    });
+  }
+
+  // 3. Recent session shape (last 5) so it can avoid repeating the same stimulus
+  const recentSessions = db.sessions.slice(-5).map(s=>{
+    const exs = s.exercises||[];
+    return fmt(s.date) + ': ' + (s.sessionTitle||s.title||'session')
+      + ' [' + categorizeWorkout(exs) + '] — ' + exs.map(e=>e.name).join(', ');
+  }).join('\n');
+
+  // 4. Active programme position, so a generated session complements rather than duplicates
+  let programmeTxt = 'None active.';
+  try {
+    const prog = (typeof programmes!=='undefined' && activeProgrammeId)
+      ? programmes.find(p=>String(p.id)===String(activeProgrammeId)) : null;
+    if(prog){
+      const days = safeJSON(prog.days,[]);
+      const cur = prog.current_day||0;
+      const d = days[cur];
+      programmeTxt = 'Following "'+(prog.name||prog.title||'programme')+'". Next scheduled day: '
+        + (d ? (d.title||d.workoutTitle||('day '+(cur+1))) + (d.type==='rest'?' (rest)':'') : 'unknown')
+        + '. Do NOT duplicate that day — complement it.';
+    }
+  } catch(e){}
+
+  // 5. Recent training load, for sane volume
+  const last14 = db.sessions.filter(s=>(Date.now()-new Date(s.date))/864e5 <= 14);
+  const loadTxt = last14.length + ' sessions in the last 14 days';
+
+  // 6. How often each library exercise actually gets used. A library entry you've never
+  // logged is weak evidence AGAINST it (not available at your gym, or tried and disliked),
+  // so the generator should lean on proven staples rather than treat novelty as a virtue.
+  const useCount = {};
+  db.sessions.forEach(s => (s.exercises||[]).forEach(ex => {
+    if(ex && ex.name) useCount[ex.name] = (useCount[ex.name]||0) + 1;
+  }));
+  const staples = db.library.map(e => ({name:e.name, n:useCount[e.name]||0}))
+    .filter(e => e.n > 0).sort((a,b) => b.n - a.n);
+  const staplesTxt = staples.length
+    ? staples.slice(0,25).map(e => e.name + ' (' + e.n + 'x)').join(', ')
+    : 'None yet.';
+  const neverUsed = db.library.map(e => e.name).filter(n => !useCount[n]);
+  const neverUsedTxt = neverUsed.length ? neverUsed.join(', ') : 'None';
+
+  return {recencyTxt, lastLoadsTxt: lastLoads.join('\n')||'No logged history yet.', recentSessions: recentSessions||'None', programmeTxt, loadTxt, recency, staplesTxt, neverUsedTxt, stapleCount: staples.length};
+}
+
+let _lastGenAuto = false;
+async function generateSession(auto) {
+  _lastGenAuto = !!auto;
+  // auto === true: no muscle selection — let the AI choose from history, goals and recency
+  if(!auto && !db.selectedMuscles.length){alert('Pick at least one muscle group, or use "Suggest for me".');return;}
   if(!db.library.length){alert('Add exercises to your library first.');return;}
-  const btn=document.getElementById('gen-btn'),status=document.getElementById('gen-status');
-  btn.disabled=true;status.innerHTML='<span class="loading"><span></span><span></span><span></span></span>';
+  const btn=document.getElementById('gen-btn'),autoBtn=document.getElementById('gen-auto-btn'),status=document.getElementById('gen-status');
+  btn.disabled=true; if(autoBtn) autoBtn.disabled=true;
+  status.innerHTML='<span class="loading"><span></span><span></span><span></span></span>';
   document.getElementById('planner-result').innerHTML='';
-  const recent=db.sessions.slice(-5).flatMap(s=>s.exercises?s.exercises.map(e=>e.name):[]);
+
+  const ctx=buildTrainingContext();
   const libTxt=db.library.map(e=>e.name+' ('+e.muscle+')').join('\n');
   const goalTxt=db.goals.map(g=>g.text).join(', ')||'None';
   const wm=db.selectedMuscles.filter(m=>MUSCLES_W.includes(m)),cm=db.selectedMuscles.filter(m=>MUSCLES_C.includes(m));
   const muscleLines=wm.map(m=>{const s=db.muscleSettings[m]||{goal:'hypertrophy',sets:3,expm:2};return '- '+m+': '+s.expm+' exercise(s), '+s.sets+' sets, goal='+s.goal;}).join('\n');
-  const prompt='You are a personal trainer AI. Generate a gym session.\n'
-    +'PER-MUSCLE INSTRUCTIONS:\n'+muscleLines+'\n'
-    +'CARDIO: '+(cm.length?cm.join(', ')+' - '+db.selectedTimeCardio+' min each':'None')+'\n'
-    +'USER GOALS (slightly favour, do not crowd out other muscles): '+goalTxt+'\n'
-    +'EXERCISE LIBRARY (ONLY use these, never invent):\n'+libTxt+'\n'
-    +'RECENT EXERCISES TO AVOID: '+(recent.length?recent.join(', '):'None')+'\n'
-    +'Reps guide: strength=3-6, hypertrophy=8-12, endurance=15-20. Apply per muscle based on its goal.\n'
+  const defGoal=(db.profile&&db.profile.goal)||'hypertrophy';
+
+  const targetBlock = auto
+    ? 'TARGET: You choose. Pick the muscles that most need work, based primarily on DAYS SINCE TRAINED\n'
+      + '(anything 5+ days is stale, 7+ is a priority), balanced against the user goals and what the recent\n'
+      + 'sessions already covered. Build one coherent session (a sensible split — e.g. upper, lower, full body,\n'
+      + 'push, pull — not a scattered list). Aim for 4-6 exercises, default goal=' + defGoal + '.\n'
+      + 'State in coachNote WHY you chose these muscles, referencing the days-since numbers.\n'
+    : 'PER-MUSCLE INSTRUCTIONS (the user chose these):\n'+muscleLines+'\n'
+      + 'CARDIO: '+(cm.length?cm.join(', ')+' - '+db.selectedTimeCardio+' min each':'None')+'\n';
+
+  const prompt='You are a personal trainer AI generating the user\'s next gym session.\n\n'
+    +targetBlock+'\n'
+    +'USER GOALS (favour, but do not crowd out other muscles): '+goalTxt+'\n'
+    +'TRAINING LOAD: '+ctx.loadTxt+'\n'
+    +'ACTIVE PROGRAMME: '+ctx.programmeTxt+'\n\n'
+    +'DAYS SINCE EACH MUSCLE WAS TRAINED (most stale first):\n'+ctx.recencyTxt+'\n\n'
+    +'RECENT SESSIONS (for choosing which MUSCLES to work next — not a list of exercises to avoid):\n'+ctx.recentSessions+'\n\n'
+    +'LAST WORKING SETS (use these to set a sensible starting weight — if all target reps were hit,\n'
+    +'suggest a small increase; if they fell short, repeat the same weight):\n'+ctx.lastLoadsTxt+'\n\n'
+    +'YOUR PROVEN EXERCISES (times logged — these are known to work and be available):\n'+ctx.staplesTxt+'\n\n'
+    +'IN THE LIBRARY BUT NEVER LOGGED (treat with caution — there may be a reason: not available\n'
+    +'at the gym, unsuitable, or previously disliked):\n'+ctx.neverUsedTxt+'\n\n'
+    +'EXERCISE LIBRARY (ONLY use these exact names, never invent):\n'+libTxt+'\n\n'
+    +'RULES:\n'
+    +'- BUILD THE SESSION AROUND PROVEN EXERCISES. Most of the session should be movements the user\n'
+    +'  has logged before, so weights and progression carry over.\n'
+    +'- At most ONE never-logged exercise per session, and only where it fills a real gap\n'
+    +'  (a muscle the proven list does not cover). Never fill a session with untried movements.\n'
+    +'- "Avoid repeating the same stimulus" means vary the MUSCLES worked versus recent sessions;\n'
+    +'  it does NOT mean avoid exercises the user does regularly. Repeating a staple lift is good.\n'
+    +'- If you do include a never-logged exercise, say why in its tip.\n'
+    +'- Reps guide: strength=3-6, hypertrophy=8-12, endurance=15-20.\n'
+    +'- Put a concrete suggested working weight in "tip" when history gives you one\n'
+    +'  (e.g. "Last time 60kg x 8 for all sets — try 62.5kg"). If there is no history, say so instead of inventing a number.\n'
+    +'- Set "isRepeat":true for exercises the user has done before, false for new ones.\n'
+    +'- Do not schedule a muscle that was trained in the last 2 days unless the user explicitly selected it.\n'
     +'Return ONLY valid JSON, no markdown, no extra text:\n'
     +'{"sessionTitle":"...","exercises":[{"name":"...","muscle":"...","sets":3,"reps":"10 reps","isRepeat":false,"isCardio":false,"tip":"..."}],"coachNote":"..."}';
   try {
-    const res=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:2000,messages:[{role:'user',content:prompt}]})});
+    const res=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:2000,messages:[{role:'user',content:prompt}]})});
     const data=await res.json();
     const txt=data.content.map(b=>b.text||'').join('').replace(/```json|```/g,'').trim();
     let session;
@@ -1867,13 +1982,14 @@ async function generateSession() {
       console.error('Raw AI response:', txt);
       status.textContent='';
       toast('AI response was incomplete. Please try again.','error');
-      btn.disabled=false;
+      btn.disabled=false; if(autoBtn) autoBtn.disabled=false;
       return;
     }
-    db.pendingSession={...session,muscles:db.selectedMuscles,date:new Date().toISOString()};
+    const derived = auto ? sessionMuscles(session.exercises||[]) : db.selectedMuscles;
+    db.pendingSession={...session,muscles:derived,date:new Date().toISOString()};
     renderPlannerResult(session);status.textContent='';
   } catch(e){status.textContent='Error generating. Try again.';console.error(e);}
-  btn.disabled=false;
+  btn.disabled=false; if(autoBtn) autoBtn.disabled=false;
 }
 
 function renderPlannerResult(s) {
@@ -1903,7 +2019,7 @@ function renderPlannerResult(s) {
     +'<div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;">'
     +'<button class="btn btn-dark" onclick="startSession()">Start &amp; log this session</button>'
     +'<button class="btn" onclick="saveForLater()">Save for later</button>'
-    +'<button class="btn" onclick="generateSession()">Regenerate &#8599;</button>'
+    +'<button class="btn" onclick="generateSession(_lastGenAuto)">Regenerate &#8599;</button>'
     +'</div></div>';
 }
 
