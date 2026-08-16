@@ -540,6 +540,34 @@ html.mobile-layout .topbar { display:flex; align-items:center; gap:6px; position
     <div id="page-body" class="page">
       <div class="page-title">Body tracking</div>
       <div class="page-sub">Track weight and measurements over time</div>
+
+      <div class="card" id="card-timeoff">
+        <div class="card-title">Time off &amp; injury log</div>
+        <p style="font-size:13px;color:var(--muted);margin-bottom:10px;">Record illness, injury or travel so streaks, "days since" and programme adherence aren't penalised for time you couldn't train. Your volume, PRs and charts stay unchanged.</p>
+        <div class="form-row form-3">
+          <div class="form-group"><label class="form-label">Type</label>
+            <select id="to-kind" onchange="toKindChanged()">
+              <option value="illness">Illness</option>
+              <option value="injury">Injury</option>
+              <option value="travel">Travel</option>
+              <option value="rest">Planned rest</option>
+            </select></div>
+          <div class="form-group"><label class="form-label">From</label><input type="date" id="to-start"></div>
+          <div class="form-group"><label class="form-label">To (blank = ongoing)</label><input type="date" id="to-end"></div>
+        </div>
+        <div class="form-row form-2" id="to-injury-fields" style="display:none;">
+          <div class="form-group"><label class="form-label">Body part</label><input type="text" id="to-part" placeholder="e.g. Left shoulder"></div>
+          <div class="form-group"><label class="form-label">Severity</label>
+            <select id="to-severity">
+              <option value="niggle">Niggle</option>
+              <option value="moderate" selected>Moderate</option>
+              <option value="severe">Severe</option>
+            </select></div>
+        </div>
+        <div class="form-group"><label class="form-label">Note (optional)</label><input type="text" id="to-note" placeholder="What happened, how it felt, treatment…"></div>
+        <button class="btn btn-dark btn-sm" onclick="saveTimeOff()">Add entry</button>
+        <div id="timeoff-list" style="margin-top:14px;"></div>
+      </div>
       <div class="card">
         <div class="card-title">Log measurements</div>
         <div class="form-row form-3">
@@ -1140,7 +1168,7 @@ initApp();
 // with INITIAL_SESSION event automatically when a cookie session is found.
 
 // ── DATA LAYER ───────────────────────────────────────────────────
-const defaultDb = { profile:{name:'',level:'intermediate',goal:'hypertrophy'}, library:[], sessions:[], body:[], goals:[], aliases:{}, rest:{strength:180,hyp:90,end:60,trans:120}, selectedMuscles:[], selectedTime:'60', selectedTimeCardio:'15', muscleSettings:{}, progressFilter:'All', activeSession:null, pendingSession:null, savedWorkouts:[] };
+const defaultDb = { profile:{name:'',level:'intermediate',goal:'hypertrophy'}, library:[], sessions:[], body:[], goals:[], aliases:{}, timeOff:[], rest:{strength:180,hyp:90,end:60,trans:120}, selectedMuscles:[], selectedTime:'60', selectedTimeCardio:'15', muscleSettings:{}, progressFilter:'All', activeSession:null, pendingSession:null, savedWorkouts:[] };
 let db = {...defaultDb};
 
 let _loadingData = false;
@@ -1185,6 +1213,7 @@ async function loadUserData() {
   // Exercise aliases — non-fatal: if the migration hasn't been run, matching just falls
   // back to fuzzy logic instead of breaking the whole load.
   try { await fetchExAliases(); } catch(e){ console.warn('aliases unavailable', e); db.aliases = db.aliases || {}; }
+  try { await loadTimeOff(); } catch(e){ console.warn('time_off unavailable', e); db.timeOff = db.timeOff || []; }
   console.log('loadUserData results - prof:', prof.error||prof.data?.name, 'lib:', lib.data?.length, 'sess:', sess.data?.length, 'lib error:', lib.error, 'sess error:', sess.error);
 
   // Parse profile data into db.profile
@@ -1319,12 +1348,61 @@ function localDateKey(d){
 const fmt=d=>new Date(d).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});
 const fmtSecs=s=>{if(s<60)return s+'s';if(s%60===0)return(s/60)+'m';return Math.floor(s/60)+'m '+(s%60)+'s';};
 
+// ── TIME OFF / INJURY LOG ─────────────────────────────────────────
+// Periods the user could not train. These annotate history rather than alter it: volume,
+// PRs and e1RM stay factual. Only EXPECTATIONS adjust — streak, days-since and adherence —
+// so an illness reads as an interruption, not a decline.
+const TIMEOFF_KINDS = ['illness','injury','travel','rest'];
+const TIMEOFF_LABEL = {illness:'Illness', injury:'Injury', travel:'Travel', rest:'Planned rest'};
+
+async function loadTimeOff(){
+  if(!currentUser) return [];
+  const {data,error} = await sb.from('time_off').select('*').eq('user_id',currentUser.id).order('start_date',{ascending:false});
+  if(error){ console.warn('time_off unavailable', error); db.timeOff = db.timeOff||[]; return db.timeOff; }
+  db.timeOff = data||[];
+  return db.timeOff;
+}
+
+// Local-date key (YYYY-MM-DD) — avoids UTC shifting a day either side
+function dayKey(d){
+  const x = new Date(d);
+  return x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0')+'-'+String(x.getDate()).padStart(2,'0');
+}
+function isDayOff(d){
+  const k = dayKey(d);
+  return (db.timeOff||[]).some(t => k >= t.start_date && k <= (t.end_date || dayKey(new Date())));
+}
+// Number of days in [from,to] covered by logged time off
+function daysOffBetween(from, to){
+  let n = 0;
+  const cur = new Date(from); cur.setHours(12,0,0,0);
+  const end = new Date(to);   end.setHours(12,0,0,0);
+  while(cur <= end){ if(isDayOff(cur)) n++; cur.setDate(cur.getDate()+1); }
+  return n;
+}
+function activeTimeOff(){
+  const today = dayKey(new Date());
+  return (db.timeOff||[]).find(t => today >= t.start_date && today <= (t.end_date || today));
+}
+// Human summary for AI prompts, so a gap is read as an interruption not a decline
+function timeOffContext(days){
+  const cutoff = Date.now() - days*864e5;
+  const rel = (db.timeOff||[]).filter(t => new Date(t.end_date || dayKey(new Date())).getTime() >= cutoff);
+  if(!rel.length) return 'None logged.';
+  return rel.map(t => TIMEOFF_LABEL[t.kind||'illness']
+    + (t.body_part ? ' ('+t.body_part+')' : '')
+    + ': ' + t.start_date + ' to ' + (t.end_date || 'ongoing')
+    + (t.note ? ' — ' + t.note : '')).join('\n');
+}
+
 function daysSince(muscle) {
   const names=relatedMuscles(muscle);
   const sessions=db.sessions.filter(s=>effectiveSessionMuscles(s).some(m=>names.includes(m)));
   if(!sessions.length) return 999;
   const latest=sessions.reduce((a,b)=>new Date(b.date)>new Date(a.date)?b:a);
-  return Math.floor((Date.now()-new Date(latest.date))/(864e5));
+  const raw=Math.floor((Date.now()-new Date(latest.date))/(864e5));
+  // Days the user could not train shouldn't count against them
+  return Math.max(0, raw - daysOffBetween(latest.date, new Date()));
 }
 function getGoalMuscles() {
   return db.goals.flatMap(g=>{const t=g.text.toLowerCase();
@@ -1381,10 +1459,20 @@ function weeklyStreak(sessions){
   const weekStart = d => { const x=new Date(d); const day=x.getDay(); const mon=new Date(x); mon.setDate(x.getDate()-(day===0?6:day-1)); mon.setHours(0,0,0,0); return mon.getTime(); };
   const weeks = new Set(sessions.map(s => weekStart(s.date)));
   const WEEK = 7*864e5;
+  // A week the user was off sick/injured for most of it shouldn't break the streak —
+  // it pauses instead: skipped over without incrementing the count.
+  const isExcusedWeek = start => {
+    const end = new Date(start + 6*864e5);
+    return daysOffBetween(new Date(start), end) >= 4;
+  };
   let cursor = weekStart(new Date());
   if(!weeks.has(cursor)) cursor -= WEEK; // haven't trained yet this week — no penalty
   let n = 0;
-  while(weeks.has(cursor)){ n++; cursor -= WEEK; }
+  while(true){
+    if(weeks.has(cursor)){ n++; cursor -= WEEK; continue; }
+    if(isExcusedWeek(cursor)){ cursor -= WEEK; continue; } // paused, not broken
+    break;
+  }
   return n;
 }
 
@@ -1955,7 +2043,8 @@ function buildTrainingContext(){
   const neverUsed = db.library.map(e => e.name).filter(n => !useCount[n]);
   const neverUsedTxt = neverUsed.length ? neverUsed.join(', ') : 'None';
 
-  return {recencyTxt, exerciseLog: exerciseLog||'No logged sessions yet.', lastLoadsTxt: lastLoads.join('\n')||'No logged history yet.', recentSessions: recentSessions||'None', programmeTxt, loadTxt, recency, staplesTxt, neverUsedTxt, stapleCount: staples.length};
+  const timeOffTxt = timeOffContext(90);
+  return {timeOffTxt, recencyTxt, exerciseLog: exerciseLog||'No logged sessions yet.', lastLoadsTxt: lastLoads.join('\n')||'No logged history yet.', recentSessions: recentSessions||'None', programmeTxt, loadTxt, recency, staplesTxt, neverUsedTxt, stapleCount: staples.length};
 }
 
 let _lastGenAuto = false;
@@ -1989,6 +2078,8 @@ async function generateSession(auto) {
     +targetBlock+'\n'
     +'USER GOALS (favour, but do not crowd out other muscles): '+goalTxt+'\n'
     +'TRAINING LOAD: '+ctx.loadTxt+'\n'
+    +'TIME OFF / INJURIES LOGGED (gaps here are NOT lack of discipline — do not treat them as\n'
+    +'declining commitment; account for detraining and ease back in where relevant):\n'+ctx.timeOffTxt+'\n'
     +'ACTIVE PROGRAMME: '+ctx.programmeTxt+'\n\n'
     +'WHAT WAS ACTUALLY TRAINED (dated exercise log — THIS IS THE RELIABLE SOURCE):\n'+ctx.exerciseLog+'\n\n'
     +'TAG-DERIVED "DAYS SINCE TRAINED" (CAUTION: computed from the user\'s exercise tags, which are\n'
@@ -2775,7 +2866,7 @@ function buildProgressContext(){
   const cardioTxt = Math.round(cardioMin(cur4)) + ' min this 4wk vs ' + Math.round(cardioMin(prev4)) + ' min prior 4wk.';
 
   const t = buildTrainingContext();
-  return {freq, volTxt, trendTxt, bwTxt, cardioTxt,
+  return {freq, volTxt, trendTxt, bwTxt, cardioTxt, timeOffTxt: timeOffContext(180),
     exerciseLog: t.exerciseLog, recencyTxt: t.recencyTxt, programmeTxt: t.programmeTxt,
     goals: db.goals.map(g=>g.text).join(', ') || 'None set'};
 }
@@ -2806,6 +2897,9 @@ async function generateProgressReport(force){
     +'but honest — this person wants the truth, not flattery.\n\n'
     +'GOALS: '+c.goals+'\n'
     +'FREQUENCY: '+c.freq+'\n'
+    +'TIME OFF / INJURIES LOGGED:\n'+c.timeOffTxt+'\n'
+    +'(Treat these gaps as interruptions, NOT as declining commitment or motivation. If a dip\n'
+    +'lines up with one, say so plainly and frame the advice around returning safely.)\n'
     +'PROGRAMME: '+c.programmeTxt+'\n'
     +'BODYWEIGHT: '+c.bwTxt+'\n'
     +'CARDIO: '+c.cardioTxt+'\n\n'
@@ -3266,7 +3360,81 @@ async function logBody(){
   renderBody();
 }
 let wChart=null,fChart=null;
+function toKindChanged(){
+  const k=document.getElementById('to-kind')?.value;
+  const f=document.getElementById('to-injury-fields');
+  if(f) f.style.display = k==='injury' ? '' : 'none';
+}
+
+function daysBetweenInclusive(a,b){
+  const d1=new Date(a+'T12:00:00'), d2=new Date(b+'T12:00:00');
+  return Math.max(1, Math.round((d2-d1)/864e5)+1);
+}
+
+async function saveTimeOff(){
+  const kind=document.getElementById('to-kind').value;
+  const start=document.getElementById('to-start').value;
+  const end=document.getElementById('to-end').value||null;
+  if(!start){ toast('Pick a start date.','error'); return; }
+  if(end && end < start){ toast('End date is before the start date.','error'); return; }
+  const row={
+    user_id: currentUser.id, start_date: start, end_date: end, kind,
+    body_part: kind==='injury' ? (document.getElementById('to-part').value.trim()||null) : null,
+    severity: kind==='injury' ? document.getElementById('to-severity').value : null,
+    note: document.getElementById('to-note').value.trim()||null
+  };
+  const {data,error}=await sb.from('time_off').insert(row).select().single();
+  if(error){ dbErr('Save time off',error); return; }
+  db.timeOff=[data,...(db.timeOff||[])];
+  ['to-start','to-end','to-part','to-note'].forEach(id=>{const el=document.getElementById(id); if(el) el.value='';});
+  renderTimeOffList();
+  toast('Logged.');
+}
+
+async function deleteTimeOff(id){
+  if(!confirm('Delete this entry?')) return;
+  const {error}=await sb.from('time_off').delete().eq('id',id);
+  if(error){ dbErr('Delete time off',error); return; }
+  db.timeOff=(db.timeOff||[]).filter(t=>String(t.id)!==String(id));
+  renderTimeOffList();
+}
+
+async function endTimeOff(id){
+  const today=dayKey(new Date());
+  const {error}=await sb.from('time_off').update({end_date:today}).eq('id',id);
+  if(error){ dbErr('Update time off',error); return; }
+  const t=(db.timeOff||[]).find(t=>String(t.id)===String(id));
+  if(t) t.end_date=today;
+  renderTimeOffList();
+  toast('Marked as ended today.');
+}
+
+function renderTimeOffList(){
+  const el=document.getElementById('timeoff-list');
+  if(!el) return;
+  const list=db.timeOff||[];
+  if(!list.length){ el.innerHTML='<p style="font-size:13px;color:var(--muted);">Nothing logged.</p>'; return; }
+  const today=dayKey(new Date());
+  el.innerHTML=list.map(t=>{
+    const days=daysBetweenInclusive(t.start_date, t.end_date||today);
+    const colour=t.kind==='injury'?'#B3261E':t.kind==='illness'?'#92600A':'#5F5E5A';
+    return '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:9px 0;border-bottom:0.5px solid var(--border);">'
+      +'<div style="flex:1;min-width:0;">'
+      +'<div style="font-size:13px;font-weight:500;color:'+colour+';">'+TIMEOFF_LABEL[t.kind||'illness']
+      +(t.body_part?' \u00b7 '+t.body_part:'')+(t.severity?' <span style="color:var(--faint);font-weight:400;">('+t.severity+')</span>':'')+'</div>'
+      +'<div style="font-size:11px;color:var(--muted);">'+t.start_date+' \u2192 '+(t.end_date||'ongoing')+' \u00b7 '+days+' day'+(days===1?'':'s')+'</div>'
+      +(t.note?'<div style="font-size:12px;color:var(--muted);font-style:italic;margin-top:2px;">'+t.note+'</div>':'')
+      +'</div>'
+      +'<div style="display:flex;gap:6px;flex-shrink:0;">'
+      +(!t.end_date?'<button class="btn btn-sm" data-id="'+t.id+'" onclick="endTimeOff(this.dataset.id)">End today</button>':'')
+      +'<button class="btn btn-sm" data-id="'+t.id+'" onclick="deleteTimeOff(this.dataset.id)" style="color:#B3261E;">\u00d7</button>'
+      +'</div></div>';
+  }).join('');
+}
+
 function renderBody(){
+  renderTimeOffList();
+  toKindChanged();
   document.getElementById('body-date').value=localDateKey(new Date());
   if(wChart){try{wChart.destroy();}catch(e){}}if(fChart){try{fChart.destroy();}catch(e){}}
   const tc='rgba(0,0,0,0.35)',gc='rgba(0,0,0,0.06)';
@@ -3454,7 +3622,10 @@ function programmeReviewHtml(prog, days){
   const cycleLen = days.length || 1;
   const now = Date.now();
   const last28 = stamped.filter(s => (now - new Date(s.date).getTime()) <= 28*864e5);
-  const expected28 = Math.max(1, Math.round(28 * plannedDays / cycleLen));
+  // Scale expectations to the days actually available — 2 weeks ill shouldn't read as 50% adherence
+  const offLast28 = daysOffBetween(new Date(Date.now()-27*864e5), new Date());
+  const availableDays = Math.max(1, 28 - offLast28);
+  const expected28 = Math.max(1, Math.round(availableDays * plannedDays / cycleLen));
 
   if(!stamped.length){
     return '<div class="card" style="margin-bottom:14px;"><div class="card-title">Programme review</div>'
@@ -3875,7 +4046,7 @@ function buildProgrammeContext(){
     }
   } catch(e){}
 
-  return {freqTxt, dayTxt, workoutTxt: workoutTxt||'None saved.', adherenceTxt, perWeek};
+  return {freqTxt, dayTxt, workoutTxt: workoutTxt||'None saved.', adherenceTxt, perWeek, timeOffTxt: timeOffContext(90)};
 }
 
 async function generateProgramme() {
@@ -3894,6 +4065,8 @@ async function generateProgramme() {
     '',
     'USER GOALS: ' + goalTxt,
     'ACTUAL TRAINING FREQUENCY: ' + ctx.freqTxt,
+    'TIME OFF / INJURIES (frequency may look low because of these — do not over-correct):',
+    ctx.timeOffTxt,
     'SESSIONS BY WEEKDAY (how their week really looks): ' + ctx.dayTxt,
     '',
     'ADHERENCE ON CURRENT PROGRAMME:',
