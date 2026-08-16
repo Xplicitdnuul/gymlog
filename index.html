@@ -4231,8 +4231,15 @@ async function jtParseVoice(){
   status.textContent = 'Reading your description…';
 
   const libTxt = db.library.map(e => e.name + ' [' + e.muscle + ']').join('\n');
+  const aliasMap = loadExAliases();
+  const aliasKeys = Object.keys(aliasMap);
+  const aliasTxt = aliasKeys.length
+    ? '\nKNOWN PHRASINGS (this user says the left, means the right):\n'
+      + aliasKeys.map(k => '"' + k + '" = ' + aliasMap[k]).join('\n') + '\n'
+    : '';
   const prompt = 'Extract structured gym-workout data from the user\'s spoken description.\n\n'
-    + 'EXERCISE LIBRARY (you MUST map to one of these exact names — never invent a name):\n' + libTxt + '\n\n'
+    + 'EXERCISE LIBRARY (you MUST map to one of these exact names — never invent a name):\n' + libTxt + '\n'
+    + aliasTxt + '\n'
     + 'EQUIPMENT (choose one or ""): ' + EQUIPMENT.join(', ') + '\n'
     + 'MODIFIERS (choose one or "" for standard): ' + MODIFIERS.join(', ') + '\n\n'
     + 'RULES:\n'
@@ -4259,18 +4266,29 @@ async function jtParseVoice(){
     try { parsed = JSON.parse(txt); }
     catch(e){ console.error('Raw AI response:', txt); status.textContent=''; toast('Could not read that. Try rephrasing.','error'); btn.disabled=false; return; }
 
-    const libByName = {};
-    db.library.forEach(e => { libByName[e.name.toLowerCase()] = e; });
     const added = [];
-    const rejected = [...(parsed.unmatched || [])];
+    const rejected = [];
+    _jtPendingUnmatched = [];
     jtCaptureInputs(); // preserve anything already typed before we append
+
+    // Names the model itself couldn't place — keep them so the user can map them
+    (parsed.unmatched || []).forEach(u => {
+      if(u) _jtPendingUnmatched.push({ spoken: String(u), sets: [], equipment:'', modifier:'' });
+    });
 
     (parsed.exercises || []).forEach(pe => {
       // Hard validation: the model does not get to invent exercises
-      const lib = libByName[String(pe.name||'').toLowerCase()];
-      if(!lib){ if(pe.name) rejected.push(pe.name); return; }
+      const lib = matchLibraryExercise(pe.name);
       const sets = Array.isArray(pe.sets) ? pe.sets.filter(s => s && (s.kg != null || s.reps != null)) : [];
       const modifier = MODIFIERS.includes(pe.modifier) ? pe.modifier : '';
+      if(!lib){
+        if(pe.name){
+          rejected.push(pe.name);
+          // Keep the numbers — the user only needs to say which exercise it was
+          _jtPendingUnmatched.push({ spoken: String(pe.name), sets, equipment: pe.equipment||'', modifier });
+        }
+        return;
+      }
       const equipment = EQUIPMENT.includes(pe.equipment) ? pe.equipment : (lastEquipmentFor(lib.name) || '');
       const isCardio = String(lib.muscle||'').toLowerCase().includes('cardio');
       jtExercises.push({
@@ -4284,15 +4302,16 @@ async function jtParseVoice(){
     });
 
     jtRenderSession();
+    jtRenderUnmatched();
     status.textContent = '';
     if(added.length) ta.value = '';
 
     if(added.length && rejected.length){
-      toast('Added ' + added.length + '. Not recognised: ' + rejected.join(', '), 'error');
+      toast('Added ' + added.length + '. Map the ones below to finish.', 'error');
     } else if(added.length){
       toast('Added ' + added.length + ' exercise' + (added.length>1?'s':'') + ' — check the numbers before saving.');
     } else {
-      toast('Nothing matched your library' + (rejected.length ? ': ' + rejected.join(', ') : '') + '.', 'error');
+      toast('Nothing matched your library' + (rejected.length ? ' — map them below.' : '.'), 'error');
     }
   } catch(e){
     console.error(e);
@@ -4300,6 +4319,132 @@ async function jtParseVoice(){
     toast('Could not reach the AI. Try again.', 'error');
   }
   btn.disabled = false;
+}
+
+// ── EXERCISE NAME MATCHING ────────────────────────────────────────
+// The AI is told to return exact library names, but it will still say "Barbell Row" when
+// the library says "Bent-over Row". Exact lookup rejects those, so match in tiers:
+// exact → learned alias → normalised → fuzzy token overlap. Anything still unmatched is
+// handed to the user to map once, and that mapping is remembered.
+function normalizeExName(s){
+  return String(s||'')
+    .toLowerCase()
+    .replace(/[^a-z0-9æøå ]+/g,' ')      // punctuation/hyphens out
+    .replace(/\b(the|a|an|with|using|on|machine)\b/g,' ')
+    .replace(/\bdumbbells\b/g,'dumbbell').replace(/\bbarbells\b/g,'barbell')
+    .replace(/\b(\w+)s\b/g,'$1')          // crude singularise
+    .replace(/\s+/g,' ').trim();
+}
+function exAliasKey(){ return 'gymlog_ex_aliases_' + (currentUser ? currentUser.id : 'anon'); }
+function loadExAliases(){
+  try { return JSON.parse(localStorage.getItem(exAliasKey()) || '{}') || {}; } catch(e){ return {}; }
+}
+function saveExAlias(spoken, libName){
+  try {
+    const a = loadExAliases();
+    a[normalizeExName(spoken)] = libName;
+    localStorage.setItem(exAliasKey(), JSON.stringify(a));
+  } catch(e){ console.warn('alias save failed', e); }
+}
+// Returns the library entry for a spoken/AI name, or null. Deliberately conservative:
+// a weak fuzzy score returns null so the user is asked rather than given a wrong exercise.
+function matchLibraryExercise(name){
+  const raw = String(name||'').trim();
+  if(!raw) return null;
+  const lib = db.library || [];
+  const lower = raw.toLowerCase();
+  let hit = lib.find(e => e.name.toLowerCase() === lower);
+  if(hit) return hit;
+
+  const norm = normalizeExName(raw);
+  const aliases = loadExAliases();
+  if(aliases[norm]){
+    hit = lib.find(e => e.name === aliases[norm]);
+    if(hit) return hit;
+  }
+  hit = lib.find(e => normalizeExName(e.name) === norm);
+  if(hit) return hit;
+
+  // Fuzzy: token overlap, weighted so a full containment beats scattered matches
+  const tokens = norm.split(' ').filter(Boolean);
+  if(!tokens.length) return null;
+  let best = null, bestScore = 0;
+  lib.forEach(e => {
+    const en = normalizeExName(e.name);
+    const et = en.split(' ').filter(Boolean);
+    if(!et.length) return;
+    const shared = tokens.filter(t => et.includes(t)).length;
+    if(!shared) return;
+    let score = shared / Math.max(tokens.length, et.length);
+    if(en.includes(norm) || norm.includes(en)) score += 0.35;
+    if(score > bestScore){ bestScore = score; best = e; }
+  });
+  return bestScore >= 0.6 ? best : null;
+}
+
+// Names the AI produced that couldn't be matched to the library, awaiting user mapping.
+let _jtPendingUnmatched = [];
+
+function jtRenderUnmatched(){
+  let el = document.getElementById('jt-unmatched');
+  if(!el){
+    el = document.createElement('div');
+    el.id = 'jt-unmatched';
+    const anchor = document.getElementById('jt-voice-status');
+    if(anchor && anchor.parentNode) anchor.parentNode.parentNode.appendChild(el);
+    else return;
+  }
+  if(!_jtPendingUnmatched.length){ el.innerHTML = ''; return; }
+
+  const opts = (db.library||[]).slice().sort((a,b)=>a.name.localeCompare(b.name))
+    .map(e => '<option value="' + e.name.replace(/"/g,'&quot;') + '">' + e.name + '</option>').join('');
+
+  el.innerHTML = '<div class="banner banner-amber" style="margin-top:10px;">'
+    + '<b>Couldn\'t match ' + _jtPendingUnmatched.length + '</b> — pick the right exercise and I\'ll remember it next time.</div>'
+    + _jtPendingUnmatched.map((u, ui) => {
+        const setTxt = u.sets && u.sets.length
+          ? u.sets.map(s => (s.kg==null?'':s.kg+'kg\u00d7') + (s.reps==null?'?':s.reps)).join(', ')
+          : 'no numbers heard';
+        return '<div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap;">'
+          + '<div style="flex:1;min-width:120px;"><div style="font-size:13px;font-weight:500;">\u201c' + u.spoken + '\u201d</div>'
+          + '<div style="font-size:11px;color:var(--muted);">' + setTxt + '</div></div>'
+          + '<select id="jt-unm-' + ui + '" class="set-inp" style="flex:1;min-width:140px;width:auto;font-size:12px;padding:5px 8px;">'
+          + '<option value="">Choose exercise\u2026</option>' + opts + '</select>'
+          + '<button class="btn btn-sm" data-ui="' + ui + '" onclick="jtResolveUnmatched(parseInt(this.dataset.ui))">Add</button>'
+          + '<button class="btn btn-sm" data-ui="' + ui + '" onclick="jtDismissUnmatched(parseInt(this.dataset.ui))" title="Discard">\u00d7</button>'
+          + '</div>';
+      }).join('');
+}
+
+function jtResolveUnmatched(ui){
+  const u = _jtPendingUnmatched[ui];
+  if(!u) return;
+  const sel = document.getElementById('jt-unm-' + ui);
+  const name = sel ? sel.value : '';
+  if(!name){ toast('Pick an exercise first.', 'error'); return; }
+  const lib = (db.library||[]).find(e => e.name === name);
+  if(!lib) return;
+
+  saveExAlias(u.spoken, lib.name); // learn it, so next time it matches automatically
+  const isCardio = String(lib.muscle||'').toLowerCase().includes('cardio');
+  jtCaptureInputs();
+  jtExercises.push({
+    name: lib.name, muscle: lib.muscle, sets: Math.max((u.sets||[]).length, 1),
+    isCardio, equipment: isCardio ? '' : (EQUIPMENT.includes(u.equipment) ? u.equipment : (lastEquipmentFor(lib.name)||'')),
+    modifier: MODIFIERS.includes(u.modifier) ? u.modifier : '',
+    reps: isCardio ? '30 min' : '10 reps',
+    wuHidden: true, wuDrafts: [],
+    draftSets: (u.sets||[]).map(s => ({ kg: s.kg==null?'':String(s.kg), reps: s.reps==null?'':String(s.reps) }))
+  });
+  _jtPendingUnmatched.splice(ui, 1);
+  jtRenderSession();
+  jtRenderUnmatched();
+  toast('Added ' + lib.name + ' — remembered "' + u.spoken + '".');
+}
+
+function jtDismissUnmatched(ui){
+  _jtPendingUnmatched.splice(ui, 1);
+  jtRenderUnmatched();
 }
 
 function setJtGroup(ei, val) {
