@@ -641,6 +641,19 @@ html.mobile-layout .topbar { display:flex; align-items:center; gap:6px; position
           <div class="card-title" style="margin-bottom:0;">Add exercise</div>
           <button class="btn btn-sm" style="border-color:#9FE1CB;color:#0F6E56;background:#E1F5EE;" onclick="jtAddCardioBlock()">+ Add cardio</button>
         </div>
+        <div class="card" style="margin-bottom:12px;">
+          <div style="font-size:13px;font-weight:500;margin-bottom:4px;">Describe your workout</div>
+          <div style="font-size:11px;color:var(--muted);margin-bottom:8px;">Tap the field, then use the microphone key on your keyboard to dictate. e.g. "Bench press three sets of eight at sixty kilos, then unilateral dumbbell row 20 kilos twelve reps each side."</div>
+          <textarea id="jt-voice-text" rows="3" placeholder="Speak or type what you did..." style="font-size:16px;font-family:var(--font);width:100%;"></textarea>
+          <div style="display:flex;gap:8px;align-items:center;margin-top:8px;">
+            <button class="btn btn-dark btn-sm" onclick="jtParseVoice()" id="jt-voice-btn">Convert to exercises</button>
+            <span id="jt-voice-status" style="font-size:11px;color:var(--muted);"></span>
+          </div>
+        </div>
+        <div class="form-group" style="margin-bottom:8px;">
+          <label class="form-label">Muscle group</label>
+          <select id="jt-muscle-pick" onchange="jtPopulateExercisePick()"><option value="__all">All exercises</option></select>
+        </div>
         <div style="display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:end;">
           <div class="form-group">
             <label class="form-label">Exercise</label>
@@ -1110,6 +1123,18 @@ async function saveSettings() {
 const MUSCLES_W=['Chest','Back','Shoulders','Biceps','Triceps','Legs','Quads','Hamstrings','Glutes','Adductors','Calves','Core','Forearms','Traps'];
 const MUSCLES_C=['Spinning','Running','Incline walking'];
 const EQUIPMENT=['Bodyweight','Barbell','Dumbbell','Kettlebell','Machine','Cable','Smith machine','Resistance band','Suspension/TRX','Other'];
+// How the exercise was performed. This is part of the history-matching key alongside
+// equipment: a unilateral 20kg press is not comparable to a bilateral 40kg press, so
+// mixing them would create false PRs and a misleading e1RM curve.
+const MODIFIERS=['Unilateral','Isometric hold','Tempo / slow eccentric','Paused','Drop set','AMRAP','Assisted','Deficit / extended ROM'];
+function modifierOptions(cur){
+  cur=cur||'';
+  return '<option value="">Standard</option>'+MODIFIERS.map(m=>'<option value="'+m+'"'+(m===cur?' selected':'')+'>'+m+'</option>').join('');
+}
+// Isometric holds are time-based, not load×reps, so they're excluded from volume and PR
+// maths the same way warm-ups are. Assumed hold length when none is given.
+const ISOMETRIC_DEFAULT_SECONDS=2;
+function isIsometric(ex){ return !!(ex && ex.modifier==='Isometric hold'); }
 // Build the <option> list for an equipment dropdown, marking `cur` selected.
 function equipmentOptions(cur){
   cur=cur||'';
@@ -1835,12 +1860,12 @@ function getFormCue(name) {
 }
 // ── LOG ──
 
-function getPrevData(name, equipment){
-  const eq=equipment||'';
+function getPrevData(name, equipment, modifier){
+  const eq=equipment||'', mod=modifier||'';
   for(let i=db.sessions.length-1;i>=0;i--){
     const s=db.sessions[i];
     if(!s.exercises) continue;
-    const ex=s.exercises.find(e=>e.name===name&&(e.equipment||'')===eq&&e.loggedSets&&e.loggedSets.sets&&e.loggedSets.sets.length);
+    const ex=s.exercises.find(e=>e.name===name&&(e.equipment||'')===eq&&(e.modifier||'')===mod&&e.loggedSets&&e.loggedSets.sets&&e.loggedSets.sets.length);
     if(ex) return {...ex.loggedSets, sets: ex.loggedSets.sets.filter(st=>!st.warmup)};
   }
   return null;
@@ -1909,7 +1934,7 @@ function renderLog() {
 
   s.exercises.forEach((ex,ei)=>{
     if(!ex.isCardio) ex.equipment = ex.equipment || lastEquipmentFor(ex.name) || '';
-    const prev=getPrevData(ex.name, ex.equipment);
+    const prev=getPrevData(ex.name, ex.equipment, ex.modifier);
     const numSets=ex.sets||3;
     const cue=getFormCue(ex.name);
 
@@ -1943,7 +1968,9 @@ function renderLog() {
       const lastSet=prev&&prev.sets?prev.sets[i]:null;
       // Draft takes priority — user's current input beats last session
       const prefillKg=draftSet&&draftSet.kg?draftSet.kg:(lastSet&&lastSet.kg?lastSet.kg:'');
-      const prefillReps=draftSet&&draftSet.reps?draftSet.reps:(lastSet&&lastSet.reps?lastSet.reps:'');
+      let prefillReps=draftSet&&draftSet.reps?draftSet.reps:(lastSet&&lastSet.reps?lastSet.reps:'');
+      // Isometric holds default to a 2s hold when nothing is logged yet
+      if(prefillReps===''&&isoEx) prefillReps=ISOMETRIC_DEFAULT_SECONDS;
       const kgId='ex-'+ei+'-kg-'+i, repsId='ex-'+ei+'-reps-'+i;
       setRows+='<div class="set-row">';
       setRows+='<span class="set-num">Set '+(i+1)+'</span>';
@@ -1954,7 +1981,7 @@ function renderLog() {
         +'</div>';
       setRows+='<div class="stepper">'
         +'<button type="button" class="step-btn minus" onclick="stepInput(\''+repsId+'\',-1)">\u2212</button>'
-        +'<input class="set-inp set-reps" type="number" inputmode="numeric" enterkeyhint="next" id="'+repsId+'" placeholder="reps" value="'+prefillReps+'" min="0" oninput="autosaveDraft()">'
+        +'<input class="set-inp set-reps" type="number" inputmode="numeric" enterkeyhint="next" id="'+repsId+'" placeholder="'+(isoEx?'sec':'reps')+'" value="'+prefillReps+'" min="0" oninput="autosaveDraft()">'
         +'<button type="button" class="step-btn plus" onclick="stepInput(\''+repsId+'\',1)">+</button>'
         +'</div>';
       if(i<numSets-1) setRows+='<button type="button" class="set-fill" title="Copy this set to the ones below" onclick="fillDown('+ei+','+i+')">\u2913</button>';
@@ -1979,6 +2006,9 @@ function renderLog() {
     if(!ex.isCardio){
       html2+='<div style="display:flex;gap:8px;margin-bottom:8px;">'
         +'<select class="set-inp" data-ei="'+ei+'" onchange="setLogEquipment(parseInt(this.dataset.ei),this.value)" style="flex:1;min-width:0;width:auto;font-size:12px;padding:5px 8px;">'+equipmentOptions(ex.equipment)+'</select>'
+        +'<select class="set-inp" data-ei="'+ei+'" onchange="setLogModifier(parseInt(this.dataset.ei),this.value)" style="flex:1;min-width:0;width:auto;font-size:12px;padding:5px 8px;'+(ex.modifier?'color:#92600A;font-weight:500;':'color:var(--muted);')+'">'+modifierOptions(ex.modifier)+'</select>'
+        +'</div>'
+        +'<div style="display:flex;gap:8px;margin-bottom:8px;">'
         +'<select class="set-inp" data-ei="'+ei+'" onchange="swapLogExercise(parseInt(this.dataset.ei),this.value)" style="flex:1;min-width:0;width:auto;font-size:12px;padding:5px 8px;color:var(--muted);">'+swapOpts+'</select>'
         +'</div>';
     }
@@ -1987,7 +2017,8 @@ function renderLog() {
       const cardioDraft=ex.draftSets&&ex.draftSets[0]?ex.draftSets[0].kg:'';
       html2+='<div class="set-row"><span class="set-num">Time</span><input class="set-inp" type="number" inputmode="numeric" id="ex-'+ei+'-kg-0" placeholder="min" value="'+cardioDraft+'" style="width:80px;" oninput="autosaveDraft()"></div>';
     } else {
-      html2+='<div class="set-head"><span class="set-head-sp"></span><span>weight (kg)</span><span>reps</span><span class="set-head-sp"></span></div>';
+      const isoEx=isIsometric(ex);
+      html2+='<div class="set-head"><span class="set-head-sp"></span><span>weight (kg)</span><span>'+(isoEx?'hold (sec)':'reps')+'</span><span class="set-head-sp"></span></div>';
       const wuHidden=ex.wuHidden;
       const wuKg=ex.wuDraft&&ex.wuDraft.kg?ex.wuDraft.kg:'';
       const wuReps=ex.wuDraft&&ex.wuDraft.reps?ex.wuDraft.reps:'';
@@ -2013,6 +2044,14 @@ function renderLog() {
   el.innerHTML=html2;
   updateNavBadge();
   renderSavedWorkouts();
+}
+
+function setLogModifier(ei,val){
+  if(db.activeSession&&db.activeSession.exercises[ei]){
+    db.activeSession.exercises[ei].modifier=val||'';
+    autosaveDraft();
+    renderLog();
+  }
 }
 
 function setLogEquipment(ei,val){
@@ -2354,6 +2393,7 @@ function calcVolume(exercises) {
   let v = 0;
   (exercises||[]).forEach(ex => {
     if(ex.isCardio) return;
+    if(isIsometric(ex)) return; // holds are time-based; kg×reps is meaningless here
     workingSets(ex).forEach(st => {
       if(st && st.kg && st.reps) v += st.kg * st.reps;
     });
@@ -2399,13 +2439,13 @@ async function renderProgress() {
     if(!dateKey) return;
     const exercises = safeJSON(s.exercises, []);
     const hasPR = exercises.some(ex => {
-      if(ex.isCardio || !ex.loggedSets?.sets?.length) return false;
-      const maxKg = Math.max(...ex.loggedSets.sets.filter(st => st.kg).map(st => st.kg || 0));
+      if(ex.isCardio || isIsometric(ex) || !ex.loggedSets?.sets?.length) return false;
+      const maxKg = Math.max(...workingSets(ex).filter(st => st.kg).map(st => st.kg || 0), 0);
       if(!maxKg) return false;
       const allPrev = db.sessions
         .filter(prev => new Date(prev.date) < new Date(s.date))
         .flatMap(prev => safeJSON(prev.exercises,[]))
-        .filter(e => e.name === ex.name && (e.equipment||'')===(ex.equipment||'') && e.loggedSets?.sets?.length);
+        .filter(e => e.name === ex.name && (e.equipment||'')===(ex.equipment||'') && (e.modifier||'')===(ex.modifier||'') && e.loggedSets?.sets?.length);
       const prevMax = allPrev.length
         ? Math.max(...allPrev.flatMap(e => e.loggedSets.sets.filter(st => st.kg).map(st => st.kg || 0)))
         : 0;
@@ -3486,15 +3526,15 @@ function renderHistoryList() {
 
         // Check if this is a PR for this exercise
         let isPR = false;
-        if(!isCardio && sets.length) {
-          const maxKg = Math.max(...sets.filter(st => st.kg).map(st => st.kg || 0));
+        if(!isCardio && !isIsometric(ex) && sets.length) {
+          const maxKg = Math.max(...workingSets(ex).filter(st => st.kg).map(st => st.kg || 0), 0);
           if(maxKg > 0) {
             const allPrev = db.sessions
               .filter(prev => new Date(prev.date) < new Date(s.date))
               .flatMap(prev => safeJSON(prev.exercises, []))
-              .filter(e => e.name === ex.name && (e.equipment||'')===(ex.equipment||'') && e.loggedSets?.sets?.length);
+              .filter(e => e.name === ex.name && (e.equipment||'')===(ex.equipment||'') && (e.modifier||'')===(ex.modifier||'') && e.loggedSets?.sets?.length);
             const prevMax = allPrev.length
-              ? Math.max(...allPrev.flatMap(e => e.loggedSets.sets.filter(st => st.kg).map(st => st.kg || 0)))
+              ? Math.max(...allPrev.flatMap(e => workingSets(e).filter(st => st.kg).map(st => st.kg || 0)), 0)
               : 0;
             isPR = maxKg > prevMax;
           }
@@ -3566,13 +3606,13 @@ function renderHistoryList() {
 function isPRSession(s) {
   const exercises = safeJSON(s.exercises, []);
   return exercises.some(ex => {
-    if(ex.isCardio || !ex.loggedSets?.sets?.length) return false;
+    if(ex.isCardio || isIsometric(ex) || !ex.loggedSets?.sets?.length) return false;
     const maxKg = Math.max(...workingSets(ex).filter(st => st.kg).map(st => st.kg || 0), 0);
     if(!maxKg) return false;
     const allPrev = db.sessions
       .filter(prev => new Date(prev.date) < new Date(s.date))
       .flatMap(prev => safeJSON(prev.exercises, []))
-      .filter(e => e.name === ex.name && (e.equipment||'')===(ex.equipment||'') && e.loggedSets?.sets?.length);
+      .filter(e => e.name === ex.name && (e.equipment||'')===(ex.equipment||'') && (e.modifier||'')===(ex.modifier||'') && e.loggedSets?.sets?.length);
     const prevMax = allPrev.length
       ? Math.max(...allPrev.flatMap(e => workingSets(e).filter(st => st.kg).map(st => st.kg || 0)), 0)
       : 0;
@@ -3614,7 +3654,7 @@ function openHistoryEdit(id) {
   const exRows = exercises.map((ex, ei) => {
     const sets = ex.loggedSets && ex.loggedSets.sets ? ex.loggedSets.sets : [];
     const isCardio = ex.isCardio;
-    const numSets = ex.sets || sets.length || 3;
+    const numSets = Math.max(ex.sets || 0, sets.length, 1);
 
     let setInputsHtml = '';
     if(isCardio) {
@@ -3631,7 +3671,7 @@ function openHistoryEdit(id) {
       for(let i = 0; i < numSets; i++) {
         const st = sets[i] || {};
         setInputsHtml += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">'
-          + '<span style="font-size:11px;color:var(--color-text-tertiary);width:44px;">Set ' + (i+1) + '</span>'
+          + '<span style="font-size:11px;width:44px;' + (st.warmup?'color:#92600A;font-weight:600;':'color:var(--color-text-tertiary);') + '">' + (st.warmup ? 'Warm-up' : 'Set ' + (i+1)) + '</span>'
           + '<input type="number" id="he-' + id + '-' + ei + '-kg-' + i + '" value="' + (st.kg||'') + '" placeholder="kg" step="0.5" min="0" style="width:72px;">'
           + '<input type="number" id="he-' + id + '-' + ei + '-reps-' + i + '" value="' + (st.reps||'') + '" placeholder="reps" min="0" style="width:68px;">'
           + '</div>';
@@ -3645,8 +3685,12 @@ function openHistoryEdit(id) {
       + '<option value="' + ex.name.replace(/"/g,'&quot;') + '" selected>' + ex.name + '</option>'
       + libOptions
       + '</select></div>'
-      + (isCardio ? '' : '<div class="form-group" style="margin-bottom:6px;"><label class="form-label">Equipment</label>'
-          + '<select data-heid="' + id + '" data-ei="' + ei + '" onchange="heUpdateEquipment(this.dataset.heid,parseInt(this.dataset.ei),this.value)">' + equipmentOptions(ex.equipment) + '</select></div>')
+      + (isCardio ? '' : '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:6px;">'
+          + '<div class="form-group" style="margin-bottom:0;"><label class="form-label">Equipment</label>'
+          + '<select data-heid="' + id + '" data-ei="' + ei + '" onchange="heUpdateEquipment(this.dataset.heid,parseInt(this.dataset.ei),this.value)">' + equipmentOptions(ex.equipment) + '</select></div>'
+          + '<div class="form-group" style="margin-bottom:0;"><label class="form-label">Performed as</label>'
+          + '<select data-heid="' + id + '" data-ei="' + ei + '" onchange="heUpdateModifier(this.dataset.heid,parseInt(this.dataset.ei),this.value)">' + modifierOptions(ex.modifier) + '</select></div>'
+          + '</div>')
       + setInputsHtml
       + '<div class="form-group" style="margin-top:6px;"><label class="form-label">Note</label>'
       + '<input type="text" id="he-' + id + '-' + ei + '-note" value="' + ((ex.loggedSets && ex.loggedSets.note ? ex.loggedSets.note : '')).replace(/"/g,'&quot;') + '" placeholder="Exercise note..."></div>'
@@ -3682,6 +3726,16 @@ function heUpdateEx(id, ei, name, muscle) {
   }
 }
 
+function heUpdateModifier(id, ei, val) {
+  const s = db.sessions.find(s => String(s.id) === String(id));
+  if(!s) return;
+  const exercises = safeJSON(s.exercises, []);
+  if(exercises[ei]) {
+    exercises[ei].modifier = val || '';
+    s.exercises = exercises;
+  }
+}
+
 function heUpdateEquipment(id, ei, val) {
   const s = db.sessions.find(s => String(s.id) === String(id));
   if(!s) return;
@@ -3700,7 +3754,8 @@ async function saveHistoryEdit(id) {
   const exercises = safeJSON(s.exercises, []);
 
   exercises.forEach((ex, ei) => {
-    const numSets = ex.sets || (ex.loggedSets && ex.loggedSets.sets ? ex.loggedSets.sets.length : 3);
+    const origSets = (ex.loggedSets && ex.loggedSets.sets) ? ex.loggedSets.sets : [];
+    const numSets = Math.max(ex.sets || 0, origSets.length, 1);
     const sets = [];
     if(ex.isCardio) {
       const kg = parseFloat(document.getElementById('he-' + id + '-' + ei + '-kg-0') && document.getElementById('he-' + id + '-' + ei + '-kg-0').value) || null;
@@ -3711,7 +3766,12 @@ async function saveHistoryEdit(id) {
         const repsEl = document.getElementById('he-' + id + '-' + ei + '-reps-' + i);
         const kg = kgEl ? (parseFloat(kgEl.value) || null) : null;
         const reps = repsEl ? (parseInt(repsEl.value) || null) : null;
-        if(kg || reps) sets.push({kg, reps});
+        if(kg || reps) {
+          const set = {kg, reps};
+          // Warm-up rows keep their flag through an edit, or they'd start counting toward volume/PRs
+          if(origSets[i] && origSets[i].warmup) set.warmup = true;
+          sets.push(set);
+        }
       }
     }
     const noteEl = document.getElementById('he-' + id + '-' + ei + '-note');
@@ -3751,22 +3811,51 @@ function cancelHistoryEdit(id) {
 let jtExercises = []; // {name, muscle, sets, isCardio, loggedSets:[]}
 
 function renderJustTrain() {
-  // Populate exercise picker from library
+  const musclePick = document.getElementById('jt-muscle-pick');
   const pick = document.getElementById('jt-ex-pick');
   if(!pick) return;
-  const grouped = {};
-  db.library.forEach(e => {
-    const primary = e.muscle.split(',')[0].trim();
-    if(!grouped[primary]) grouped[primary] = [];
-    grouped[primary].push(e);
-  });
-  pick.innerHTML = '<option value="">Select from library...</option>'
-    + Object.keys(grouped).sort().map(m =>
-        '<optgroup label="' + m + '">'
-        + grouped[m].map(e => '<option value="' + e.name.replace(/"/g,'&quot;') + '" data-muscle="' + e.muscle.replace(/"/g,'&quot;') + '">' + e.name + '</option>').join('')
-        + '</optgroup>'
-      ).join('');
+
+  // Muscle dropdown: every muscle any library exercise is tagged with (exercises carry
+  // several, e.g. "Quads, Glutes", so a movement legitimately appears under each).
+  if(musclePick){
+    const muscles = new Set();
+    db.library.forEach(e => String(e.muscle||'').split(',').map(m=>m.trim()).filter(Boolean).forEach(m=>muscles.add(m)));
+    const prev = musclePick.value || '__all';
+    musclePick.innerHTML = '<option value="__all">All exercises</option>'
+      + '<option value="__recent">Recently used</option>'
+      + [...muscles].sort().map(m => '<option value="' + m.replace(/"/g,'&quot;') + '">' + m + '</option>').join('');
+    musclePick.value = [...musclePick.options].some(o=>o.value===prev) ? prev : '__all';
+  }
+  jtPopulateExercisePick();
   jtRenderSession();
+}
+
+// Fill the exercise dropdown based on the chosen muscle group (deduped — a movement tagged
+// with several muscles must not appear twice under one filter).
+function jtPopulateExercisePick(){
+  const pick = document.getElementById('jt-ex-pick');
+  if(!pick) return;
+  const sel = document.getElementById('jt-muscle-pick')?.value || '__all';
+  let list;
+  if(sel === '__recent'){
+    const seen = [];
+    for(let i=db.sessions.length-1; i>=0 && seen.length<20; i--){
+      (db.sessions[i].exercises||[]).forEach(ex=>{
+        if(ex && ex.name && !ex.isCardio && !seen.includes(ex.name)) seen.push(ex.name);
+      });
+    }
+    list = seen.map(n => db.library.find(e=>e.name===n)).filter(Boolean);
+  } else if(sel === '__all'){
+    list = db.library.slice().sort((a,b)=>a.name.localeCompare(b.name));
+  } else {
+    list = db.library
+      .filter(e => String(e.muscle||'').split(',').map(m=>m.trim()).includes(sel))
+      .sort((a,b)=>a.name.localeCompare(b.name));
+  }
+  const seenNames = new Set();
+  const opts = list.filter(e => { if(seenNames.has(e.name)) return false; seenNames.add(e.name); return true; })
+    .map(e => '<option value="' + e.name.replace(/"/g,'&quot;') + '" data-muscle="' + e.muscle.replace(/"/g,'&quot;') + '">' + e.name + '</option>').join('');
+  pick.innerHTML = '<option value="">' + (list.length ? 'Select an exercise\u2026' : 'No exercises for this group') + '</option>' + opts;
 }
 
 function jtAddExercise() {
@@ -3774,11 +3863,11 @@ function jtAddExercise() {
   const name = pick.value;
   if(!name) { toast('Select an exercise first.', 'error'); return; }
   const opt = pick.options[pick.selectedIndex];
-  const muscle = opt ? (opt.dataset.muscle || opt.parentElement.label || 'General') : 'General';
+  const muscle = opt ? (opt.dataset.muscle || 'General') : 'General';
   const sets = parseInt(document.getElementById('jt-sets-pick').value) || 3;
   const isCardio = muscle.toLowerCase().includes('cardio');
   jtCaptureInputs();
-  jtExercises.push({ name, muscle, sets, isCardio, equipment: isCardio ? '' : (lastEquipmentFor(name)||''), reps: isCardio ? '30 min' : '10 reps' });
+  jtExercises.push({ name, muscle, sets, isCardio, equipment: isCardio ? '' : (lastEquipmentFor(name)||''), modifier: '', reps: isCardio ? '30 min' : '10 reps' });
   pick.value = '';
   jtRenderSession();
 }
@@ -3839,6 +3928,8 @@ function jtSyncCardioDisplay() {
 function jtCaptureInputs(){
   (jtExercises||[]).forEach((ex,ei)=>{
     if(!ex) return;
+    const nt=document.getElementById('jt-'+ei+'-note');
+    if(nt) ex.draftNote=nt.value||'';
     if(ex.isCardio){
       const m=document.getElementById('jt-'+ei+'-kg-0');
       if(m) ex.draftMinutes=m.value||'';
@@ -3868,8 +3959,23 @@ function jtRenderSession() {
   }
   if(actEl) actEl.style.display = 'block';
 
+  // Runs of consecutive exercises sharing a superset group (display only — each still
+  // logs its own sets, matching how the Log screen handles supersets).
+  const jtGroupInfo = [];
+  for(let gi=0; gi<jtExercises.length;){
+    const g = jtExercises[gi].group||'';
+    if(!g){ jtGroupInfo[gi]=null; gi++; continue; }
+    let gj=gi; while(gj<jtExercises.length && (jtExercises[gj].group||'')===g) gj++;
+    const len=gj-gi;
+    if(len>=2){
+      const label = len===2?'Superset':len===3?'Tri-set':'Giant set / circuit';
+      for(let k=gi;k<gj;k++) jtGroupInfo[k]={label, isStart:k===gi, isEnd:k===gj-1};
+    } else { jtGroupInfo[gi]=null; }
+    gi=gj;
+  }
+
   el.innerHTML = jtExercises.map((ex, ei) => {
-    const prev = getPrevData(ex.name, ex.equipment);
+    const prev = getPrevData(ex.name, ex.equipment, ex.modifier);
     const cue = getFormCue(ex.name);
 
     // Overload banner
@@ -3894,7 +4000,8 @@ function jtRenderSession() {
     }
 
     // Set rows
-    let setRows = '<div class="set-head"><span class="set-head-sp"></span><span>weight (kg)</span><span>reps</span><span class="set-head-sp"></span></div>';
+    const isoEx = isIsometric(ex);
+    let setRows = '<div class="set-head"><span class="set-head-sp"></span><span>weight (kg)</span><span>' + (isoEx?'hold (sec)':'reps') + '</span><span class="set-head-sp"></span></div>';
     if(ex.isCardio) {
       setRows = '<div class="set-row"><span class="set-num">Time</span><input class="set-inp" type="number" inputmode="numeric" id="jt-' + ei + '-kg-0" placeholder="min" value="' + (ex.draftMinutes || '') + '" style="width:80px;"></div>';
     } else {
@@ -3915,7 +4022,8 @@ function jtRenderSession() {
         // cleared field. Only fall back to last session's numbers when nothing was captured.
         const captured = ex.draftSets && i < ex.draftSets.length ? ex.draftSets[i] : null;
         const prefillKg = captured ? (captured.kg || '') : (prev_set && prev_set.kg ? prev_set.kg : '');
-        const prefillReps = captured ? (captured.reps || '') : (prev_set && prev_set.reps ? prev_set.reps : '');
+        let prefillReps = captured ? (captured.reps || '') : (prev_set && prev_set.reps ? prev_set.reps : '');
+        if(prefillReps === '' && isoEx) prefillReps = ISOMETRIC_DEFAULT_SECONDS;
         const kgId = 'jt-' + ei + '-kg-' + i, repsId = 'jt-' + ei + '-reps-' + i;
         setRows += '<div class="set-row">'
           + '<span class="set-num">Set ' + (i+1) + '</span>'
@@ -3926,7 +4034,7 @@ function jtRenderSession() {
             + '</div>'
           + '<div class="stepper">'
             + '<button type="button" class="step-btn minus" onclick="stepInput(\'' + repsId + '\',-1,false)">\u2212</button>'
-            + '<input class="set-inp set-reps" type="number" inputmode="numeric" enterkeyhint="next" id="' + repsId + '" placeholder="reps" value="' + prefillReps + '" min="0">'
+            + '<input class="set-inp set-reps" type="number" inputmode="numeric" enterkeyhint="next" id="' + repsId + '" placeholder="' + (isoEx?'sec':'reps') + '" value="' + prefillReps + '" min="0">'
             + '<button type="button" class="step-btn plus" onclick="stepInput(\'' + repsId + '\',1,false)">+</button>'
             + '</div>'
           + (i < ex.sets-1 ? '<button type="button" class="set-fill" title="Copy this set to the ones below" onclick="jtFillDown(' + ei + ',' + i + ')">\u2913</button>' : '<span style="width:34px;flex-shrink:0;"></span>')
@@ -3938,19 +4046,132 @@ function jtRenderSession() {
       ? '<button class="cue-toggle" onclick="toggleCue(\'jt-cue-' + ei + '\')">▸ Form cue</button><div class="cue-body" id="jt-cue-' + ei + '">' + cue + '</div>'
       : '';
 
-    return '<div class="card" style="margin-bottom:10px;">'
+    const gInfo = jtGroupInfo[ei];
+    return (gInfo && gInfo.isStart ? '<div class="ss-group"><div class="ss-label">' + gInfo.label + '</div>' : '')
+      + '<div class="card" style="margin-bottom:10px;">'
       + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">'
-      + '<span style="font-size:14px;font-weight:500;">' + ex.name + '</span>'
+      + '<span style="font-size:14px;font-weight:500;">' + ex.name + (ex.group?'<span class="ss-badge">SS ' + ex.group + '</span>':'') + '</span>'
       + '<button data-ei="' + ei + '" onclick="jtRemoveExercise(parseInt(this.dataset.ei))" style="background:none;border:none;cursor:pointer;color:var(--faint);font-size:16px;">\u00d7</button>'
       + '</div>'
       + '<div style="font-size:12px;color:var(--muted);margin-bottom:8px;">' + ex.muscle + ' · ' + ex.sets + ' sets</div>'
-      + (ex.isCardio ? '' : '<div style="margin-bottom:8px;"><select class="set-inp" data-ei="' + ei + '" onchange="setJtEquipment(parseInt(this.dataset.ei),this.value)" style="width:auto;min-width:150px;font-size:12px;padding:5px 8px;">' + equipmentOptions(ex.equipment) + '</select></div>')
+      + (ex.isCardio ? '' : '<div style="display:flex;gap:8px;margin-bottom:8px;">'
+          + '<select class="set-inp" data-ei="' + ei + '" onchange="setJtEquipment(parseInt(this.dataset.ei),this.value)" style="flex:1;min-width:0;width:auto;font-size:12px;padding:5px 8px;">' + equipmentOptions(ex.equipment) + '</select>'
+          + '<select class="set-inp" data-ei="' + ei + '" onchange="setJtModifier(parseInt(this.dataset.ei),this.value)" style="flex:1;min-width:0;width:auto;font-size:12px;padding:5px 8px;' + (ex.modifier?'color:#92600A;font-weight:500;':'color:var(--muted);') + '">' + modifierOptions(ex.modifier) + '</select>'
+          + '</div>'
+          + '<div style="display:flex;gap:8px;margin-bottom:8px;align-items:center;">'
+          + '<span style="font-size:11px;color:var(--muted);">Superset group</span>'
+          + '<select class="set-inp" data-ei="' + ei + '" title="Give adjacent exercises the same letter to group them" onchange="setJtGroup(parseInt(this.dataset.ei),this.value)" style="width:auto;font-size:12px;padding:4px 8px;color:var(--muted);">' + builderGroupOptions(ex.group) + '</select>'
+          + '</div>')
       + banner
       + setRows
       + cueHtml
-      + '<input class="note-inp" type="text" id="jt-' + ei + '-note" placeholder="Note for this exercise...">'
-      + '</div>';
+      + '<input class="note-inp" type="text" id="jt-' + ei + '-note" value="' + String(ex.draftNote||'').replace(/"/g,'&quot;') + '" placeholder="Note for this exercise...">'
+      + '</div>'
+      + (gInfo && gInfo.isEnd ? '</div>' : '');
   }).join('');
+}
+
+// ── VOICE / FREE-TEXT WORKOUT IMPORT ──────────────────────────────
+// Turns a dictated description into structured exercises. Uses Sonnet (Haiku is not
+// reliable enough for this extraction) and constrains every name to the user's library —
+// unmatched names are dropped and reported rather than silently invented. Nothing is
+// saved: parsed exercises land in the normal Just Train UI for review and correction.
+async function jtParseVoice(){
+  const ta = document.getElementById('jt-voice-text');
+  const btn = document.getElementById('jt-voice-btn');
+  const status = document.getElementById('jt-voice-status');
+  const text = (ta?.value || '').trim();
+  if(!text){ toast('Describe your workout first.', 'error'); return; }
+
+  btn.disabled = true;
+  status.textContent = 'Reading your description…';
+
+  const libTxt = db.library.map(e => e.name + ' [' + e.muscle + ']').join('\n');
+  const prompt = 'Extract structured gym-workout data from the user\'s spoken description.\n\n'
+    + 'EXERCISE LIBRARY (you MUST map to one of these exact names — never invent a name):\n' + libTxt + '\n\n'
+    + 'EQUIPMENT (choose one or ""): ' + EQUIPMENT.join(', ') + '\n'
+    + 'MODIFIERS (choose one or "" for standard): ' + MODIFIERS.join(', ') + '\n\n'
+    + 'RULES:\n'
+    + '- The description may mix English and Danish. Handle both.\n'
+    + '- Weights are kilograms. "three sets of eight at sixty" = 3 sets, each {kg:60, reps:8}.\n'
+    + '- If sets differ ("60 for 8 then 65 for 5"), output each set separately.\n'
+    + '- "each side"/"per arm"/"per leg"/"unilateral" => modifier "Unilateral".\n'
+    + '- A hold ("held for 30 seconds", "planke") => modifier "Isometric hold" and put the SECONDS in reps.\n'
+    + '- Bodyweight moves have kg null.\n'
+    + '- If the exercise is not clearly in the library, put the spoken words in "unmatched" instead of guessing.\n'
+    + '- If sets or reps are genuinely unclear, use null rather than inventing numbers.\n\n'
+    + 'USER DESCRIPTION:\n"""' + text + '"""\n\n'
+    + 'Return ONLY valid JSON, no markdown:\n'
+    + '{"exercises":[{"name":"<exact library name>","equipment":"","modifier":"","sets":[{"kg":60,"reps":8}]}],"unmatched":["..."]}';
+
+  try {
+    const res = await fetch('/api/chat', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ model:'claude-sonnet-4-6', max_tokens:2000, messages:[{role:'user', content:prompt}] })
+    });
+    const data = await res.json();
+    const txt = data.content.map(b => b.text || '').join('').replace(/```json|```/g,'').trim();
+    let parsed;
+    try { parsed = JSON.parse(txt); }
+    catch(e){ console.error('Raw AI response:', txt); status.textContent=''; toast('Could not read that. Try rephrasing.','error'); btn.disabled=false; return; }
+
+    const libByName = {};
+    db.library.forEach(e => { libByName[e.name.toLowerCase()] = e; });
+    const added = [];
+    const rejected = [...(parsed.unmatched || [])];
+    jtCaptureInputs(); // preserve anything already typed before we append
+
+    (parsed.exercises || []).forEach(pe => {
+      // Hard validation: the model does not get to invent exercises
+      const lib = libByName[String(pe.name||'').toLowerCase()];
+      if(!lib){ if(pe.name) rejected.push(pe.name); return; }
+      const sets = Array.isArray(pe.sets) ? pe.sets.filter(s => s && (s.kg != null || s.reps != null)) : [];
+      const modifier = MODIFIERS.includes(pe.modifier) ? pe.modifier : '';
+      const equipment = EQUIPMENT.includes(pe.equipment) ? pe.equipment : (lastEquipmentFor(lib.name) || '');
+      const isCardio = String(lib.muscle||'').toLowerCase().includes('cardio');
+      jtExercises.push({
+        name: lib.name, muscle: lib.muscle, sets: Math.max(sets.length, 1),
+        isCardio, equipment: isCardio ? '' : equipment, modifier,
+        reps: isCardio ? '30 min' : '10 reps',
+        wuHidden: true, // dictated sets are working sets; no warm-up row assumed
+        draftSets: sets.map(s => ({ kg: s.kg == null ? '' : String(s.kg), reps: s.reps == null ? '' : String(s.reps) }))
+      });
+      added.push(lib.name);
+    });
+
+    jtRenderSession();
+    status.textContent = '';
+    if(added.length) ta.value = '';
+
+    if(added.length && rejected.length){
+      toast('Added ' + added.length + '. Not recognised: ' + rejected.join(', '), 'error');
+    } else if(added.length){
+      toast('Added ' + added.length + ' exercise' + (added.length>1?'s':'') + ' — check the numbers before saving.');
+    } else {
+      toast('Nothing matched your library' + (rejected.length ? ': ' + rejected.join(', ') : '') + '.', 'error');
+    }
+  } catch(e){
+    console.error(e);
+    status.textContent = '';
+    toast('Could not reach the AI. Try again.', 'error');
+  }
+  btn.disabled = false;
+}
+
+function setJtGroup(ei, val) {
+  if(jtExercises[ei]) {
+    jtCaptureInputs();
+    jtExercises[ei].group = val || '';
+    jtRenderSession();
+  }
+}
+
+function setJtModifier(ei, val) {
+  if(jtExercises[ei]) {
+    jtCaptureInputs();
+    jtExercises[ei].modifier = val || '';
+    jtRenderSession();
+  }
 }
 
 function setJtEquipment(ei, val) {
