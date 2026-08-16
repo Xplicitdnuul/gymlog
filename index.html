@@ -1304,10 +1304,7 @@ const fmtSecs=s=>{if(s<60)return s+'s';if(s%60===0)return(s/60)+'m';return Math.
 
 function daysSince(muscle) {
   const names=relatedMuscles(muscle);
-  const sessions=db.sessions.filter(s=>{
-    const ms=safeJSON(s.muscles,[]);
-    return ms.some(m=>names.includes(m));
-  });
+  const sessions=db.sessions.filter(s=>effectiveSessionMuscles(s).some(m=>names.includes(m)));
   if(!sessions.length) return 999;
   const latest=sessions.reduce((a,b)=>new Date(b.date)>new Date(a.date)?b:a);
   return Math.floor((Date.now()-new Date(latest.date))/(864e5));
@@ -1896,6 +1893,17 @@ function buildTrainingContext(){
       + ' [' + categorizeWorkout(exs) + '] — ' + exs.map(e=>e.name).join(', ');
   }).join('\n');
 
+  // 3b. Dated exercise log — the raw material for the AI to infer what was ACTUALLY trained.
+  // Tag-derived recency is only as good as the library tags, which drift; exercise names are
+  // unambiguous, so the model can work out that a Bulgarian Split Squat hit adductors even
+  // when nothing is tagged that way.
+  const exerciseLog = db.sessions.slice(-14).map(s => {
+    const daysAgo = Math.floor((Date.now() - new Date(s.date))/864e5);
+    const exs = (s.exercises||[]).filter(e=>e&&e.name);
+    if(!exs.length) return null;
+    return daysAgo + 'd ago: ' + exs.map(e => e.name + (e.modifier?' ('+e.modifier+')':'')).join(', ');
+  }).filter(Boolean).reverse().join('\n');
+
   // 4. Active programme position, so a generated session complements rather than duplicates
   let programmeTxt = 'None active.';
   try {
@@ -1930,7 +1938,7 @@ function buildTrainingContext(){
   const neverUsed = db.library.map(e => e.name).filter(n => !useCount[n]);
   const neverUsedTxt = neverUsed.length ? neverUsed.join(', ') : 'None';
 
-  return {recencyTxt, lastLoadsTxt: lastLoads.join('\n')||'No logged history yet.', recentSessions: recentSessions||'None', programmeTxt, loadTxt, recency, staplesTxt, neverUsedTxt, stapleCount: staples.length};
+  return {recencyTxt, exerciseLog: exerciseLog||'No logged sessions yet.', lastLoadsTxt: lastLoads.join('\n')||'No logged history yet.', recentSessions: recentSessions||'None', programmeTxt, loadTxt, recency, staplesTxt, neverUsedTxt, stapleCount: staples.length};
 }
 
 let _lastGenAuto = false;
@@ -1965,7 +1973,14 @@ async function generateSession(auto) {
     +'USER GOALS (favour, but do not crowd out other muscles): '+goalTxt+'\n'
     +'TRAINING LOAD: '+ctx.loadTxt+'\n'
     +'ACTIVE PROGRAMME: '+ctx.programmeTxt+'\n\n'
-    +'DAYS SINCE EACH MUSCLE WAS TRAINED (most stale first):\n'+ctx.recencyTxt+'\n\n'
+    +'WHAT WAS ACTUALLY TRAINED (dated exercise log — THIS IS THE RELIABLE SOURCE):\n'+ctx.exerciseLog+'\n\n'
+    +'TAG-DERIVED "DAYS SINCE TRAINED" (CAUTION: computed from the user\'s exercise tags, which are\n'
+    +'often incomplete — e.g. a Bulgarian Split Squat may not be tagged as hitting adductors. Use this\n'
+    +'only as a rough hint. Where it conflicts with the exercise log above, TRUST THE EXERCISE LOG):\n'+ctx.recencyTxt+'\n\n'
+    +'BEFORE CHOOSING: work out for yourself, from the exercise names in the log and your own knowledge\n'
+    +'of what each movement works (including secondary muscles), how many days it has genuinely been\n'
+    +'since each muscle group was trained. Base your decision on that, not on the tag-derived numbers.\n'
+    +'If a muscle looks stale by tags but the log shows it was worked recently, say so and skip it.\n\n'
     +'RECENT SESSIONS (for choosing which MUSCLES to work next — not a list of exercises to avoid):\n'+ctx.recentSessions+'\n\n'
     +'LAST WORKING SETS (use these to set a sensible starting weight — if all target reps were hit,\n'
     +'suggest a small increase; if they fell short, repeat the same weight):\n'+ctx.lastLoadsTxt+'\n\n'
@@ -1981,6 +1996,9 @@ async function generateSession(auto) {
     +'- "Avoid repeating the same stimulus" means vary the MUSCLES worked versus recent sessions;\n'
     +'  it does NOT mean avoid exercises the user does regularly. Repeating a staple lift is good.\n'
     +'- If you do include a never-logged exercise, say why in its tip.\n'
+    +'- In coachNote, state the days-since figures YOU inferred from the exercise log for the muscles you\n'
+    +'  chose. If any differ materially from the tag-derived list, add one short line naming the exercises\n'
+    +'  whose tags look wrong, so the user can fix them.\n'
     +'- Reps guide: strength=3-6, hypertrophy=8-12, endurance=15-20.\n'
     +'- Put a concrete suggested working weight in "tip" when history gives you one\n'
     +'  (e.g. "Last time 60kg x 8 for all sets — try 62.5kg"). If there is no history, say so instead of inventing a number.\n'
@@ -2620,6 +2638,30 @@ function categorizeWorkout(exercises){
   return 'Core';
 }
 
+// Muscles a session should count toward, resolved at READ time. The stored s.muscles array
+// is a snapshot from when the session was saved, so it goes stale the moment an exercise is
+// retagged in the library (e.g. adding Adductors to Bulgarian Split Squat). Re-deriving from
+// the library means a tag fix applies retroactively to all history instead of only future
+// sessions. Falls back to the stored snapshot for exercises no longer in the library.
+// Drop the per-session muscle cache — call whenever library tags change, or retagging an
+// exercise won't affect recency until the next reload.
+function invalidateMuscleCache(){ (db.sessions||[]).forEach(s=>{ delete s._effMuscles; }); }
+
+function effectiveSessionMuscles(s){
+  if(!s) return [];
+  if(s._effMuscles) return s._effMuscles;
+  const set = new Set(safeJSON(s.muscles, []));
+  (s.exercises||[]).forEach(ex => {
+    if(!ex) return;
+    if(ex.isCardio){ set.add('Cardio'); }
+    const lib = ex.name ? (db.library||[]).find(l => l.name === ex.name) : null;
+    const raw = (lib && lib.muscle) ? lib.muscle : (ex.muscle || '');
+    String(raw).split(',').map(m => m.trim()).filter(Boolean).forEach(m => set.add(m));
+  });
+  s._effMuscles = [...set];
+  return s._effMuscles;
+}
+
 function sessionMuscles(exercises){
   const set = new Set();
   (exercises||[]).forEach(ex => {
@@ -2750,7 +2792,7 @@ async function renderProgress() {
   const muscleLastTrained = {};
   const muscleVolume = {};
   db.sessions.forEach(s => {
-    (s.muscles || []).forEach(m => {
+    effectiveSessionMuscles(s).forEach(m => {
       const d = new Date(s.date);
       if(!muscleLastTrained[m] || d > muscleLastTrained[m]) muscleLastTrained[m] = d;
     });
@@ -3817,7 +3859,7 @@ async function addSuggestion(name, muscle) {
   }
   const {data, error} = await sb.from('library').insert({user_id: currentUser.id, name, muscle}).select().single();
   if(error) { dbErr('Add suggestion', error); return; }
-  if(data) db.library.push({id: data.id, name, muscle});
+  if(data) { db.library.push({id: data.id, name, muscle}); invalidateMuscleCache(); }
   addedSuggestions.add(name);
   toast(name + ' added to library.', 'ok');
   renderSuggestionPanel();
@@ -5237,6 +5279,7 @@ async function mergeExercises(){
     const {error:delErr}=await sb.from('library').delete().eq('id',srcLib.id);
     if(delErr){ dbErr('Merge (library)',delErr); btn.disabled=false; status.textContent=''; return; }
     db.library=db.library.filter(e=>e.id!==srcLib.id);
+    invalidateMuscleCache();
 
     status.textContent='';
     btn.disabled=false;
@@ -5254,6 +5297,7 @@ async function renderLibrary(){
   const {data,error}=await sb.from('library').select('*').eq('user_id',currentUser.id).order('name');
   if(error){dbErr('Load library',error);return;}
   db.library=(data||[]).map(e=>({id:e.id,name:e.name,muscle:e.muscle}));
+  invalidateMuscleCache();
   document.getElementById('lib-count').textContent=db.library.length;
   populateMergeSelects();
   if(!db.library.length){
@@ -5318,6 +5362,7 @@ async function deleteExercise(id){
   const {error}=await sb.from('library').delete().eq('id',id);
   if(error){dbErr('Delete exercise',error);return;}
   db.library=db.library.filter(e=>e.id!==id);
+  invalidateMuscleCache();
   renderLibrary();
 }
 
