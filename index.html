@@ -315,20 +315,19 @@ html.mobile-layout .topbar { display:flex; align-items:center; gap:6px; position
     <div class="logo" onclick="showPage('overview')" style="cursor:pointer;">Gym<span>log</span></div>
     <nav>
       <div class="nav-group-label">Train</div>
-      <div class="nav-item" onclick="showPage('justtrain')"><span class="nav-icon">⚡</span> Just Train</div>
-      <div class="nav-item" onclick="showPage('planner')"><span class="nav-icon">⊕</span> Generate Workout</div>
-      <div class="nav-item" id="nav-log" onclick="showPage('log')"><span class="nav-icon">✦</span> Log workout<span id="nav-log-badge" style="display:none;margin-left:auto;width:8px;height:8px;border-radius:50%;background:#2E7D32;flex-shrink:0;"></span></div>
-      <div class="nav-item" onclick="showPage('history')"><span class="nav-icon">⊟</span> History</div>
+      <div class="nav-item" id="nav-log" data-page="log" onclick="showPage('log')"><span class="nav-icon">✦</span> Log workout<span id="nav-log-badge" style="display:none;margin-left:auto;width:8px;height:8px;border-radius:50%;background:#2E7D32;flex-shrink:0;"></span></div>
+      <div class="nav-item" data-page="justtrain" onclick="showPage('justtrain')"><span class="nav-icon">⚡</span> Just Train</div>
+      <div class="nav-item" data-page="planner" onclick="showPage('planner')"><span class="nav-icon">⊕</span> Generate Workout</div>
       <div class="nav-group-label" style="margin-top:10px;">Plan</div>
-      <div class="nav-item" onclick="showPage('builder')"><span class="nav-icon">✎</span> Build workout</div>
-      <div class="nav-item" onclick="showPage('programme')"><span class="nav-icon">◫</span> Programme</div>
-      <div class="nav-item" onclick="showPage('library')"><span class="nav-icon">≡</span> Exercise library</div>
+      <div class="nav-item" data-page="builder" onclick="showPage('builder')"><span class="nav-icon">✎</span> Build workout</div>
+      <div class="nav-item" data-page="programme" onclick="showPage('programme')"><span class="nav-icon">◫</span> Programme</div>
+      <div class="nav-item" data-page="library" onclick="showPage('library')"><span class="nav-icon">≡</span> Exercise library</div>
       <div class="nav-group-label" style="margin-top:10px;">Performance</div>
-      <div class="nav-item" onclick="showPage('progress')"><span class="nav-icon">↗</span> Progress</div>
-      <div class="nav-item" onclick="showPage('body')"><span class="nav-icon">◉</span> Body</div>
-      <div class="nav-group-label" style="margin-top:10px;">Goals &amp; Profile</div>
-      <div class="nav-item" onclick="showPage('goals')"><span class="nav-icon">◎</span> Goals</div>
-      <div class="nav-item" onclick="showPage('settings')"><span class="nav-icon">⚙</span> Profile</div>
+      <div class="nav-item" data-page="progress" onclick="showPage('progress')"><span class="nav-icon">↗</span> Progress</div>
+      <div class="nav-item" data-page="history" onclick="showPage('history')"><span class="nav-icon">⊟</span> History</div>
+      <div class="nav-item" data-page="body" onclick="showPage('body')"><span class="nav-icon">◉</span> Body</div>
+      <div class="nav-group-label" style="margin-top:10px;">You</div>
+      <div class="nav-item" data-page="settings" onclick="showPage('settings')"><span class="nav-icon">⚙</span> Goals &amp; profile</div>
     </nav>
     <div class="sidebar-bottom">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
@@ -753,10 +752,12 @@ html.mobile-layout .topbar { display:flex; align-items:center; gap:6px; position
       <div id="history-content"></div>
     </div>
 
-    <div id="page-goals" class="page">
-      <div class="page-title">Goals</div>
-      <div class="page-sub">Track what you're working towards</div>
 
+    <div id="page-settings" class="page">
+      <div class="page-title">Settings</div>
+      <div class="page-sub">Your profile and preferences</div>
+
+      <div class="section-sep">Goals</div>
       <div class="card">
         <div class="card-title">Add goal</div>
         <div class="form-group">
@@ -776,12 +777,9 @@ html.mobile-layout .topbar { display:flex; align-items:center; gap:6px; position
         <button class="btn btn-dark btn-sm" style="margin-top:10px;" onclick="addGoalFromPage()">Add goal</button>
       </div>
 
-      <div id="goals-page-list"></div>
-    </div>
+      <div id="goals-page-list" style="margin-bottom:18px;"></div>
 
-    <div id="page-settings" class="page">
-      <div class="page-title">Settings</div>
-      <div class="page-sub">Your profile and preferences</div>
+      <div class="section-sep">Profile</div>
       <div class="card">
         <div class="card-title">Profile</div>
         <div class="form-row form-2">
@@ -1428,10 +1426,13 @@ function showPage(id) {
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   document.getElementById('page-'+id).classList.add('active');
-  const navMap={justtrain:0,planner:1,log:2,history:3,builder:4,programme:5,library:6,progress:7,body:8,goals:9,settings:10};
-  const navEl=document.querySelectorAll('.nav-item')[navMap[id]];
+  // Highlight by page id, not DOM position — an index-based map silently highlights the
+  // wrong item the moment the menu is reordered (which has bitten this app before).
+  // 'goals' now lives inside the profile page, so it maps to the same nav item.
+  const navPage = (id === 'goals') ? 'settings' : id;
+  const navEl = document.querySelector('.nav-item[data-page="' + navPage + '"]');
   if(navEl) navEl.classList.add('active');
-  const renders={overview:renderOverview,justtrain:renderJustTrain,planner:renderPlanner,log:renderLog,progress:renderProgress,body:renderBody,builder:renderBuilder,programme:renderProgramme,library:renderLibrary,history:renderHistory,goals:renderGoals,settings:renderSettings};
+  const renders={overview:renderOverview,justtrain:renderJustTrain,planner:renderPlanner,log:renderLog,progress:renderProgress,body:renderBody,builder:renderBuilder,programme:renderProgramme,library:renderLibrary,history:renderHistory,settings:renderSettings};
   if(document.documentElement.classList.contains('mobile-layout')) closeSidebar();
   if(renders[id]) Promise.resolve(renders[id]()).catch(e=>console.error('Page render error:',e));
 }
@@ -5717,6 +5718,8 @@ async function deleteExercise(id){
 
 // ── SETTINGS ──────────────────────────────────────────────────────
 function renderSettings(){
+  // Goals now live on this page, so render them alongside the profile fields
+  if(typeof renderGoals==='function') renderGoals();
   document.getElementById('s-name').value=db.profile.name||'';
   document.getElementById('s-level').value=db.profile.level||'intermediate';
   document.getElementById('s-goal').value=db.profile.goal||'hypertrophy';
