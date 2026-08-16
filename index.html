@@ -4246,17 +4246,26 @@ async function jtParseVoice(){
     + 'EQUIPMENT (choose one or ""): ' + EQUIPMENT.join(', ') + '\n'
     + 'MODIFIERS (choose one or "" for standard): ' + MODIFIERS.join(', ') + '\n\n'
     + 'RULES:\n'
-    + '- The description may mix English and Danish. Handle both.\n'
     + '- Weights are kilograms. "three sets of eight at sixty" = 3 sets, each {kg:60, reps:8}.\n'
     + '- If sets differ ("60 for 8 then 65 for 5"), output each set separately.\n'
-    + '- "each side"/"per arm"/"per leg"/"unilateral" => modifier "Unilateral".\n'
-    + '- A hold ("held for 30 seconds", "planke") => modifier "Isometric hold" and put the SECONDS in reps.\n'
+    + '- NEVER infer a set count. If no number of sets is stated, output EXACTLY ONE set.\n'
+    + '  "24 kilos, twelve reps each side" = ONE set {kg:24, reps:12} with modifier "Unilateral".\n'
+    + '  "each side"/"per arm"/"per leg" describes HOW the set was done — it never means two sets.\n'
+    + '- "to failure"/"as many as possible" with a stated estimate ("about eight") => use that number.\n'
+    + '- A hold ("held for 30 seconds", "planke") => modifier "Isometric hold", SECONDS go in reps, kg null unless weighted.\n'
     + '- Bodyweight moves have kg null.\n'
+    + '- CARDIO (bike, run, row, walk, spinning): return "minutes" with the duration and an EMPTY sets array.\n'
+    + '  e.g. "twenty minutes on the bike" => {"name":"<library cardio name>","minutes":20,"sets":[]}\n'
+    + '- The description is normally English but may contain Danish. Danish numbers are irregular —\n'
+    + '  use exactly this table: tyve=20, tredive=30, fyrre=40, halvtreds=50, tres=60, halvfjerds=70,\n'
+    + '  firs=80, halvfems=90, hundrede=100. Compounds read units-first: "femoghalvfjerds"=75,\n'
+    + '  "toogtres"=62, "femogtyve"=25. "fire sæt af ti" = 4 sets of 10. Never guess a Danish number;\n'
+    + '  if it is not in this table or a clear compound of it, use null.\n'
     + '- If the exercise is not clearly in the library, put the spoken words in "unmatched" instead of guessing.\n'
     + '- If sets or reps are genuinely unclear, use null rather than inventing numbers.\n\n'
     + 'USER DESCRIPTION:\n"""' + text + '"""\n\n'
     + 'Return ONLY valid JSON, no markdown:\n'
-    + '{"exercises":[{"name":"<exact library name>","equipment":"","modifier":"","sets":[{"kg":60,"reps":8}]}],"unmatched":["..."]}';
+    + '{"exercises":[{"name":"<exact library name>","equipment":"","modifier":"","minutes":null,"sets":[{"kg":60,"reps":8}]}],"unmatched":["..."]}';
 
   try {
     const res = await fetch('/api/chat', {
@@ -4288,18 +4297,23 @@ async function jtParseVoice(){
         if(pe.name){
           rejected.push(pe.name);
           // Keep the numbers — the user only needs to say which exercise it was
-          _jtPendingUnmatched.push({ spoken: String(pe.name), sets, equipment: pe.equipment||'', modifier });
+          _jtPendingUnmatched.push({ spoken: String(pe.name), sets, equipment: pe.equipment||'', modifier, minutes: pe.minutes != null ? pe.minutes : null });
         }
         return;
       }
       const equipment = EQUIPMENT.includes(pe.equipment) ? pe.equipment : (lastEquipmentFor(lib.name) || '');
       const isCardio = String(lib.muscle||'').toLowerCase().includes('cardio');
+      // Cardio rows render from draftMinutes, not draftSets — without this the exercise
+      // appears but the dictated duration is silently dropped.
+      const mins = pe.minutes != null ? pe.minutes
+        : (sets.length && sets[0].reps != null ? sets[0].reps : (sets.length && sets[0].kg != null ? sets[0].kg : null));
       jtExercises.push({
-        name: lib.name, muscle: lib.muscle, sets: Math.max(sets.length, 1),
+        name: lib.name, muscle: lib.muscle, sets: isCardio ? 1 : Math.max(sets.length, 1),
         isCardio, equipment: isCardio ? '' : equipment, modifier,
-        reps: isCardio ? '30 min' : '10 reps',
+        reps: isCardio ? ((mins != null ? mins : 30) + ' min') : '10 reps',
         wuHidden: true, wuDrafts: [], // dictated sets are working sets; no warm-up assumed
-        draftSets: sets.map(s => ({ kg: s.kg == null ? '' : String(s.kg), reps: s.reps == null ? '' : String(s.reps) }))
+        draftMinutes: isCardio && mins != null ? String(mins) : '',
+        draftSets: isCardio ? [] : sets.map(s => ({ kg: s.kg == null ? '' : String(s.kg), reps: s.reps == null ? '' : String(s.reps) }))
       });
       added.push(lib.name);
     });
@@ -4435,9 +4449,11 @@ function jtRenderUnmatched(){
   el.innerHTML = '<div class="banner banner-amber" style="margin-top:10px;">'
     + '<b>Couldn\'t match ' + _jtPendingUnmatched.length + '</b> — pick the right exercise and I\'ll remember it next time.</div>'
     + _jtPendingUnmatched.map((u, ui) => {
-        const setTxt = u.sets && u.sets.length
-          ? u.sets.map(s => (s.kg==null?'':s.kg+'kg\u00d7') + (s.reps==null?'?':s.reps)).join(', ')
-          : 'no numbers heard';
+        const setTxt = (u.minutes != null)
+          ? (u.minutes + ' min')
+          : (u.sets && u.sets.length
+              ? u.sets.map(s => (s.kg==null?'':s.kg+'kg\u00d7') + (s.reps==null?'?':s.reps)).join(', ')
+              : 'no numbers heard');
         return '<div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap;">'
           + '<div style="flex:1;min-width:120px;"><div style="font-size:13px;font-weight:500;">\u201c' + u.spoken + '\u201d</div>'
           + '<div style="font-size:11px;color:var(--muted);">' + setTxt + '</div></div>'
@@ -4460,14 +4476,18 @@ async function jtResolveUnmatched(ui){
 
   await saveExAlias(u.spoken, lib.name); // learn it, so next time it matches automatically
   const isCardio = String(lib.muscle||'').toLowerCase().includes('cardio');
+  const uSets = u.sets || [];
+  const uMins = u.minutes != null ? u.minutes
+    : (uSets.length && uSets[0].reps != null ? uSets[0].reps : null);
   jtCaptureInputs();
   jtExercises.push({
-    name: lib.name, muscle: lib.muscle, sets: Math.max((u.sets||[]).length, 1),
+    name: lib.name, muscle: lib.muscle, sets: isCardio ? 1 : Math.max(uSets.length, 1),
     isCardio, equipment: isCardio ? '' : (EQUIPMENT.includes(u.equipment) ? u.equipment : (lastEquipmentFor(lib.name)||'')),
     modifier: MODIFIERS.includes(u.modifier) ? u.modifier : '',
-    reps: isCardio ? '30 min' : '10 reps',
+    reps: isCardio ? ((uMins != null ? uMins : 30) + ' min') : '10 reps',
     wuHidden: true, wuDrafts: [],
-    draftSets: (u.sets||[]).map(s => ({ kg: s.kg==null?'':String(s.kg), reps: s.reps==null?'':String(s.reps) }))
+    draftMinutes: isCardio && uMins != null ? String(uMins) : '',
+    draftSets: isCardio ? [] : uSets.map(s => ({ kg: s.kg==null?'':String(s.kg), reps: s.reps==null?'':String(s.reps) }))
   });
   _jtPendingUnmatched.splice(ui, 1);
   jtRenderSession();
