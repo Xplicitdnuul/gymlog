@@ -3657,7 +3657,10 @@ function renderHistoryList() {
 
         return '<div style="padding:9px 0;border-bottom:0.5px solid var(--color-border-tertiary);">'
           + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;">'
-          + '<span style="font-size:13px;font-weight:500;">' + ex.name + (ex.equipment ? ' <span style="color:var(--color-text-tertiary);font-weight:400;">· ' + ex.equipment + '</span>' : '') + '</span>'
+          + '<span style="font-size:13px;font-weight:500;">' + ex.name + (ex.equipment ? ' <span style="color:var(--color-text-tertiary);font-weight:400;">· ' + ex.equipment + '</span>' : '')
+          + (ex.group ? '<span class="ss-badge">SS ' + ex.group + '</span>' : '')
+          + (ex.modifier ? '<span class="ss-badge" style="color:#92600A;background:rgba(146,96,10,0.1);">' + ex.modifier + '</span>' : '')
+          + '</span>'
           + (isPR ? '<span class="tag-pr">PR</span>' : '')
           + '</div>'
           + '<div style="display:flex;flex-wrap:wrap;gap:4px;">' + setPills + '</div>'
@@ -4261,11 +4264,15 @@ async function jtParseVoice(){
     + '  firs=80, halvfems=90, hundrede=100. Compounds read units-first: "femoghalvfjerds"=75,\n'
     + '  "toogtres"=62, "femogtyve"=25. "fire sæt af ti" = 4 sets of 10. Never guess a Danish number;\n'
     + '  if it is not in this table or a clear compound of it, use null.\n'
+    + '- SUPERSETS: if two or more exercises were done back-to-back as a superset / tri-set /\n'
+    + '  circuit ("superset with", "straight into", "paired with", "as a giant set"), give those\n'
+    + '  exercises the SAME "group" letter ("A", then "B" for a second pairing, etc.) and list them\n'
+    + '  next to each other in order. Exercises done normally get "group":"".\n'
     + '- If the exercise is not clearly in the library, put the spoken words in "unmatched" instead of guessing.\n'
     + '- If sets or reps are genuinely unclear, use null rather than inventing numbers.\n\n'
     + 'USER DESCRIPTION:\n"""' + text + '"""\n\n'
     + 'Return ONLY valid JSON, no markdown:\n'
-    + '{"exercises":[{"name":"<exact library name>","equipment":"","modifier":"","minutes":null,"sets":[{"kg":60,"reps":8}]}],"unmatched":["..."]}';
+    + '{"exercises":[{"name":"<exact library name>","equipment":"","modifier":"","group":"","minutes":null,"sets":[{"kg":60,"reps":8}]}],"unmatched":["..."]}';
 
   try {
     const res = await fetch('/api/chat', {
@@ -4310,6 +4317,7 @@ async function jtParseVoice(){
       jtExercises.push({
         name: lib.name, muscle: lib.muscle, sets: isCardio ? 1 : Math.max(sets.length, 1),
         isCardio, equipment: isCardio ? '' : equipment, modifier,
+        group: (!isCardio && /^[A-E]$/.test(String(pe.group||'').toUpperCase())) ? String(pe.group).toUpperCase() : '',
         reps: isCardio ? ((mins != null ? mins : 30) + ' min') : '10 reps',
         wuHidden: true, wuDrafts: [], // dictated sets are working sets; no warm-up assumed
         draftMinutes: isCardio && mins != null ? String(mins) : '',
