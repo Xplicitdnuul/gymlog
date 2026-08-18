@@ -687,13 +687,17 @@ html.mobile-layout .topbar { display:flex; align-items:center; gap:6px; position
 
     <div id="page-programme" class="page">
       <div class="page-title">Programme</div>
-      <div class="page-sub">Plan your training sequence in advance</div>
+      <div class="page-sub">Sequence your saved workouts into a repeating cycle</div>
       <div id="active-programme-section"></div>
       <div class="card">
         <div class="card-title">My programmes</div>
         <div id="programme-list"></div>
         <div class="divider"></div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <div id="prog-empty-state" style="display:none;">
+          <p style="font-size:13px;color:var(--muted);margin-bottom:10px;">A programme is a sequence of your <b>saved workouts</b> — so you'll need at least one before you can build one. Create a workout first, then come back here to arrange your week.</p>
+          <button class="btn btn-dark btn-sm" onclick="showPage('builder')">Build a workout first →</button>
+        </div>
+        <div id="prog-actions" style="display:flex;gap:8px;flex-wrap:wrap;">
           <button class="btn btn-dark btn-sm" onclick="showProgrammeBuilder()">+ Build manually</button>
           <button class="btn btn-sm" id="prog-gen-btn" onclick="generateProgramme()">Generate with AI ↗</button>
           <span id="prog-gen-status" style="font-size:13px;color:var(--muted);align-self:center;"></span>
@@ -3844,6 +3848,13 @@ async function loadProgrammes() {
 }
 
 function renderProgramme() {
+  // A programme sequences saved workouts, so with none saved the actions are dead ends —
+  // show the route to Build workout instead of letting the user hit an empty dropdown.
+  const hasWorkouts = !!(db.savedWorkouts && db.savedWorkouts.length);
+  const empty = document.getElementById('prog-empty-state');
+  const actions = document.getElementById('prog-actions');
+  if(empty) empty.style.display = hasWorkouts ? 'none' : '';
+  if(actions) actions.style.display = hasWorkouts ? 'flex' : 'none';
   loadProgrammes().then(() => {
     renderActiveProgramme();
     renderProgrammeList();
@@ -4124,6 +4135,13 @@ async function advanceProgrammeDay(prog) {
 }
 
 function showProgrammeBuilder(prog) {
+  // Only block creating a NEW programme — editing an existing one must always work,
+  // even if its workouts were since deleted.
+  if(!prog && (!db.savedWorkouts || !db.savedWorkouts.length)){
+    toast('Build and save a workout first — a programme is a sequence of them.', 'error');
+    showPage('builder');
+    return;
+  }
   editingProgrammeId = prog ? prog.id : null;
   progDays = prog ? safeJSON(prog.days, []).map(d => Object.assign({}, d)) : [];
   document.getElementById('prog-name').value = prog ? prog.name : '';
@@ -4286,7 +4304,7 @@ function buildProgrammeContext(){
 }
 
 async function generateProgramme() {
-  if(!db.savedWorkouts.length) { toast('Save some workouts first.', 'error'); return; }
+  if(!db.savedWorkouts.length) { toast('Build and save a workout first — a programme is a sequence of them.', 'error'); showPage('builder'); return; }
   const btn = document.getElementById('prog-gen-btn');
   const status = document.getElementById('prog-gen-status');
   btn.disabled = true;
