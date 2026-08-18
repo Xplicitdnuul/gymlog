@@ -524,7 +524,7 @@ html.mobile-layout .topbar { display:flex; align-items:center; gap:6px; position
             <div class="card-title" style="margin-bottom:0;">Stalled lifts</div>
             <button class="btn btn-sm" onclick="toggleCard('card-stalling')">hide</button>
           </div>
-          <p style="font-size:12px;color:var(--muted);margin-bottom:10px;">Lifts whose best estimated 1RM hasn't moved in 5+ weeks — candidates for a deload, a rep-range change, or a different variation.</p>
+          <p style="font-size:12px;color:var(--muted);margin-bottom:10px;">Lifts not moving in the last 6 weeks versus the 6 before. Judged on current trajectory, not your all-time best — so a lift you're rebuilding counts as progress.</p>
           <div id="stalling-content"></div>
         </div>
 
@@ -546,6 +546,13 @@ html.mobile-layout .topbar { display:flex; align-items:center; gap:6px; position
           <button class="filter-pill sel" onclick="setStrengthMode(this,'weight')">Max weight</button>
           <button class="filter-pill" onclick="setStrengthMode(this,'e1rm')">Est. 1RM</button>
           <button class="filter-pill" onclick="setStrengthMode(this,'volume')">Volume per session</button>
+        </div>
+        <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;align-items:center;">
+          <span style="font-size:11px;color:var(--faint);margin-right:2px;">Show:</span>
+          <button class="filter-pill" onclick="setStrengthRef(this,90)">90 days</button>
+          <button class="filter-pill" onclick="setStrengthRef(this,180)">6 months</button>
+          <button class="filter-pill" onclick="setStrengthRef(this,365)">1 year</button>
+          <button class="filter-pill sel" onclick="setStrengthRef(this,0)">Match period</button>
         </div>
         <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap;" id="strength-ex-filter"></div>
         <div style="position:relative;width:100%;height:200px;"><canvas id="chart-strength"></canvas></div>
@@ -2754,10 +2761,13 @@ function hardSetsPerMuscle(sessions, weeks){
   return perWeek;
 }
 
-// Lifts whose best estimated 1RM hasn't improved recently. This is more actionable than a
-// PR list: it's the signal to deload, change exercise, or check recovery.
-function stallingLifts(minSessions){
-  minSessions = minSessions || 3;
+// Lifts that aren't moving RIGHT NOW. Deliberately compares the recent window against the
+// one before it rather than against an all-time best: a lift being rebuilt after a layoff
+// (90→95→100) is progressing, and flagging it as "stalled" against last year's peak would
+// be discouraging at exactly the wrong moment. All-time bests belong in the PR panel.
+function stallingLifts(){
+  const RECENT_DAYS = 42, PRIOR_DAYS = 84; // last 6 weeks vs the 6 before that
+  const now = Date.now();
   const series = {};
   db.sessions.forEach(s => (s.exercises||[]).forEach(ex => {
     if(!ex || ex.isCardio || isIsometric(ex)) return;
@@ -2770,18 +2780,21 @@ function stallingLifts(minSessions){
   const out = [];
   Object.keys(series).forEach(k => {
     const pts = series[k].sort((a,b)=>a.d-b.d);
-    if(pts.length < minSessions) return;
-    const best = pts.reduce((a,b)=>b.e1>a.e1?b:a);
-    const latest = pts[pts.length-1];
-    const daysSinceBest = Math.floor((latest.d - best.d)/864e5);
-    const sinceBestSessions = pts.length - 1 - pts.indexOf(best);
-    // Stalled = personal best is at least 5 weeks and 3 sessions behind
-    if(daysSinceBest >= 35 && sinceBestSessions >= 3){
-      out.push({name:k, best:Math.round(best.e1), current:Math.round(latest.e1),
-        weeks:Math.round(daysSinceBest/7), sessions:sinceBestSessions});
-    }
+    const recent = pts.filter(p => (now - p.d)/864e5 <= RECENT_DAYS);
+    const prior  = pts.filter(p => { const d=(now-p.d)/864e5; return d > RECENT_DAYS && d <= PRIOR_DAYS; });
+    // Need enough recent work to judge, and something to compare against
+    if(recent.length < 2 || !prior.length) return;
+    const bestRecent = Math.max(...recent.map(p=>p.e1));
+    const bestPrior  = Math.max(...prior.map(p=>p.e1));
+    const pct = (bestRecent - bestPrior) / bestPrior * 100;
+    if(pct > 1) return; // genuinely improving
+    // Don't count a logged illness/injury layoff as stalling
+    const gapDays = daysOffBetween(new Date(now - PRIOR_DAYS*864e5), new Date());
+    if(gapDays >= 14) return;
+    out.push({name:k, recent:Math.round(bestRecent), prior:Math.round(bestPrior),
+      pct:Math.round(pct*10)/10, sessions:recent.length, declining: pct < -1});
   });
-  return out.sort((a,b)=>b.weeks-a.weeks).slice(0,5);
+  return out.sort((a,b)=>a.pct-b.pct).slice(0,5);
 }
 
 // Estimated 1RM movement across the user's most-trained lifts — the headline "am I actually
@@ -2845,14 +2858,14 @@ function renderStalling(){
   if(!el) return;
   const list = stallingLifts();
   if(!list.length){
-    el.innerHTML = '<p style="font-size:13px;color:var(--muted);">Nothing stalled — every lift with enough history has improved recently.</p>';
+    el.innerHTML = '<p style="font-size:13px;color:var(--muted);">Nothing stalled \u2014 every lift with enough recent history is moving forward.</p>';
     return;
   }
   el.innerHTML = list.map(x =>
     '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:0.5px solid var(--border);">'
     + '<div style="flex:1;min-width:0;"><div style="font-size:13px;font-weight:500;">' + x.name + '</div>'
-    + '<div style="font-size:11px;color:var(--muted);">best ' + x.best + 'kg · now ' + x.current + 'kg · ' + x.sessions + ' sessions since</div></div>'
-    + '<div style="font-size:12px;font-weight:600;color:#92600A;white-space:nowrap;">' + x.weeks + 'w flat</div>'
+    + '<div style="font-size:11px;color:var(--muted);">last 6wk best ' + x.recent + 'kg vs ' + x.prior + 'kg before \u00b7 ' + x.sessions + ' sessions</div></div>'
+    + '<div style="font-size:12px;font-weight:600;color:' + (x.declining?'#B3261E':'#92600A') + ';white-space:nowrap;">' + (x.declining ? x.pct + '%' : 'flat') + '</div>'
     + '</div>').join('');
 }
 
@@ -2869,6 +2882,17 @@ function setPeriod(btn, days) {
   btn.classList.add('sel');
   progressPeriod = days;
   renderProgress();
+}
+
+// Independent window for the strength chart. A year-old peak can dominate the axis and hide
+// how the current block is going, so this lets you look at recent progress on its own terms.
+// 0 = follow the page's period filter.
+let strengthRefDays = 0;
+function setStrengthRef(btn, days){
+  strengthRefDays = days;
+  [...btn.parentElement.querySelectorAll('.filter-pill')].forEach(b=>b.classList.remove('sel'));
+  btn.classList.add('sel');
+  renderStrengthChart();
 }
 
 function setStrengthMode(btn, mode) {
@@ -3510,6 +3534,10 @@ function renderCardioChart(sessions){
 
 function renderStrengthChart(sessions) {
   sessions = sessions || getFilteredSessions();
+  if(strengthRefDays){
+    const cutoff = Date.now() - strengthRefDays*864e5;
+    sessions = db.sessions.filter(s => !s.is_draft && new Date(s.date).getTime() >= cutoff);
+  }
   if(progressCharts.strength) { try { progressCharts.strength.destroy(); } catch(e) {} }
   const tc = 'rgba(0,0,0,0.3)', gc = 'rgba(0,0,0,0.06)';
   const colors = ['#1A56A0','#2E7D32','#92600A','#7B61C4','#B71C1C','#0F6E56'];
