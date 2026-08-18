@@ -198,6 +198,44 @@ html.mobile-layout .topbar { display:flex; align-items:center; gap:6px; position
 .ss-group { border-left:3px solid #185FA5; border-radius:6px; background:rgba(24,95,165,0.035); padding:2px 0 2px 10px; margin-bottom:8px; }
 .ss-label { font-size:11px; font-weight:600; color:#185FA5; text-transform:uppercase; letter-spacing:0.05em; padding:6px 0 2px; }
 .ss-badge { font-size:10px; font-weight:600; color:#185FA5; background:rgba(24,95,165,0.1); border-radius:4px; padding:1px 5px; margin-left:6px; }
+/* Session recap — self-contained enough to read from a screenshot alone */
+.recap { border:0.5px solid var(--border-md); border-radius:10px; padding:14px; margin-bottom:14px; background:var(--surface); }
+.recap-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:12px; }
+.recap-head-main { min-width:0; }
+.recap-freq { flex-shrink:0; text-align:right; }
+.recap-freq-v { font-family:var(--font-display); font-size:22px; line-height:1; }
+.recap-freq-l { font-size:10px; color:var(--faint); text-transform:uppercase; letter-spacing:0.06em; margin-top:3px; white-space:nowrap; }
+.recap-title { font-family:var(--font-display); font-size:20px; line-height:1.15; letter-spacing:-0.2px; }
+.recap-date { font-size:11px; color:var(--muted); margin-top:2px; text-transform:uppercase; letter-spacing:0.06em; }
+.recap-stats { display:flex; gap:8px; padding:10px 0 12px; border-top:0.5px solid var(--border); border-bottom:0.5px solid var(--border); margin-bottom:12px; }
+.recap-stat { flex:1 1 0; min-width:0; text-align:center; }
+.recap-stat-v { font-family:var(--font-display); font-size:22px; line-height:1; }
+.recap-stat-l { font-size:10px; color:var(--faint); text-transform:uppercase; letter-spacing:0.05em; margin-top:3px; white-space:nowrap; }
+.recap-matrix { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+.recap-matrix table { border-collapse:collapse; width:100%; font-size:12px; }
+.recap-matrix th { font-size:9px; color:var(--faint); font-weight:500; text-align:center; padding:0 0 5px; text-transform:uppercase; letter-spacing:0.05em; }
+.recap-matrix th:not(:first-child) { min-width:48px; }
+.recap-matrix td { padding:7px 3px; text-align:center; border-top:0.5px solid var(--border); white-space:nowrap; vertical-align:middle; font-size:11px; }
+/* Name gets the extra width freed by smaller set text, and is hard-clamped to two lines */
+.recap-matrix td.rm-name { text-align:left; font-size:11px; font-weight:500; padding-right:8px; width:110px; max-width:110px; white-space:normal; }
+.rm-nm { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; line-height:1.2; max-height:2.4em; overflow-wrap:break-word; }
+.recap-matrix td:not(.rm-name) { min-width:48px; }
+.rm-mod { display:inline-block; font-size:9px; color:#92600A; background:rgba(146,96,10,0.1); border-radius:3px; padding:0 4px; margin-left:0; margin-top:2px; text-transform:uppercase; }
+.rm-w { font-weight:600; }
+.rm-r { color:var(--muted); font-size:10px; margin-left:2px; }
+.rm-r:before { content:'×'; margin-right:2px; }
+.rm-empty { color:var(--border-md); }
+.rm-d { display:inline-block; font-size:9px; font-weight:600; border-radius:3px; padding:0 4px; margin-top:2px; margin-left:4px; }
+.rm-up { color:#2E7D32; background:rgba(46,125,50,0.1); }
+.rm-down { color:#B3261E; background:rgba(179,38,30,0.08); }
+.rm-same { color:var(--faint); background:var(--bg); }
+.recap-matrix td.rm-top { background:rgba(0,0,0,0.035); border-radius:4px; }
+.recap-matrix td.rm-top .rm-w { font-weight:700; }
+.recap-insights { margin-top:12px; display:flex; flex-direction:column; gap:5px; }
+.recap-chip { font-size:12px; padding:6px 10px; border-radius:6px; background:var(--bg); border-left:3px solid var(--border-md); }
+.recap-chip.recap-pr { border-left-color:#EF9F27; background:rgba(239,159,39,0.07); font-weight:500; }
+.recap-chip.recap-return { border-left-color:#185FA5; background:rgba(24,95,165,0.05); }
+.recap-chip.recap-new { border-left-color:#2E7D32; background:rgba(46,125,50,0.05); }
 .set-kg { width:72px; }
 .set-reps { width:68px; }
 .set-prev { font-size:11px; color:var(--faint); white-space:nowrap; }
@@ -689,6 +727,12 @@ html.mobile-layout .topbar { display:flex; align-items:center; gap:6px; position
           <span id="merge-status" style="font-size:13px;color:var(--muted);"></span>
         </div>
       </div>
+      <div class="card" id="card-lib-review">
+        <div class="card-title">Review &amp; tidy up</div>
+        <p style="font-size:13px;color:var(--muted);margin-bottom:10px;">Archiving hides an exercise from pickers and AI suggestions but keeps it in your library, so past sessions and their muscle tags stay intact. Prefer this to deleting.</p>
+        <div id="lib-review"></div>
+      </div>
+
       <div class="card"><div class="card-title">Library — <span id="lib-count">0</span> exercises</div><div id="lib-display" style="display:flex;flex-wrap:wrap;gap:7px;"></div></div>
     </div>
 
@@ -1225,7 +1269,7 @@ async function loadUserData() {
     if(autoErr) console.warn('Auto profile create error:', autoErr);
   }
 
-  db.library = (lib.data||[]).map(e=>({id:e.id,name:e.name,muscle:e.muscle}));
+  db.library = (lib.data||[]).map(e=>({id:e.id,name:e.name,muscle:e.muscle,archived:!!e.archived}));
   db.sessions = (sess.data||[]).filter(s=>!s.is_draft).map(s=>({...s, sessionTitle:s.title||s.sessionTitle||'Session', exercises:safeJSON(s.exercises,[]), muscles:safeJSON(s.muscles,[])}));
   db.body = (body.data||[]).map(b=>({...b}));
   db.goals = (goals.data||[]).map(g=>({...g}));
@@ -1392,6 +1436,10 @@ function timeOffContext(days){
     + ': ' + t.start_date + ' to ' + (t.end_date || 'ongoing')
     + (t.note ? ' — ' + t.note : '')).join('\n');
 }
+
+// Exercises offered in pickers and to the AI. Archived entries stay in db.library so their
+// muscle tags keep resolving for past sessions — they're just not offered as choices.
+function activeLibrary(){ return (db.library||[]).filter(e => !e.archived); }
 
 function daysSince(muscle) {
   const names=relatedMuscles(muscle);
@@ -1778,7 +1826,7 @@ function renderWorkoutEditor(w, idx) {
   if(!container) return;
 
   // Build library options grouped by muscle
-  const libOptions = db.library.map(e =>
+  const libOptions = activeLibrary().map(e =>
     '<option value="'+e.name.replace(/"/g,'&quot;')+'" data-muscle="'+e.muscle.replace(/"/g,'&quot;')+'">'+e.name+' ('+e.muscle+')</option>'
   ).join('');
 
@@ -2036,12 +2084,12 @@ function buildTrainingContext(){
   db.sessions.forEach(s => (s.exercises||[]).forEach(ex => {
     if(ex && ex.name) useCount[ex.name] = (useCount[ex.name]||0) + 1;
   }));
-  const staples = db.library.map(e => ({name:e.name, n:useCount[e.name]||0}))
+  const staples = activeLibrary().map(e => ({name:e.name, n:useCount[e.name]||0}))
     .filter(e => e.n > 0).sort((a,b) => b.n - a.n);
   const staplesTxt = staples.length
     ? staples.slice(0,25).map(e => e.name + ' (' + e.n + 'x)').join(', ')
     : 'None yet.';
-  const neverUsed = db.library.map(e => e.name).filter(n => !useCount[n]);
+  const neverUsed = activeLibrary().map(e => e.name).filter(n => !useCount[n]);
   const neverUsedTxt = neverUsed.length ? neverUsed.join(', ') : 'None';
 
   const timeOffTxt = timeOffContext(90);
@@ -2053,14 +2101,14 @@ async function generateSession(auto) {
   _lastGenAuto = !!auto;
   // auto === true: no muscle selection — let the AI choose from history, goals and recency
   if(!auto && !db.selectedMuscles.length){alert('Pick at least one muscle group, or use "Suggest for me".');return;}
-  if(!db.library.length){alert('Add exercises to your library first.');return;}
+  if(!activeLibrary().length){alert('Add exercises to your library first.');return;}
   const btn=document.getElementById('gen-btn'),autoBtn=document.getElementById('gen-auto-btn'),status=document.getElementById('gen-status');
   btn.disabled=true; if(autoBtn) autoBtn.disabled=true;
   status.innerHTML='<span class="loading"><span></span><span></span><span></span></span>';
   document.getElementById('planner-result').innerHTML='';
 
   const ctx=buildTrainingContext();
-  const libTxt=db.library.map(e=>e.name+' ('+e.muscle+')').join('\n');
+  const libTxt=activeLibrary().map(e=>e.name+' ('+e.muscle+')').join('\n');
   const goalTxt=db.goals.map(g=>g.text).join(', ')||'None';
   const wm=db.selectedMuscles.filter(m=>MUSCLES_W.includes(m)),cm=db.selectedMuscles.filter(m=>MUSCLES_C.includes(m));
   const muscleLines=wm.map(m=>{const s=db.muscleSettings[m]||{goal:'hypertrophy',sets:3,expm:2};return '- '+m+': '+s.expm+' exercise(s), '+s.sets+' sets, goal='+s.goal;}).join('\n');
@@ -2138,7 +2186,7 @@ async function generateSession(auto) {
 
 function renderPlannerResult(s) {
   const exRows=s.exercises.map((ex,i)=>{
-    const swapOptions=db.library.filter(l=>l.muscle===ex.muscle&&l.name!==ex.name);
+    const swapOptions=activeLibrary().filter(l=>l.muscle===ex.muscle&&l.name!==ex.name);
     const swapHtml=swapOptions.length
       ?'<select onchange="swapExercise('+i+',this.value)" style="font-size:11px;padding:3px 6px;border:0.5px solid var(--border-md);border-radius:var(--radius-sm);background:var(--bg);color:var(--muted);margin-top:5px;width:auto;">'
         +'<option value="">Swap exercise...</option>'
@@ -2292,7 +2340,7 @@ function renderLog() {
   html2+='<div style="margin-bottom:10px;"><button class="btn btn-sm" style="border-color:#9FE1CB;color:#0F6E56;background:#E1F5EE;" onclick="addCardioBlock()">+ Add cardio</button></div>';
   html2+='<div id="cardio-blocks"></div>';
 
-  const swapOpts = '<option value="">Swap exercise\u2026</option>' + (db.library||[]).slice().sort((a,b)=>a.name.localeCompare(b.name)).map(l=>'<option value="'+l.name.replace(/"/g,'&quot;')+'">'+l.name.replace(/</g,'&lt;')+'</option>').join('');
+  const swapOpts = '<option value="">Swap exercise\u2026</option>' + activeLibrary().slice().sort((a,b)=>a.name.localeCompare(b.name)).map(l=>'<option value="'+l.name.replace(/"/g,'&quot;')+'">'+l.name.replace(/</g,'&lt;')+'</option>').join('');
 
   // Detect runs of consecutive exercises sharing a superset group (light display only — each still logs normally)
   const groupInfo = [];
@@ -2619,21 +2667,27 @@ async function saveSession(){
   s.muscles = sessionMuscles(s.exercises);
   s.sessionNote=document.getElementById('session-note')?.value||'';
   s.is_draft=false;
+  let savedId = null;
   const progStamp = s.programme_id ? {programme_id:String(s.programme_id), programme_day:(s.programme_day!=null?s.programme_day:null)} : {};
   if(s.draft_id){
     // Update existing draft row to finalise it
     const {data:sessData,error:sessErr}=await sb.from('sessions').update({exercises:JSON.stringify(s.exercises),note:s.sessionNote,is_draft:false,...progStamp}).eq('id',s.draft_id).select().single();
     if(sessErr){dbErr('Save session',sessErr);return;}
     db.sessions.push({...s,...sessData,exercises:s.exercises,muscles:s.muscles});
+    savedId = sessData && sessData.id;
   } else {
     const {data:sessData,error:sessErr}=await sb.from('sessions').insert({user_id:currentUser.id,date:s.date||new Date().toISOString(),title:s.sessionTitle,muscles:JSON.stringify(s.muscles||[]),exercises:JSON.stringify(s.exercises||[]),note:s.sessionNote,is_draft:false,...progStamp}).select().single();
     if(sessErr){dbErr('Save session',sessErr);return;}
     db.sessions.push({...s,...sessData,exercises:s.exercises,muscles:s.muscles});
+    savedId = sessData && sessData.id;
   }
   db.activeSession=null;db.pendingSession=null;
   resetCardioBlocks();
   updateNavBadge();
-  toast('Session saved!','ok');showPage('overview');
+  toast('Session saved!','ok');
+  // Land on the recap for what was just logged rather than a generic home screen
+  if(savedId){ _pendingExpandId = savedId; showPage('history'); }
+  else showPage('overview');
 }
 async function discardSession(){
   clearTimeout(_draftSaveTimer);
@@ -3459,7 +3513,7 @@ async function renderBuilder(){
   const pick = document.getElementById('builder-ex-pick');
   if(!pick) return;
   const grouped = {};
-  db.library.forEach(e=>{
+  activeLibrary().forEach(e=>{
     const primary = e.muscle.split(',')[0].trim();
     if(!grouped[primary]) grouped[primary]=[];
     grouped[primary].push({name:e.name, muscle:e.muscle});
@@ -4219,10 +4273,13 @@ async function addSuggestion(name, muscle) {
 // ── HISTORY ───────────────────────────────────────────────────────
 let historyShownCount = 20;
 let historyExpandedId = null;
+let _pendingExpandId = null; // set just before navigating to History after a save
 
 function renderHistory() {
   historyShownCount = 20;
-  historyExpandedId = null;
+  // A session just saved asks to be shown expanded; otherwise start collapsed
+  historyExpandedId = _pendingExpandId || null;
+  _pendingExpandId = null;
   renderHistoryList();
 }
 
@@ -4314,6 +4371,7 @@ function renderHistoryList() {
         : '';
 
       detailHtml = '<div class="hist-detail">'
+        + sessionRecap(s)
         + exRows
         + sessionNoteHtml
 
@@ -4362,6 +4420,160 @@ function isPRSession(s) {
       : 0;
     return maxKg > prevMax;
   });
+}
+
+// ── SESSION RECAP ─────────────────────────────────────────────────
+// Insights are computed, never generated: an AI claiming a PR you didn't hit would poison
+// trust in the whole panel. Each returns only if it is factually true for this session.
+function sessionInsights(s){
+  const out = [];
+  const exercises = safeJSON(s.exercises, []);
+  const sDate = new Date(s.date);
+  const prior = db.sessions.filter(p => new Date(p.date) < sDate);
+  const priorEx = name => prior.flatMap(p => safeJSON(p.exercises, []))
+    .filter(e => e.name === name && e.loggedSets?.sets?.length);
+
+  exercises.forEach(ex => {
+    if(!ex || ex.isCardio) return;
+    const sets = workingSets(ex);
+    if(!sets.length) return;
+    const sameKey = priorEx(ex.name)
+      .filter(e => (e.equipment||'')===(ex.equipment||'') && (e.modifier||'')===(ex.modifier||''));
+
+    // Heaviest weight ever for this exercise/equipment/modifier
+    if(!isIsometric(ex)){
+      const maxKg = Math.max(...sets.filter(t=>t.kg).map(t=>t.kg||0), 0);
+      const prevMax = sameKey.length
+        ? Math.max(...sameKey.flatMap(e => workingSets(e).filter(t=>t.kg).map(t=>t.kg||0)), 0) : 0;
+      if(maxKg > 0 && maxKg > prevMax && sameKey.length){
+        out.push({type:'pr', text:'Heaviest ever ' + ex.name + ' — ' + maxKg + 'kg, up from ' + prevMax + 'kg'});
+      }
+      // Estimated 1RM record (catches rep PRs at the same weight)
+      const e1 = Math.max(...sets.filter(t=>t.kg&&t.reps).map(t=>t.kg*(1+t.reps/30)), 0);
+      const prevE1 = sameKey.length
+        ? Math.max(...sameKey.flatMap(e => workingSets(e).filter(t=>t.kg&&t.reps).map(t=>t.kg*(1+t.reps/30))), 0) : 0;
+      if(e1 > 0 && prevE1 > 0 && e1 > prevE1 && maxKg <= prevMax){
+        out.push({type:'pr', text:'Best estimated 1RM on ' + ex.name + ' — ' + Math.round(e1) + 'kg'});
+      }
+    }
+    // Returning to a lift after a long break (excluding logged time off)
+    if(sameKey.length){
+      const lastDate = prior.filter(p => safeJSON(p.exercises,[])
+        .some(e => e.name===ex.name && (e.equipment||'')===(ex.equipment||'')))
+        .map(p => new Date(p.date)).sort((a,b)=>b-a)[0];
+      if(lastDate){
+        const gap = Math.floor((sDate - lastDate)/864e5) - daysOffBetween(lastDate, sDate);
+        if(gap >= 28) out.push({type:'return', text:'First ' + ex.name + ' in ' + Math.round(gap/7) + ' weeks'});
+      }
+    } else if(prior.length){
+      out.push({type:'new', text:'First time logging ' + ex.name});
+    }
+  });
+
+  // Session-level volume record for its category
+  const vol = calcVolume(exercises);
+  const cat = categorizeWorkout(exercises);
+  const priorSame = prior.filter(p => categorizeWorkout(safeJSON(p.exercises,[])) === cat);
+  if(vol > 0 && priorSame.length >= 3){
+    const best = Math.max(...priorSame.map(p => calcVolume(safeJSON(p.exercises,[]))), 0);
+    if(vol > best) out.push({type:'pr', text:'Biggest ' + cat.toLowerCase() + ' session yet — ' + Math.round(vol/1000*10)/10 + 'k kg'});
+  }
+  return out.slice(0, 4); // a wall of praise means nothing; keep it to what stands out
+}
+
+// Compact set matrix — exercise per row, sets across, readable at a glance in a screenshot
+function sessionMatrix(exercises, sDate){
+  const rows = exercises.filter(ex => ex && !ex.isCardio && (ex.loggedSets?.sets||[]).length);
+  if(!rows.length) return '';
+  const maxSets = Math.max(...rows.map(ex => workingSets(ex).length));
+  let html = '<div class="recap-matrix"><table><thead><tr><th></th>';
+  for(let i=0;i<maxSets;i++) html += '<th>' + (i+1) + '</th>';
+  html += '</tr></thead><tbody>';
+  rows.forEach(ex => {
+    const sets = workingSets(ex);
+    const iso = isIsometric(ex);
+    const topKg = Math.max(...sets.filter(t=>t.kg).map(t=>t.kg||0), 0);
+
+    // Change in top set vs the previous time this exact exercise/equipment/modifier was done
+    let delta = '';
+    if(!iso && topKg > 0 && sDate){
+      const prevSession = db.sessions
+        .filter(p => new Date(p.date) < new Date(sDate))
+        .filter(p => safeJSON(p.exercises,[]).some(e => e.name===ex.name
+          && (e.equipment||'')===(ex.equipment||'') && (e.modifier||'')===(ex.modifier||'')
+          && e.loggedSets?.sets?.length))
+        .sort((a,b) => new Date(b.date)-new Date(a.date))[0];
+      if(prevSession){
+        const pe = safeJSON(prevSession.exercises,[]).find(e => e.name===ex.name
+          && (e.equipment||'')===(ex.equipment||'') && (e.modifier||'')===(ex.modifier||''));
+        const prevTop = pe ? Math.max(...workingSets(pe).filter(t=>t.kg).map(t=>t.kg||0), 0) : 0;
+        if(prevTop > 0){
+          const d = Math.round((topKg - prevTop)*10)/10;
+          if(d > 0) delta = '<span class="rm-d rm-up">\u2191' + d + '</span>';
+          else if(d < 0) delta = '<span class="rm-d rm-down">\u2193' + Math.abs(d) + '</span>';
+          else delta = '<span class="rm-d rm-same">=</span>';
+        }
+      }
+    }
+
+    const shortName = ex.name.length > 25 ? ex.name.slice(0,25).trim() + '\u2026' : ex.name;
+    html += '<tr><td class="rm-name" title="' + ex.name.replace(/"/g,'&quot;') + '">'
+      + '<div class="rm-nm">' + shortName + '</div>'
+      + (ex.modifier ? '<span class="rm-mod">' + (ex.modifier==='Unilateral'?'uni':ex.modifier==='Isometric hold'?'iso':ex.modifier.slice(0,4).toLowerCase()) + '</span>' : '')
+      + delta
+      + '</td>';
+    for(let i=0;i<maxSets;i++){
+      const st = sets[i];
+      if(!st){ html += '<td class="rm-empty">\u00b7</td>'; continue; }
+      const w = st.kg ? st.kg : 'BW';
+      const isTop = !iso && st.kg && st.kg === topKg;
+      html += '<td' + (isTop ? ' class="rm-top"' : '') + '><span class="rm-w">' + w + '</span><span class="rm-r">' + (st.reps||'?') + (iso?'s':'') + '</span></td>';
+    }
+    html += '</tr>';
+  });
+  return html + '</tbody></table></div>';
+}
+
+// Rolling consistency: sessions in the 30 days up to this session. Independent of any
+// programme — it answers "how consistent have I been lately", which survives changing plans.
+function rollingFrequency(sDate){
+  const end = new Date(sDate).getTime();
+  const start = end - 30*864e5;
+  return db.sessions.filter(s => !s.is_draft).filter(s => {
+    const t = new Date(s.date).getTime();
+    return t <= end && t > start;
+  }).length;
+}
+
+function sessionRecap(s){
+  const exercises = safeJSON(s.exercises, []);
+  const vol = calcVolume(exercises);
+  const setCount = exercises.reduce((n,ex)=>n+workingSets(ex).length,0);
+  const cardioMins = exercises.filter(e=>e.isCardio)
+    .reduce((t,e)=>t+(parseFloat(e.reps)||(e.loggedSets?.sets?.[0]?.kg)||0),0);
+  const insights = sessionInsights(s);
+
+  const stat = (v,l) => '<div class="recap-stat"><div class="recap-stat-v">' + v + '</div><div class="recap-stat-l">' + l + '</div></div>';
+  return '<div class="recap">'
+    + '<div class="recap-head">'
+      + '<div class="recap-head-main">'
+        + '<div class="recap-title">' + (s.sessionTitle || categorizeWorkout(exercises)) + '</div>'
+        + '<div class="recap-date">' + fmt(s.date) + ' · ' + categorizeWorkout(exercises) + '</div>'
+      + '</div>'
+      + '<div class="recap-freq"><div class="recap-freq-v">' + rollingFrequency(s.date) + '</div><div class="recap-freq-l">in 30 days</div></div>'
+    + '</div>'
+    + '<div class="recap-stats">'
+      + stat(Math.round(vol/1000*10)/10 + 'k', 'kg volume')
+      + stat(setCount, 'sets')
+      + stat(exercises.filter(e=>!e.isCardio).length, 'exercises')
+      + (cardioMins ? stat(Math.round(cardioMins), 'min cardio') : '')
+    + '</div>'
+    + sessionMatrix(exercises, s.date)
+    + (insights.length
+        ? '<div class="recap-insights">' + insights.map(i =>
+            '<div class="recap-chip recap-' + i.type + '">' + i.text + '</div>').join('') + '</div>'
+        : '')
+    + '</div>';
 }
 
 function toggleHistorySession(id) {
@@ -4593,7 +4805,7 @@ async function renderJustTrain() {
   // the list empty whenever the library hadn't loaded yet.
   if(musclePick){
     const muscles = new Set([...MUSCLES_W, ...MUSCLES_C]);
-    db.library.forEach(e => String(e.muscle||'').split(',').map(m=>m.trim()).filter(Boolean).forEach(m=>muscles.add(m)));
+    activeLibrary().forEach(e => String(e.muscle||'').split(',').map(m=>m.trim()).filter(Boolean).forEach(m=>muscles.add(m)));
     const prev = musclePick.value || '__all';
     musclePick.innerHTML = '<option value="__all">All exercises</option>'
       + '<option value="__recent">Recently used</option>'
@@ -4619,12 +4831,12 @@ function jtPopulateExercisePick(){
         if(ex && ex.name && !ex.isCardio && !seen.includes(ex.name)) seen.push(ex.name);
       });
     }
-    list = seen.map(n => db.library.find(e=>e.name===n)).filter(Boolean);
+    list = seen.map(n => activeLibrary().find(e=>e.name===n)).filter(Boolean);
   } else if(sel === '__all'){
-    list = db.library.slice().sort((a,b)=>a.name.localeCompare(b.name));
+    list = activeLibrary().slice().sort((a,b)=>a.name.localeCompare(b.name));
   } else {
     const selLower = sel.toLowerCase();
-    list = db.library
+    list = activeLibrary()
       .filter(e => String(e.muscle||'').split(',').map(m=>m.trim()).includes(sel))
       .sort((a,b)=>a.name.localeCompare(b.name));
     // Nothing tagged exactly? Fall back to a looser match (e.g. "Legs" vs "Quads, Glutes")
@@ -5112,7 +5324,7 @@ function jtRenderUnmatched(){
   }
   if(!_jtPendingUnmatched.length){ el.innerHTML = ''; return; }
 
-  const opts = (db.library||[]).slice().sort((a,b)=>a.name.localeCompare(b.name))
+  const opts = activeLibrary().slice().sort((a,b)=>a.name.localeCompare(b.name))
     .map(e => '<option value="' + e.name.replace(/"/g,'&quot;') + '">' + e.name + '</option>').join('');
 
   el.innerHTML = '<div class="banner banner-amber" style="margin-top:10px;">'
@@ -5269,7 +5481,9 @@ async function jtSaveSession() {
   const jtCardioEl = document.getElementById('jt-cardio-blocks');
   if(jtCardioEl) jtCardioEl.innerHTML = '';
   toast('Session saved!', 'ok');
-  showPage('overview');
+  // Same as the Log screen: land on the recap for what was just logged
+  if(data && data.id){ _pendingExpandId = data.id; showPage('history'); }
+  else showPage('overview');
 }
 
 function jtDiscardSession() {
@@ -5557,7 +5771,7 @@ function populateMergeSelects(){
   const src=document.getElementById('merge-src'), dst=document.getElementById('merge-dst'), mod=document.getElementById('merge-mod');
   if(!src||!dst) return;
   const opts=db.library.slice().sort((a,b)=>a.name.localeCompare(b.name))
-    .map(e=>'<option value="'+e.name.replace(/"/g,'&quot;')+'">'+e.name+'</option>').join('');
+    .map(e=>'<option value="'+e.name.replace(/"/g,'&quot;')+'">'+e.name+(e.archived?' (archived)':'')+'</option>').join('');
   const keepSrc=src.value, keepDst=dst.value;
   src.innerHTML='<option value="">Choose exercise\u2026</option>'+opts;
   dst.innerHTML='<option value="">Choose exercise\u2026</option>'+opts;
@@ -5640,20 +5854,94 @@ async function mergeExercises(){
   }
 }
 
+// Archive rather than delete: the exercise stops appearing in pickers but keeps its muscle
+// tags live, so past sessions that used it still resolve correctly.
+async function toggleArchiveExercise(id){
+  const e=db.library.find(x=>String(x.id)===String(id));
+  if(!e) return;
+  const next=!e.archived;
+  const {error}=await sb.from('library').update({archived:next}).eq('id',id);
+  if(error){ dbErr('Archive exercise',error); return; }
+  e.archived=next;
+  await renderLibrary();
+  toast(next?'Archived — hidden from pickers.':'Restored.');
+}
+
+async function bulkArchiveSelected(){
+  const ids=[...document.querySelectorAll('.lib-review-cb:checked')].map(c=>c.dataset.id);
+  if(!ids.length){ toast('Select at least one exercise.','error'); return; }
+  if(!confirm('Archive '+ids.length+' exercise'+(ids.length>1?'s':'')+'?\n\nThey stay in your library and past sessions are unaffected — they just stop appearing in pickers.')) return;
+  const {error}=await sb.from('library').update({archived:true}).in('id',ids);
+  if(error){ dbErr('Bulk archive',error); return; }
+  ids.forEach(id=>{ const e=db.library.find(x=>String(x.id)===String(id)); if(e) e.archived=true; });
+  await renderLibrary();
+  toast('Archived '+ids.length+' exercise'+(ids.length>1?'s':'')+'.');
+}
+
+function toggleLibReviewAll(on){
+  document.querySelectorAll('.lib-review-cb').forEach(c=>{ c.checked=on; });
+}
+
+// Surfaces the exercises worth reviewing, so curation is a two-minute job rather than a
+// hunt through an alphabetical list of 70+.
+function renderLibraryReview(useCount,lastUsed){
+  const el=document.getElementById('lib-review');
+  if(!el) return;
+  const now=Date.now();
+  const active=db.library.filter(e=>!e.archived);
+  const never=active.filter(e=>!useCount[e.name]);
+  const stale=active.filter(e=>useCount[e.name] && lastUsed[e.name] && (now-lastUsed[e.name])/864e5 > 180);
+  const candidates=[...never,...stale];
+  if(!candidates.length){
+    el.innerHTML='<p style="font-size:13px;color:var(--muted);">Nothing to review — every active exercise has been used in the last 6 months.</p>';
+    return;
+  }
+  el.innerHTML='<div style="font-size:13px;margin-bottom:8px;">'
+    +'<b>'+never.length+'</b> never logged'+(stale.length?', <b>'+stale.length+'</b> not used in 6 months':'')
+    +' — tick any you no longer do.</div>'
+    +'<div style="display:flex;gap:10px;margin-bottom:8px;">'
+      +'<button class="btn btn-sm" onclick="toggleLibReviewAll(true)">Select all</button>'
+      +'<button class="btn btn-sm" onclick="toggleLibReviewAll(false)">Clear</button>'
+      +'<button class="btn btn-dark btn-sm" onclick="bulkArchiveSelected()" style="margin-left:auto;">Archive selected</button>'
+    +'</div>'
+    +candidates.map(e=>{
+      const days=lastUsed[e.name]?Math.floor((now-lastUsed[e.name])/864e5):null;
+      return '<label style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:0.5px solid var(--border);font-size:13px;cursor:pointer;">'
+        +'<input type="checkbox" class="lib-review-cb" data-id="'+e.id+'" style="width:16px;height:16px;flex-shrink:0;">'
+        +'<span style="flex:1;min-width:0;">'+e.name+'</span>'
+        +'<span style="font-size:11px;color:var(--faint);white-space:nowrap;">'+(days!=null?days+'d ago':'never used')+'</span>'
+        +'</label>';
+    }).join('');
+}
+
 async function renderLibrary(){
   if(!currentUser) return;
   document.getElementById('lib-count').textContent='...';
   document.getElementById('lib-display').innerHTML='<p style="font-size:13px;color:var(--muted);">Loading...</p>';
   const {data,error}=await sb.from('library').select('*').eq('user_id',currentUser.id).order('name');
   if(error){dbErr('Load library',error);return;}
-  db.library=(data||[]).map(e=>({id:e.id,name:e.name,muscle:e.muscle}));
+  db.library=(data||[]).map(e=>({id:e.id,name:e.name,muscle:e.muscle,archived:!!e.archived}));
   invalidateMuscleCache();
-  document.getElementById('lib-count').textContent=db.library.length;
+  const nArch=db.library.filter(e=>e.archived).length;
+  document.getElementById('lib-count').textContent=db.library.length+(nArch?' ('+nArch+' archived)':'');
   populateMergeSelects();
   if(!db.library.length){
     document.getElementById('lib-display').innerHTML='<p style="font-size:13px;color:var(--muted);">No exercises yet. Paste your list above and click Import.</p>';
     return;
   }
+  // Usage counts drive both the per-row label and the review panel
+  const libUseCount={};
+  db.sessions.forEach(sess=>(sess.exercises||[]).forEach(ex=>{
+    if(ex&&ex.name) libUseCount[ex.name]=(libUseCount[ex.name]||0)+1;
+  }));
+  const lastUsed={};
+  db.sessions.forEach(sess=>(sess.exercises||[]).forEach(ex=>{
+    if(!ex||!ex.name) return;
+    const t=new Date(sess.date).getTime();
+    if(!lastUsed[ex.name]||t>lastUsed[ex.name]) lastUsed[ex.name]=t;
+  }));
+  renderLibraryReview(libUseCount,lastUsed);
+
   // Group by primary muscle
   const groups={};
   db.library.forEach(e=>{
@@ -5666,11 +5954,15 @@ async function renderLibrary(){
     html2+='<div style="margin-bottom:14px;">'
       +'<div style="font-size:11px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:8px;">'+muscle+'</div>';
     groups[muscle].forEach(e=>{
-      html2+='<div id="lib-row-'+e.id+'" style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:0.5px solid var(--border);">'
-        +'<div style="flex:1;">'
-        +'<div style="font-size:13px;font-weight:500;">'+e.name+'</div>'
-        +'<div style="font-size:11px;color:var(--muted);">'+e.muscle+'</div>'
+      const used = libUseCount[e.name] || 0;
+      html2+='<div id="lib-row-'+e.id+'" style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:0.5px solid var(--border);'+(e.archived?'opacity:0.45;':'')+'">'
+        +'<div style="flex:1;min-width:0;">'
+        +'<div style="font-size:13px;font-weight:500;">'+e.name
+          +(e.archived?'<span class="ss-badge" style="color:var(--muted);background:var(--bg);">archived</span>':'')+'</div>'
+        +'<div style="font-size:11px;color:var(--muted);">'+e.muscle
+          +' · '+(used?('used '+used+'\u00d7'):'never used')+'</div>'
         +'</div>'
+        +'<button onclick="toggleArchiveExercise('+e.id+')" title="'+(e.archived?'Restore to pickers':'Hide from pickers, keep history')+'" style="background:none;border:0.5px solid var(--border-md);border-radius:var(--radius-sm);padding:4px 10px;font-size:12px;color:var(--muted);cursor:pointer;margin-right:6px;">'+(e.archived?'Restore':'Archive')+'</button>'
         +'<button onclick="editExercise('+e.id+')" style="background:none;border:0.5px solid var(--border-md);border-radius:var(--radius-sm);padding:4px 10px;font-size:12px;color:var(--muted);cursor:pointer;margin-right:6px;">Edit</button>'
         +'<button onclick="deleteExercise('+e.id+')" style="background:none;border:none;cursor:pointer;color:var(--faint);font-size:16px;">×</button>'
         +'</div>';
