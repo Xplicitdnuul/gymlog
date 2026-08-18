@@ -510,6 +510,24 @@ html.mobile-layout .topbar { display:flex; align-items:center; gap:6px; position
         </div>
       </div>
 
+        <div class="card" id="card-hardsets">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+            <div class="card-title" style="margin-bottom:0;">Weekly hard sets per muscle</div>
+            <button class="btn btn-sm" onclick="toggleCard('card-hardsets')">hide</button>
+          </div>
+          <p style="font-size:12px;color:var(--muted);margin-bottom:10px;">Working sets per muscle per week. Research suggests roughly 10–20 for growth; below 10 is maintenance at best.</p>
+          <div id="hardsets-content"></div>
+        </div>
+
+        <div class="card" id="card-stalling">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+            <div class="card-title" style="margin-bottom:0;">Stalled lifts</div>
+            <button class="btn btn-sm" onclick="toggleCard('card-stalling')">hide</button>
+          </div>
+          <p style="font-size:12px;color:var(--muted);margin-bottom:10px;">Lifts whose best estimated 1RM hasn't moved in 5+ weeks — candidates for a deload, a rep-range change, or a different variation.</p>
+          <div id="stalling-content"></div>
+        </div>
+
       <div class="card" id="card-volume">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
           <div class="card-title" style="margin-bottom:0;">Weekly volume (reps × kg)</div>
@@ -2710,6 +2728,134 @@ let strengthExercises = [];
 let volumeMuscles = [];
 
 // Number of weekly buckets to show, scaled to the selected period (capped for readability).
+// ── TRAINING ADEQUACY & STALLING ──────────────────────────────────
+// Hard sets per muscle per week is the metric strength research actually uses for adequacy
+// (roughly 10-20 per muscle per week for hypertrophy). Volume in kg can't answer this:
+// 100kg×5 squats and 20kg×5 curls are the same working set but a 5:1 kg ratio.
+const HARD_SETS_MIN = 10, HARD_SETS_MAX = 20;
+
+function hardSetsPerMuscle(sessions, weeks){
+  const counts = {};
+  (sessions||[]).forEach(s => {
+    (s.exercises||[]).forEach(ex => {
+      if(!ex || ex.isCardio) return;
+      const n = workingSets(ex).filter(st => st && (st.kg || st.reps)).length;
+      if(!n) return;
+      // Current library tags win, so retagging applies retroactively here too
+      const lib = (db.library||[]).find(l => l.name === ex.name);
+      const raw = (lib && lib.muscle) ? lib.muscle : (ex.muscle || '');
+      String(raw).split(',').map(m=>m.trim()).filter(Boolean).forEach(m => {
+        counts[m] = (counts[m]||0) + n;
+      });
+    });
+  });
+  const perWeek = {};
+  Object.keys(counts).forEach(m => { perWeek[m] = Math.round(counts[m]/Math.max(1,weeks)*10)/10; });
+  return perWeek;
+}
+
+// Lifts whose best estimated 1RM hasn't improved recently. This is more actionable than a
+// PR list: it's the signal to deload, change exercise, or check recovery.
+function stallingLifts(minSessions){
+  minSessions = minSessions || 3;
+  const series = {};
+  db.sessions.forEach(s => (s.exercises||[]).forEach(ex => {
+    if(!ex || ex.isCardio || isIsometric(ex)) return;
+    const sets = workingSets(ex).filter(st => st.kg && st.reps);
+    if(!sets.length) return;
+    const e1 = Math.max(...sets.map(st => st.kg * (1 + st.reps/30)));
+    const key = ex.name + (ex.equipment?' ['+ex.equipment+']':'') + (ex.modifier?' ('+ex.modifier+')':'');
+    (series[key] = series[key] || []).push({d:new Date(s.date).getTime(), e1});
+  }));
+  const out = [];
+  Object.keys(series).forEach(k => {
+    const pts = series[k].sort((a,b)=>a.d-b.d);
+    if(pts.length < minSessions) return;
+    const best = pts.reduce((a,b)=>b.e1>a.e1?b:a);
+    const latest = pts[pts.length-1];
+    const daysSinceBest = Math.floor((latest.d - best.d)/864e5);
+    const sinceBestSessions = pts.length - 1 - pts.indexOf(best);
+    // Stalled = personal best is at least 5 weeks and 3 sessions behind
+    if(daysSinceBest >= 35 && sinceBestSessions >= 3){
+      out.push({name:k, best:Math.round(best.e1), current:Math.round(latest.e1),
+        weeks:Math.round(daysSinceBest/7), sessions:sinceBestSessions});
+    }
+  });
+  return out.sort((a,b)=>b.weeks-a.weeks).slice(0,5);
+}
+
+// Estimated 1RM movement across the user's most-trained lifts — the headline "am I actually
+// getting stronger" number, which unique-exercise count never answered.
+function strengthTrendSummary(sessions){
+  const inPeriod = new Set(sessions.map(s=>s.id));
+  const series = {};
+  db.sessions.forEach(s => (s.exercises||[]).forEach(ex => {
+    if(!ex || ex.isCardio || isIsometric(ex)) return;
+    const sets = workingSets(ex).filter(st => st.kg && st.reps);
+    if(!sets.length) return;
+    const e1 = Math.max(...sets.map(st => st.kg * (1 + st.reps/30)));
+    const key = ex.name + (ex.modifier?' ('+ex.modifier+')':'');
+    (series[key] = series[key] || []).push({d:new Date(s.date).getTime(), e1, inPeriod:inPeriod.has(s.id)});
+  }));
+  let improved = 0, tracked = 0, totalPct = 0;
+  Object.keys(series).forEach(k => {
+    const pts = series[k].sort((a,b)=>a.d-b.d).filter(p=>p.inPeriod);
+    if(pts.length < 2) return;
+    tracked++;
+    const pct = (pts[pts.length-1].e1 - pts[0].e1) / pts[0].e1 * 100;
+    totalPct += pct;
+    if(pct > 0.5) improved++;
+  });
+  return {tracked, improved, avgPct: tracked ? Math.round(totalPct/tracked*10)/10 : 0};
+}
+
+function renderHardSets(sessions, weeks){
+  const el = document.getElementById('hardsets-content');
+  if(!el) return;
+  const perWeek = hardSetsPerMuscle(sessions, weeks);
+  // Only real muscles, not umbrella containers — those would double-count their parts
+  const rows = MUSCLES_W.filter(m => !MUSCLE_UMBRELLAS[m])
+    .map(m => ({m, n: perWeek[m] || 0}))
+    .sort((a,b) => b.n - a.n);
+  if(!rows.some(r => r.n > 0)){
+    el.innerHTML = '<p style="font-size:13px;color:var(--muted);">No working sets logged in this period.</p>';
+    return;
+  }
+  const max = Math.max(HARD_SETS_MAX, ...rows.map(r => r.n));
+  el.innerHTML = rows.map(r => {
+    const pct = Math.min(100, r.n / max * 100);
+    const state = r.n === 0 ? 'none' : r.n < HARD_SETS_MIN ? 'low' : r.n <= HARD_SETS_MAX ? 'ok' : 'high';
+    const colour = state==='ok' ? '#2E7D32' : state==='low' ? '#EF9F27' : state==='high' ? '#B3261E' : 'var(--border-md)';
+    const label = state==='ok' ? 'in range' : state==='low' ? 'below 10' : state==='high' ? 'above 20' : 'none';
+    return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">'
+      + '<div style="width:72px;font-size:11px;color:var(--muted);flex-shrink:0;">' + r.m + '</div>'
+      + '<div style="flex:1;height:14px;background:var(--bg);border-radius:3px;overflow:hidden;position:relative;min-width:0;">'
+        + '<div style="width:' + pct + '%;height:100%;background:' + colour + ';opacity:0.75;"></div>'
+        // target band marker at the 10-20 range
+        + '<div style="position:absolute;top:0;bottom:0;left:' + (HARD_SETS_MIN/max*100) + '%;width:' + ((HARD_SETS_MAX-HARD_SETS_MIN)/max*100) + '%;border-left:1px dashed rgba(0,0,0,0.25);border-right:1px dashed rgba(0,0,0,0.25);"></div>'
+      + '</div>'
+      + '<div style="width:64px;text-align:right;font-size:11px;flex-shrink:0;"><b>' + r.n + '</b> <span style="color:var(--faint);">' + label + '</span></div>'
+      + '</div>';
+  }).join('')
+  + '<div style="font-size:10px;color:var(--faint);margin-top:8px;">Dashed band marks the 10–20 set target range. Averaged over ' + weeks + ' week' + (weeks===1?'':'s') + '.</div>';
+}
+
+function renderStalling(){
+  const el = document.getElementById('stalling-content');
+  if(!el) return;
+  const list = stallingLifts();
+  if(!list.length){
+    el.innerHTML = '<p style="font-size:13px;color:var(--muted);">Nothing stalled — every lift with enough history has improved recently.</p>';
+    return;
+  }
+  el.innerHTML = list.map(x =>
+    '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:0.5px solid var(--border);">'
+    + '<div style="flex:1;min-width:0;"><div style="font-size:13px;font-weight:500;">' + x.name + '</div>'
+    + '<div style="font-size:11px;color:var(--muted);">best ' + x.best + 'kg · now ' + x.current + 'kg · ' + x.sessions + ' sessions since</div></div>'
+    + '<div style="font-size:12px;font-weight:600;color:#92600A;white-space:nowrap;">' + x.weeks + 'w flat</div>'
+    + '</div>').join('');
+}
+
 function weeksForPeriod(sessions){
   if(progressPeriod) return Math.min(26, Math.max(1, Math.ceil(progressPeriod/7)));
   if(!sessions || !sessions.length) return 12;
@@ -3034,16 +3180,23 @@ async function renderProgress() {
   }, 0);
 
   const volDelta = prevVol ? Math.round((totalVol - prevVol) / prevVol * 100) : 0;
+  const periodWeeks = weeksForPeriod(sessions);
+  const volPerWeek = totalVol / Math.max(1, periodWeeks);
+  const trend = strengthTrendSummary(sessions);
   const sessDelta = prev.length ? sessions.length - prev.length : 0;
 
   document.getElementById('progress-metrics').innerHTML = `
     <div class="metric"><div class="metric-label">Sessions</div><div class="metric-val">${sessions.length}</div>
       <div class="metric-sub" style="color:${sessDelta >= 0 ? '#2E7D32' : '#B71C1C'}">${sessDelta >= 0 ? '↑' : '↓'} ${Math.abs(sessDelta)} vs prev period</div></div>
-    <div class="metric"><div class="metric-label">Total volume</div><div class="metric-val">${totalVol > 1000 ? (totalVol/1000).toFixed(1) + 'k' : totalVol}</div>
+    <div class="metric"><div class="metric-label">Volume / week</div><div class="metric-val">${volPerWeek > 1000 ? (volPerWeek/1000).toFixed(1) + 'k' : Math.round(volPerWeek)}</div>
       <div class="metric-sub" style="color:${volDelta >= 0 ? '#2E7D32' : '#B71C1C'}">${volDelta >= 0 ? '↑' : '↓'} ${Math.abs(volDelta)}% vs prev</div></div>
     <div class="metric"><div class="metric-label">Overload events</div><div class="metric-val">${overloadCount}</div><div class="metric-sub" style="color:var(--faint);">exercises stepped up</div></div>
-    <div class="metric"><div class="metric-label">Unique exercises</div><div class="metric-val">${new Set(sessions.flatMap(s => (s.exercises||[]).map(e => e.name))).size}</div><div class="metric-sub" style="color:var(--faint);">in period</div></div>
+    <div class="metric"><div class="metric-label">Strength trend</div><div class="metric-val" style="color:${trend.avgPct >= 0 ? '#2E7D32' : '#B71C1C'}">${trend.avgPct >= 0 ? '+' : ''}${trend.avgPct}%</div>
+      <div class="metric-sub" style="color:var(--faint);">${trend.tracked ? trend.improved + ' of ' + trend.tracked + ' lifts up' : 'need repeat lifts'}</div></div>
   `;
+
+  renderHardSets(sessions, periodWeeks);
+  renderStalling();
 
   // ── CALENDAR ──
   const calEl = document.getElementById('cal-grid');
@@ -5942,9 +6095,9 @@ async function renderLibrary(){
   }));
   renderLibraryReview(libUseCount,lastUsed);
 
-  // Group by primary muscle
+  // Group by primary muscle — active only; archived get their own section at the bottom
   const groups={};
-  db.library.forEach(e=>{
+  db.library.filter(e=>!e.archived).forEach(e=>{
     const primary=e.muscle.split(',')[0].trim();
     if(!groups[primary]) groups[primary]=[];
     groups[primary].push(e);
@@ -5969,7 +6122,29 @@ async function renderLibrary(){
     });
     html2+='</div>';
   });
+  // All archived exercises live in one predictable place, so restoring is never a hunt
+  const archived=db.library.filter(e=>e.archived).sort((a,b)=>a.name.localeCompare(b.name));
+  if(archived.length){
+    html2+='<div style="margin-top:6px;border-top:0.5px solid var(--border-md);padding-top:12px;">'
+      +'<div style="font-size:11px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:8px;cursor:pointer;" onclick="toggleArchivedSection()">'
+      +'<span id="arch-caret">\u25b8</span> Archived (' + archived.length + ')</div>'
+      +'<div id="lib-archived" style="display:none;">'
+      + archived.map(e=>'<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:0.5px solid var(--border);opacity:0.6;">'
+        +'<div style="flex:1;min-width:0;"><div style="font-size:13px;font-weight:500;">'+e.name+'</div>'
+        +'<div style="font-size:11px;color:var(--muted);">'+e.muscle+' \u00b7 '+((libUseCount[e.name]||0)?('used '+libUseCount[e.name]+'\u00d7'):'never used')+'</div></div>'
+        +'<button onclick="toggleArchiveExercise('+e.id+')" style="background:none;border:0.5px solid var(--border-md);border-radius:var(--radius-sm);padding:4px 10px;font-size:12px;color:var(--text);cursor:pointer;">Restore</button>'
+        +'</div>').join('')
+      +'</div></div>';
+  }
   document.getElementById('lib-display').innerHTML=html2;
+}
+
+function toggleArchivedSection(){
+  const el=document.getElementById('lib-archived'), c=document.getElementById('arch-caret');
+  if(!el) return;
+  const show=el.style.display==='none';
+  el.style.display=show?'':'none';
+  if(c) c.textContent=show?'\u25be':'\u25b8';
 }
 
 function editExercise(id){
