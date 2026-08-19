@@ -177,6 +177,8 @@ html.mobile-layout .set-head > span:not(.set-head-sp) { max-width:none; }
 html.mobile-layout #progress-metrics { grid-template-columns:1fr 1fr !important; }
 html.mobile-layout .prog-2col { grid-template-columns:1fr !important; }
 html.mobile-layout #overview-metrics { grid-template-columns:1fr 1fr !important; }
+html.mobile-layout .qs-label { display:none; }
+html.mobile-layout #overview-quickstart .btn-sm { flex:1; white-space:nowrap; }
 html.mobile-layout .ov-2col { grid-template-columns:1fr !important; }
 html.mobile-layout .lib-grid { columns:1; }
 /* iOS Safari auto-zooms whenever a focused field's font-size is < 16px. This guarantees
@@ -415,7 +417,7 @@ html.mobile-layout .topbar { display:flex; align-items:center; gap:6px; position
       <div id="overview-greeting" style="margin-bottom:20px;"></div>
       <div id="overview-active-prog"></div>
       <div id="overview-quickstart"></div>
-      <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:14px;" id="overview-metrics"></div>
+      <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px;" id="overview-metrics"></div>
       <div id="overview-signals"></div>
       <div id="overview-last-session"></div>
       <div class="ov-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;">
@@ -1720,7 +1722,7 @@ async function renderOverview() {
   if(qsEl) {
     if(prog) {
       qsEl.innerHTML = '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px;">'
-        + '<span style="font-size:12px;color:var(--muted);">Doing your own thing today?</span>'
+        + '<span class="qs-label" style="font-size:12px;color:var(--muted);">Doing your own thing today?</span>'
         + '<button class="btn btn-sm" onclick="showPage(\'justtrain\')">Just Train</button>'
         + '<button class="btn btn-sm" onclick="showPage(\'planner\')">Generate Workout</button>'
         + '</div>';
@@ -1771,7 +1773,9 @@ async function renderOverview() {
       trend30.tracked ? trend30.improved + ' of ' + trend30.tracked + ' lifts up' : 'need repeat lifts',
       trend30.avgPct>=0 ? '#2E7D32' : '#B71C1C')
     + tile('Last session', daysSinceLast==null ? '\u2014' : (daysSinceLast===0 ? 'Today' : daysSinceLast + 'd ago'),
-      latestWeight ? 'body weight ' + latestWeight + 'kg' : 'body weight not logged');
+      latestWeight ? 'body weight ' + latestWeight + 'kg' : 'body weight not logged')
+    + tile('Volume / week', vol30 ? (vol30/4 >= 1000 ? (vol30/4/1000).toFixed(1)+'k' : Math.round(vol30/4)) : '\u2014',
+      'kg, last 30 days');
 
   // ── LAST SESSION ──
   // Reuse the recap card so the home screen and History show the same summary.
