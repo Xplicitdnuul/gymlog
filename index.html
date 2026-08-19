@@ -558,7 +558,6 @@ html.mobile-layout .topbar { display:flex; align-items:center; gap:6px; position
         <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;">
           <button class="filter-pill sel" onclick="setStrengthMode(this,'weight')">Max weight</button>
           <button class="filter-pill" onclick="setStrengthMode(this,'e1rm')">Est. 1RM</button>
-          <button class="filter-pill" onclick="setStrengthMode(this,'volume')">Volume per session</button>
         </div>
         <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;align-items:center;">
           <span style="font-size:11px;color:var(--faint);margin-right:2px;">Show:</span>
@@ -3791,9 +3790,6 @@ function renderStrengthChart(sessions) {
         // Epley estimated 1-rep max: weight × (1 + reps/30), best working set in the session
         const e1 = Math.max(...workingSets(ex).filter(st => st.kg && st.reps).map(st => st.kg * (1 + st.reps/30)), 0);
         if(e1 > 0) pts.push({ iso: isoDate, display: fmt(s.date), y: Math.round(e1*10)/10 });
-      } else {
-        const vol = calcVolume([ex]);
-        if(vol > 0) pts.push({ iso: isoDate, display: fmt(s.date), y: vol });
       }
     });
     return { label: dsLabel, data: pts.map(p => p.y), isoLabels: pts.map(p => p.iso), displayLabels: pts.map(p => p.display), borderColor: colors[ci % colors.length], backgroundColor: 'transparent', tension: 0.3, pointRadius: 4, pointBackgroundColor: colors[ci % colors.length] };
@@ -3814,7 +3810,7 @@ function renderStrengthChart(sessions) {
   progressCharts.strength = new Chart(document.getElementById('chart-strength'), {
     type: 'line',
     data: { labels: allLabels, datasets: alignedDatasets },
-    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: true, position: 'top', align: 'start', labels: { font: { size: 11 }, boxWidth: 8, padding: 10 } } }, scales: { x: { ticks: { color: tc, font: { size: 11 }, maxRotation: 45 }, grid: { display: false }, border: { display: false } }, y: { ticks: { color: tc, callback: v => strengthMode === 'volume' ? (v > 1000 ? (v/1000).toFixed(1)+'k' : v) : v + ' kg' }, grid: { color: gc }, border: { display: false } } } }
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: true, position: 'top', align: 'start', labels: { font: { size: 11 }, usePointStyle: true, pointStyle: 'circle', boxWidth: 8, boxHeight: 8, padding: 10 } } }, scales: { x: { ticks: { color: tc, font: { size: 11 }, maxRotation: 45 }, grid: { display: false }, border: { display: false } }, y: { ticks: { color: tc, callback: v => v + ' kg' }, grid: { color: gc }, border: { display: false } } } }
   });
 }
 
