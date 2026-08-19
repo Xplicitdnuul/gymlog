@@ -24,6 +24,10 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14
 
 /* AUTH */
 #auth-screen{display:flex;align-items:center;justify-content:center;min-height:100vh;background:var(--bg);}
+#boot-overlay{display:none;position:fixed;inset:0;z-index:500;background:var(--bg);align-items:center;justify-content:center;transition:opacity 0.2s ease;}
+.boot-inner{text-align:center;}
+.boot-logo{font-family:var(--font-display);font-size:26px;letter-spacing:-0.3px;margin-bottom:14px;}
+.boot-logo span{font-style:italic;}
 .auth-box{background:var(--surface);border:0.5px solid var(--border);border-radius:var(--radius);padding:40px 36px;width:100%;max-width:400px;}
 .auth-logo{font-family:var(--font-display);font-size:28px;margin-bottom:8px;letter-spacing:-0.3px;}
 .auth-logo span{font-style:italic;}
@@ -1201,6 +1205,25 @@ sb.auth.onAuthStateChange((event, session) => {
 // Waits for the Supabase client to fully initialise from the cookie,
 // then loads data. This is more reliable than onAuthStateChange for
 // the page-refresh scenario because we control the timing ourselves.
+// Covers the app while first-load queries run, so the user sees a deliberate loading
+// state instead of an empty shell that looks like a rendering failure.
+function showBootOverlay(show){
+  let el = document.getElementById('boot-overlay');
+  if(show){
+    if(!el){
+      el = document.createElement('div');
+      el.id = 'boot-overlay';
+      el.innerHTML = '<div class="boot-inner"><div class="boot-logo">Gym<span>log</span></div>'
+        + '<div class="loading"><span></span><span></span><span></span></div></div>';
+      document.body.appendChild(el);
+    }
+    el.style.display = 'flex';
+  } else if(el){
+    el.style.opacity = '0';
+    setTimeout(() => { el.style.display = 'none'; el.style.opacity = '1'; }, 200);
+  }
+}
+
 async function initApp() {
   const { data: { session }, error } = await sb.auth.getSession();
 
@@ -1210,7 +1233,10 @@ async function initApp() {
 
   if(session?.user) {
     currentUser = session.user;
+    // Show a loading state rather than revealing an empty app: the UI used to appear
+    // fully built but blank while the queries ran, which reads as broken.
     document.getElementById('auth-screen').style.display = 'none';
+    showBootOverlay(true);
     document.getElementById('app').style.display = 'flex';
     updateProfileUI();
     try {
@@ -1221,6 +1247,8 @@ async function initApp() {
     } catch(e) {
       console.warn('initApp: data load error:', e);
       toast('Some data failed to load. Please refresh.', 'error');
+    } finally {
+      showBootOverlay(false);
     }
   } else {
     currentUser = null;
@@ -1258,33 +1286,34 @@ async function loadUserData() {
   console.log('querying profiles...');
   // Retry profiles up to 3 times with backoff — it can fail on cookie restore
   // if the auth token hasn't been attached to the request yet
-  let prof = {data:null, error:null};
-  for(let attempt=0; attempt<3; attempt++){
-    prof = await sb.from('profiles').select('*').eq('id',uid).maybeSingle();
-    if(!prof.error) break;
-    console.warn('profiles attempt', attempt+1, 'failed:', prof.error.message, '— retrying...');
-    await new Promise(r => setTimeout(r, 500 * (attempt+1)));
-  }
-  console.log('profiles done', prof.error ? 'with error:'+prof.error.message : 'ok');
-  console.log('querying library...');
-  const lib = await sb.from('library').select('*').eq('user_id',uid).order('name');
-  console.log('library done');
-  console.log('querying sessions...');
-  const sess = await sb.from('sessions').select('*').eq('user_id',uid).order('date');
-  console.log('sessions done');
-  console.log('querying body_log...');
-  const body = await sb.from('body_log').select('*').eq('user_id',uid).order('date');
-  console.log('body_log done');
-  console.log('querying goals...');
-  const goals = await sb.from('goals').select('*').eq('user_id',uid).order('created_at');
-  console.log('goals done');
-  console.log('querying draft...');
-  const draft = await sb.from('sessions').select('*').eq('user_id',uid).eq('is_draft',true).order('created_at').limit(1);
-  console.log('draft done');
-  // Exercise aliases — non-fatal: if the migration hasn't been run, matching just falls
-  // back to fuzzy logic instead of breaking the whole load.
-  try { await fetchExAliases(); } catch(e){ console.warn('aliases unavailable', e); db.aliases = db.aliases || {}; }
-  try { await loadTimeOff(); } catch(e){ console.warn('time_off unavailable', e); db.timeOff = db.timeOff || []; }
+  // These queries are independent, so they run in parallel: nine sequential round trips
+  // was the whole reason login felt slow (each waited for the previous to finish).
+  // Total wait is now the slowest single query rather than the sum of all of them.
+  const t0 = performance.now();
+  const [prof, lib, sess, body, goals, draft] = await Promise.all([
+    // profiles retries: on cookie restore the auth token can lag the first request
+    (async () => {
+      let r = {data:null, error:null};
+      for(let attempt=0; attempt<3; attempt++){
+        r = await sb.from('profiles').select('*').eq('id',uid).maybeSingle();
+        if(!r.error) break;
+        console.warn('profiles attempt', attempt+1, 'failed:', r.error.message, '— retrying...');
+        await new Promise(res => setTimeout(res, 500 * (attempt+1)));
+      }
+      return r;
+    })(),
+    sb.from('library').select('*').eq('user_id',uid).order('name'),
+    sb.from('sessions').select('*').eq('user_id',uid).order('date'),
+    sb.from('body_log').select('*').eq('user_id',uid).order('date'),
+    sb.from('goals').select('*').eq('user_id',uid).order('created_at'),
+    sb.from('sessions').select('*').eq('user_id',uid).eq('is_draft',true).order('created_at',{ascending:false}).limit(1)
+  ]);
+  // Non-fatal extras — never block the UI on a table whose migration may not have run
+  await Promise.all([
+    fetchExAliases().catch(e => { console.warn('aliases unavailable', e); db.aliases = db.aliases || {}; }),
+    loadTimeOff().catch(e => { console.warn('time_off unavailable', e); db.timeOff = db.timeOff || []; })
+  ]);
+  console.log('core queries done in', Math.round(performance.now()-t0), 'ms');
   console.log('loadUserData results - prof:', prof.error||prof.data?.name, 'lib:', lib.data?.length, 'sess:', sess.data?.length, 'lib error:', lib.error, 'sess error:', sess.error);
 
   // Parse profile data into db.profile
@@ -1292,18 +1321,24 @@ async function loadUserData() {
     const p = prof.data;
     db.profile = {name:p.name||'', level:p.level||'intermediate', goal:p.goal||'hypertrophy'};
     try { if(p.rest) db.rest = {...db.rest, ...JSON.parse(p.rest)}; } catch(e) {}
-  } else {
-    // No profile row yet — create one
+  } else if(!prof.error) {
+    // Query succeeded and genuinely found no row — safe to create the default profile.
+    // Guarded on !prof.error: on a failed read, prof.data is also null, and upserting here
+    // would overwrite an existing profile with blank values.
     const {error:autoErr} = await sb.from('profiles').upsert({id:uid, name:'', level:'intermediate', goal:'hypertrophy', rest:JSON.stringify({strength:180,hyp:90,end:60,trans:120})});
     if(autoErr) console.warn('Auto profile create error:', autoErr);
+  } else {
+    console.warn('Profile read failed — keeping existing profile untouched:', prof.error.message);
+    toast('Could not load your profile. Please refresh.', 'error');
   }
 
   db.library = (lib.data||[]).map(e=>({id:e.id,name:e.name,muscle:e.muscle,archived:!!e.archived}));
   db.sessions = (sess.data||[]).filter(s=>!s.is_draft).map(s=>({...s, sessionTitle:s.title||s.sessionTitle||'Session', exercises:safeJSON(s.exercises,[]), muscles:safeJSON(s.muscles,[])}));
   db.body = (body.data||[]).map(b=>({...b}));
   db.goals = (goals.data||[]).map(g=>({...g}));
-  // Restore any in-progress draft session
-  const {data:draftData} = await sb.from('sessions').select('*').eq('user_id',uid).eq('is_draft',true).order('created_at',{ascending:false}).limit(1);
+  // Restore any in-progress draft session — reuse the row already fetched above rather
+  // than issuing an identical second query
+  const draftData = draft.data;
   if(draftData&&draftData.length){
     const d=draftData[0];
     // Clean up drafts older than 7 days automatically
@@ -1333,6 +1368,8 @@ async function loadUserData() {
     exercises: safeJSON(w.exercises,[])
   }));
   console.log('loadUserData complete - library:', db.library.length, 'sessions:', db.sessions.length, 'profile name:', db.profile.name);
+  // Must come after db.savedWorkouts is populated: loadProgrammes backfills each programme
+  // day's workoutId by matching titles against it.
   await loadProgrammes();
   _loadingData = false;
 }
@@ -1511,6 +1548,9 @@ function showPage(id) {
   if(navEl) navEl.classList.add('active');
   const renders={overview:renderOverview,justtrain:renderJustTrain,planner:renderPlanner,log:renderLog,progress:renderProgress,body:renderBody,builder:renderBuilder,programme:renderProgramme,library:renderLibrary,history:renderHistory,settings:renderSettings};
   if(document.documentElement.classList.contains('mobile-layout')) closeSidebar();
+  // Start every page at the top — otherwise navigating from a long scrolled page (e.g.
+  // after saving a workout) drops you into the middle of the new one.
+  window.scrollTo(0, 0);
   if(renders[id]) Promise.resolve(renders[id]()).catch(e=>console.error('Page render error:',e));
 }
 
@@ -4725,7 +4765,9 @@ function sessionMatrix(exercises, sDate){
       const st = sets[i];
       if(!st){ html += '<td class="rm-empty">\u00b7</td>'; continue; }
       const w = st.kg ? st.kg : 'BW';
-      const isTop = !iso && st.kg && st.kg === topKg;
+      // First set that reaches the top weight only — comparing by value highlights every
+      // set when they're all the same weight, which defeats the purpose.
+      const isTop = !iso && st.kg && st.kg === topKg && sets.findIndex(t => t.kg === topKg) === i;
       html += '<td' + (isTop ? ' class="rm-top"' : '') + '><span class="rm-w">' + w + '</span><span class="rm-r">' + (st.reps||'?') + (iso?'s':'') + '</span></td>';
     }
     html += '</tr>';
