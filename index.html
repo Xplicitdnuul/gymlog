@@ -528,8 +528,9 @@ html.mobile-layout .topbar { display:flex; align-items:center; gap:6px; position
             <div class="card-title" style="margin-bottom:0;">Weekly hard sets per muscle</div>
             <button class="btn btn-sm" onclick="toggleCard('card-hardsets')">hide</button>
           </div>
-          <p style="font-size:12px;color:var(--muted);margin-bottom:10px;">Working sets per muscle per week. Research suggests roughly 10–20 for growth; below 10 is maintenance at best.</p>
-          <div id="hardsets-content"></div>
+          <p style="font-size:12px;color:var(--muted);margin-bottom:10px;">Working sets per muscle per week. The inner ring is 10 sets, the outer 20 — the rough range for growth. Shape shows imbalance at a glance.</p>
+          <div style="position:relative;width:100%;height:300px;"><canvas id="chart-hardsets"></canvas></div>
+          <div id="hardsets-content" style="margin-top:8px;"></div>
         </div>
 
         <div class="card" id="card-stalling">
@@ -543,11 +544,10 @@ html.mobile-layout .topbar { display:flex; align-items:center; gap:6px; position
 
       <div class="card" id="card-volume">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-          <div class="card-title" style="margin-bottom:0;">Weekly volume (reps × kg)</div>
+          <div class="card-title" style="margin-bottom:0;">Weekly volume by muscle (reps × kg)</div>
           <button class="btn btn-sm" onclick="toggleCard('card-volume')">hide</button>
         </div>
-        <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;" id="volume-muscle-filter"></div>
-        <div style="position:relative;width:100%;height:180px;"><canvas id="chart-volume"></canvas></div>
+        <div id="volume-content"></div>
       </div>
 
       <div class="card" id="card-strength">
@@ -2888,7 +2888,6 @@ let progressCharts = {};
 let progressPeriod = 30;
 let strengthMode = 'weight';
 let strengthExercises = [];
-let volumeMuscles = [];
 
 // Number of weekly buckets to show, scaled to the selected period (capped for readability).
 // ── TRAINING ADEQUACY & STALLING ──────────────────────────────────
@@ -2978,35 +2977,69 @@ function strengthTrendSummary(sessions){
   return {tracked, improved, avgPct: tracked ? Math.round(totalPct/tracked*10)/10 : 0};
 }
 
+// Radar: same axes, same unit, and a target band drawn as reference rings — the one case
+// where a spiderweb genuinely helps, since imbalance reads as shape rather than as a list.
+// Axes are ordered anatomically (push / pull / legs / core) so neighbours are related.
+const RADAR_ORDER = ['Chest','Shoulders','Triceps','Back','Biceps','Traps','Forearms',
+                     'Quads','Hamstrings','Glutes','Adductors','Calves','Core'];
 function renderHardSets(sessions, weeks){
-  const el = document.getElementById('hardsets-content');
-  if(!el) return;
   const perWeek = hardSetsPerMuscle(sessions, weeks);
-  // Only real muscles, not umbrella containers — those would double-count their parts
-  const rows = MUSCLES_W.filter(m => !MUSCLE_UMBRELLAS[m])
-    .map(m => ({m, n: perWeek[m] || 0}))
-    .sort((a,b) => b.n - a.n);
-  if(!rows.some(r => r.n > 0)){
-    el.innerHTML = '<p style="font-size:13px;color:var(--muted);">No working sets logged in this period.</p>';
+  const labels = RADAR_ORDER.filter(m => MUSCLES_W.includes(m) && !MUSCLE_UMBRELLAS[m]);
+  const data = labels.map(m => perWeek[m] || 0);
+  const note = document.getElementById('hardsets-content');
+
+  if(!data.some(v => v > 0)){
+    if(progressCharts.hardsets){ try { progressCharts.hardsets.destroy(); } catch(e){} progressCharts.hardsets = null; }
+    if(note) note.innerHTML = '<p style="font-size:13px;color:var(--muted);">No working sets logged in this period.</p>';
     return;
   }
-  const max = Math.max(HARD_SETS_MAX, ...rows.map(r => r.n));
-  el.innerHTML = rows.map(r => {
-    const pct = Math.min(100, r.n / max * 100);
-    const state = r.n === 0 ? 'none' : r.n < HARD_SETS_MIN ? 'low' : r.n <= HARD_SETS_MAX ? 'ok' : 'high';
-    const colour = state==='ok' ? '#2E7D32' : state==='low' ? '#EF9F27' : state==='high' ? '#B3261E' : 'var(--border-md)';
-    const label = state==='ok' ? 'in range' : state==='low' ? 'below 10' : state==='high' ? 'above 20' : 'none';
-    return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">'
-      + '<div style="width:72px;font-size:11px;color:var(--muted);flex-shrink:0;">' + r.m + '</div>'
-      + '<div style="flex:1;height:14px;background:var(--bg);border-radius:3px;overflow:hidden;position:relative;min-width:0;">'
-        + '<div style="width:' + pct + '%;height:100%;background:' + colour + ';opacity:0.75;"></div>'
-        // target band marker at the 10-20 range
-        + '<div style="position:absolute;top:0;bottom:0;left:' + (HARD_SETS_MIN/max*100) + '%;width:' + ((HARD_SETS_MAX-HARD_SETS_MIN)/max*100) + '%;border-left:1px dashed rgba(0,0,0,0.25);border-right:1px dashed rgba(0,0,0,0.25);"></div>'
-      + '</div>'
-      + '<div style="width:64px;text-align:right;font-size:11px;flex-shrink:0;"><b>' + r.n + '</b> <span style="color:var(--faint);">' + label + '</span></div>'
-      + '</div>';
-  }).join('')
-  + '<div style="font-size:10px;color:var(--faint);margin-top:8px;">Dashed band marks the 10–20 set target range. Averaged over ' + weeks + ' week' + (weeks===1?'':'s') + '.</div>';
+
+  const canvas = document.getElementById('chart-hardsets');
+  if(!canvas) return;
+  if(progressCharts.hardsets){ try { progressCharts.hardsets.destroy(); } catch(e){} }
+  const maxVal = Math.max(HARD_SETS_MAX + 4, ...data);
+  progressCharts.hardsets = new Chart(canvas, {
+    type: 'radar',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Sets / week', data, fill: true,
+          backgroundColor: 'rgba(26,86,160,0.14)', borderColor: '#1A56A0', borderWidth: 2,
+          pointBackgroundColor: '#1A56A0', pointRadius: 2.5 },
+        { label: 'Target min (10)', data: labels.map(()=>HARD_SETS_MIN), fill: false,
+          borderColor: 'rgba(46,125,50,0.55)', borderWidth: 1, borderDash: [4,3],
+          pointRadius: 0 },
+        { label: 'Target max (20)', data: labels.map(()=>HARD_SETS_MAX), fill: false,
+          borderColor: 'rgba(179,38,30,0.4)', borderWidth: 1, borderDash: [4,3],
+          pointRadius: 0 }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display:false },
+        tooltip: { callbacks: { label: c => c.dataset.label + ': ' + c.parsed.r } } },
+      scales: { r: {
+        min: 0, suggestedMax: maxVal,
+        ticks: { stepSize: 5, font:{size:9}, color:'rgba(0,0,0,0.35)', backdropColor:'transparent' },
+        grid: { color:'rgba(0,0,0,0.07)' },
+        angleLines: { color:'rgba(0,0,0,0.07)' },
+        pointLabels: { font:{size:10}, color:'rgba(0,0,0,0.6)' }
+      } }
+    }
+  });
+
+  // A short written verdict beneath, since shape alone doesn't give you numbers
+  const low = labels.map((m,i)=>({m,n:data[i]})).filter(x=>x.n>0 && x.n<HARD_SETS_MIN).sort((a,b)=>a.n-b.n);
+  const none = labels.filter((m,i)=>data[i]===0);
+  const high = labels.map((m,i)=>({m,n:data[i]})).filter(x=>x.n>HARD_SETS_MAX);
+  const parts = [];
+  if(low.length) parts.push('<b>Below 10:</b> ' + low.map(x=>x.m+' ('+x.n+')').join(', '));
+  if(none.length) parts.push('<b>Untrained:</b> ' + none.join(', '));
+  if(high.length) parts.push('<b>Above 20:</b> ' + high.map(x=>x.m+' ('+x.n+')').join(', '));
+  if(note) note.innerHTML = parts.length
+    ? '<div style="font-size:12px;color:var(--muted);line-height:1.5;">' + parts.join('<br>') + '</div>'
+      + '<div style="font-size:10px;color:var(--faint);margin-top:4px;">Averaged over ' + weeks + ' week' + (weeks===1?'':'s') + '.</div>'
+    : '<div style="font-size:12px;color:#2E7D32;">Every muscle inside the 10\u201320 range.</div>';
 }
 
 function renderStalling(){
@@ -3503,11 +3536,6 @@ async function renderProgress() {
       </div>`).join('');
   }
 
-  // ── VOLUME MUSCLE FILTER ──
-  const volMuscles = [...new Set(sessions.flatMap(s => s.muscles || []).filter(m => MUSCLES_W.includes(m)))];
-  if(!volumeMuscles.length) volumeMuscles = volMuscles.slice(0, 4);
-  document.getElementById('volume-muscle-filter').innerHTML =
-    volMuscles.map(m => `<button class="filter-pill${volumeMuscles.includes(m) ? ' sel' : ''}" onclick="toggleVolumeMuscle(this,'${m}')">${m}</button>`).join('');
   renderVolumeChart(sessions);
 
   // ── STRENGTH EXERCISE FILTER ── (keyed by movement + equipment so variants stay separate)
@@ -3583,62 +3611,52 @@ async function renderProgress() {
     '<p style="font-size:13px;color:var(--muted);">No logged sets yet.</p>';
 }
 
-function toggleVolumeMuscle(btn, m) {
-  btn.classList.toggle('sel');
-  volumeMuscles = volumeMuscles.includes(m) ? volumeMuscles.filter(x => x !== m) : [...volumeMuscles, m];
-  renderVolumeChart(getFilteredSessions());
-}
-
 function toggleStrengthEx(btn, n) {
   btn.classList.toggle('sel');
   strengthExercises = strengthExercises.includes(n) ? strengthExercises.filter(x => x !== n) : [...strengthExercises, n];
   renderStrengthChart(getFilteredSessions());
 }
 
-function renderVolumeChart(sessions) {
-  if(progressCharts.volume) { try { progressCharts.volume.destroy(); } catch(e) {} }
-  const tc = 'rgba(0,0,0,0.3)', gc = 'rgba(0,0,0,0.06)';
-  // Build weekly buckets scaled to the selected period (Monday-anchored, YYYY-MM-DD)
-  const weeks = [];
-  const weekStarts = [];
-  const weeksToShow = weeksForPeriod(sessions);
-  for(let i = weeksToShow - 1; i >= 0; i--) {
-    const d = new Date();
-    d.setDate(d.getDate() - i * 7);
-    // Snap to Monday of that week
-    const day = d.getDay(); // 0=Sun, 1=Mon ...
-    const monday = new Date(d);
-    monday.setDate(d.getDate() - (day === 0 ? 6 : day - 1));
-    const key = localDateKey(monday);
-    if(!weeks.includes(key)) {
-      weeks.push(key);
-      weekStarts.push(monday);
-    }
+// Horizontal bars per muscle: volume totals compare best side by side, and a per-week
+// average keeps the numbers comparable when the period filter changes.
+function renderVolumeChart(sessions){
+  const el = document.getElementById('volume-content');
+  if(!el) return;
+  if(progressCharts.volume){ try { progressCharts.volume.destroy(); } catch(e){} progressCharts.volume = null; }
+  const weeks = weeksForPeriod(sessions);
+
+  const vol = {};
+  (sessions||[]).forEach(s => (s.exercises||[]).forEach(ex => {
+    if(!ex || ex.isCardio) return;
+    const kg = calcVolume([ex]);
+    if(!kg) return;
+    const lib = (db.library||[]).find(l => l.name === ex.name);
+    const raw = (lib && lib.muscle) ? lib.muscle : (ex.muscle || '');
+    String(raw).split(',').map(m=>m.trim()).filter(Boolean).forEach(m => { vol[m] = (vol[m]||0) + kg; });
+  }));
+
+  const rows = MUSCLES_W.filter(m => !MUSCLE_UMBRELLAS[m])
+    .map(m => ({m, total: vol[m]||0, perWk: Math.round((vol[m]||0)/Math.max(1,weeks))}))
+    .filter(r => r.total > 0)
+    .sort((a,b) => b.perWk - a.perWk);
+
+  if(!rows.length){
+    el.innerHTML = '<p style="font-size:13px;color:var(--muted);">No volume logged in this period.</p>';
+    return;
   }
-  const colors = ['#1A56A0','#2E7D32','#92600A','#7B61C4','#B71C1C','#0F6E56'];
-  const datasets = volumeMuscles.map((muscle, ci) => {
-    const data = weeks.map(wk => {
-      return sessions.filter(s => {
-        const d = new Date(s.date);
-        const day = d.getDay();
-        const mon = new Date(d); mon.setDate(d.getDate() - (day===0?6:day-1));
-        const sw = localDateKey(mon);
-        return sw === wk && (s.muscles||[]).includes(muscle);
-      }).reduce((sum, s) => {
-        return sum + (s.exercises||[]).filter(e => e.muscle === muscle || (e.muscle||'').includes(muscle)).reduce((vs, ex) => vs + calcVolume([ex]), 0);
-      }, 0);
-    });
-    return { label: muscle, data, backgroundColor: colors[ci % colors.length], borderRadius: 2, barPercentage: 0.7 };
-  });
-  const wkLabels = weeks.map(w => {
-    const d = new Date(w + 'T00:00:00');
-    return d.toLocaleDateString('en-GB', {day:'2-digit', month:'short'});
-  });
-  progressCharts.volume = new Chart(document.getElementById('chart-volume'), {
-    type: 'bar',
-    data: { labels: wkLabels, datasets },
-    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: true, position: 'top', align: 'start', labels: { font: { size: 11 }, boxWidth: 8, padding: 10 } } }, scales: { x: { ticks: { color: tc, font: { size: 11 } }, grid: { display: false }, border: { display: false }, stacked: true }, y: { ticks: { color: tc, callback: v => v > 1000 ? (v/1000).toFixed(1)+'k' : v }, grid: { color: gc }, border: { display: false }, stacked: true } } }
-  });
+  const max = Math.max(...rows.map(r => r.perWk));
+  const fmtKg = v => v >= 1000 ? (v/1000).toFixed(1) + 'k' : String(v);
+  el.innerHTML = rows.map(r => {
+    const pct = max ? Math.max(2, r.perWk / max * 100) : 0;
+    return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">'
+      + '<div style="width:72px;font-size:11px;color:var(--muted);flex-shrink:0;">' + r.m + '</div>'
+      + '<div style="flex:1;height:14px;background:var(--bg);border-radius:3px;overflow:hidden;min-width:0;">'
+        + '<div style="width:' + pct + '%;height:100%;background:#1A56A0;opacity:0.7;"></div>'
+      + '</div>'
+      + '<div style="width:64px;text-align:right;font-size:11px;flex-shrink:0;"><b>' + fmtKg(r.perWk) + '</b> <span style="color:var(--faint);">kg/wk</span></div>'
+      + '</div>';
+  }).join('')
+  + '<div style="font-size:10px;color:var(--faint);margin-top:8px;">Average per week over ' + weeks + ' week' + (weeks===1?'':'s') + '. Warm-ups and isometric holds excluded.</div>';
 }
 
 // Minutes for a cardio exercise — duration is stored as the set's kg (falls back to reps).
