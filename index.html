@@ -389,6 +389,8 @@ html.mobile-layout .topbar { display:flex; align-items:center; gap:6px; position
       <div id="overview-active-prog"></div>
       <div id="overview-quickstart"></div>
       <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:14px;" id="overview-metrics"></div>
+      <div id="overview-signals"></div>
+      <div id="overview-last-session"></div>
       <div class="ov-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;">
         <div class="card">
           <div class="card-title">Needs attention</div>
@@ -1615,6 +1617,14 @@ async function renderOverview() {
   } else {
     nudgeHtml = '<span style="font-size:12px;color:var(--muted);">Log your first workout to start a streak</span>';
   }
+  // An active illness/injury replaces the nudge — nagging someone who can't train is worse
+  // than saying nothing, and the "days since" figure isn't their fault.
+  const activeOff = (typeof activeTimeOff === 'function') ? activeTimeOff() : null;
+  if(activeOff){
+    const lbl = TIMEOFF_LABEL[activeOff.kind||'illness'] + (activeOff.body_part ? ' \u00b7 ' + activeOff.body_part : '');
+    nudgeHtml = '<span style="font-size:12px;font-weight:500;padding:2px 9px;border-radius:20px;background:rgba(179,38,30,0.08);color:#B3261E;">'
+      + lbl + ' logged \u2014 recovery counts too</span>';
+  }
   document.getElementById('overview-greeting').innerHTML =
     '<div style="font-size:22px;font-weight:500;margin-bottom:4px;">' + greeting + (db.profile.name ? ', ' + db.profile.name : '') + '</div>'
     + '<div style="font-size:13px;color:var(--muted);display:flex;gap:10px;align-items:center;flex-wrap:wrap;"><span>' + dateStr + '</span>' + nudgeHtml + '</div>';
@@ -1710,22 +1720,70 @@ async function renderOverview() {
   const sessDelta = thisMonth - lastMonth;
   const latestWeight = db.body.length ? db.body[db.body.length-1].weight : null;
 
-  document.getElementById('overview-metrics').innerHTML =
+  // Rolling 30-day window, matching the session recap — calendar months made this read
+  // "0, down 12 vs last month" on the 1st, which is alarming and meaningless.
+  const sess30 = sessionsThisMonth30.length;
+  const sessPrev30 = db.sessions.filter(s => {
+    const d = (now - new Date(s.date))/864e5;
+    return d > 30 && d <= 60;
+  }).length;
+  const rollDelta = sess30 - sessPrev30;
+  const trend30 = strengthTrendSummary(sessionsThisMonth30);
+  const tile = (label, value, sub, colour) =>
     '<div class="card" style="padding:12px 14px;">'
-    + '<div style="font-size:11px;color:var(--muted);margin-bottom:6px;">Sessions this month</div>'
-    + '<div style="font-size:22px;font-weight:300;letter-spacing:-0.5px;">' + thisMonth + '</div>'
-    + '<div style="font-size:11px;color:' + (sessDelta>=0?'#2E7D32':'#B71C1C') + ';margin-top:4px;">' + (sessDelta>=0?'\u2191':'\u2193') + ' ' + Math.abs(sessDelta) + ' vs last month</div>'
-    + '</div>'
-    + '<div class="card" style="padding:12px 14px;">'
-    + '<div style="font-size:11px;color:var(--muted);margin-bottom:6px;">Volume (30 days)</div>'
-    + '<div style="font-size:22px;font-weight:300;letter-spacing:-0.5px;">' + (vol30>1000?(vol30/1000).toFixed(1)+'k':vol30) + '</div>'
-    + '<div style="font-size:11px;color:var(--faint);margin-top:4px;">reps \u00d7 kg</div>'
-    + '</div>'
-    + '<div class="card" style="padding:12px 14px;">'
-    + '<div style="font-size:11px;color:var(--muted);margin-bottom:6px;">Body weight</div>'
-    + '<div style="font-size:22px;font-weight:300;letter-spacing:-0.5px;">' + (latestWeight?latestWeight+'kg':'\u2014') + '</div>'
-    + '<div style="font-size:11px;color:var(--faint);margin-top:4px;">' + (db.body.length?'logged '+fmt(db.body[db.body.length-1].date):'not logged') + '</div>'
+    + '<div style="font-size:11px;color:var(--muted);margin-bottom:6px;">' + label + '</div>'
+    + '<div style="font-size:22px;font-weight:300;letter-spacing:-0.5px;' + (colour?'color:'+colour+';':'') + '">' + value + '</div>'
+    + '<div style="font-size:11px;color:var(--faint);margin-top:4px;">' + sub + '</div>'
     + '</div>';
+  document.getElementById('overview-metrics').innerHTML =
+    tile('Sessions (30 days)', sess30,
+      '<span style="color:' + (rollDelta>=0?'#2E7D32':'#B71C1C') + ';">' + (rollDelta>=0?'\u2191':'\u2193') + ' ' + Math.abs(rollDelta) + ' vs prev 30</span>')
+    + tile('Strength trend', (trend30.avgPct>=0?'+':'') + trend30.avgPct + '%',
+      trend30.tracked ? trend30.improved + ' of ' + trend30.tracked + ' lifts up' : 'need repeat lifts',
+      trend30.avgPct>=0 ? '#2E7D32' : '#B71C1C')
+    + tile('Last session', daysSinceLast==null ? '\u2014' : (daysSinceLast===0 ? 'Today' : daysSinceLast + 'd ago'),
+      latestWeight ? 'body weight ' + latestWeight + 'kg' : 'body weight not logged');
+
+  // ── LAST SESSION ──
+  // Reuse the recap card so the home screen and History show the same summary.
+  const lastEl = document.getElementById('overview-last-session');
+  if(lastEl){
+    const last = db.sessions.length ? db.sessions[db.sessions.length-1] : null;
+    lastEl.innerHTML = last
+      ? '<div style="font-size:11px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:0.07em;margin:4px 0 6px;">Your last session</div>'
+        + sessionRecap(last)
+      : '';
+  }
+
+  // ── WORTH KNOWING ──
+  // One line each for the two signals that otherwise only live on Progress: a stalled lift
+  // and a muscle below the weekly set threshold. Silent when there's nothing to say.
+  const sigEl = document.getElementById('overview-signals');
+  if(sigEl){
+    const bits = [];
+    try {
+      const stalls = stallingLifts();
+      if(stalls.length) bits.push('<b>' + stalls[0].name + '</b> hasn\'t moved in 6 weeks'
+        + (stalls.length>1 ? ' (+' + (stalls.length-1) + ' more)' : ''));
+    } catch(e){}
+    try {
+      const last28 = db.sessions.filter(s => (Date.now()-new Date(s.date))/864e5 <= 28);
+      const hs = hardSetsPerMuscle(last28, 4);
+      const low = MUSCLES_W.filter(m => !MUSCLE_UMBRELLAS[m])
+        .map(m => ({m, n: hs[m]||0}))
+        .filter(x => x.n > 0 && x.n < HARD_SETS_MIN)
+        .sort((a,b) => a.n - b.n);
+      if(low.length) bits.push('<b>' + low[0].m + '</b> only ' + low[0].n + ' sets/week'
+        + (low.length>1 ? ' (+' + (low.length-1) + ' more below 10)' : ''));
+    } catch(e){}
+    sigEl.innerHTML = bits.length
+      ? '<div class="card" style="padding:10px 14px;margin-bottom:14px;border-left:3px solid #EF9F27;">'
+        + '<div style="font-size:11px;font-weight:600;color:#92600A;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:5px;">Worth knowing</div>'
+        + bits.map(b => '<div style="font-size:13px;color:var(--text);margin-bottom:2px;">' + b + '</div>').join('')
+        + '<div style="font-size:11px;color:var(--muted);margin-top:5px;"><a href="#" onclick="event.preventDefault();showPage(\'progress\');" style="color:var(--muted);">See Progress \u2192</a></div>'
+        + '</div>'
+      : '';
+  }
 
   // ── NEEDS ATTENTION (triage: muscle groups overdue for training) ──
   const dotColor = days => days <= 4 ? '#639922' : days <= 10 ? '#97C459' : days <= 18 ? '#D3D1C7' : '#E24B4A';
