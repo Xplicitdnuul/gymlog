@@ -208,6 +208,26 @@ html.mobile-layout .topbar { display:flex; align-items:center; gap:6px; position
 .lib-grid { columns:2; column-gap:28px; }
 .lib-grid > div { break-inside:avoid; -webkit-column-break-inside:avoid; page-break-inside:avoid; min-width:0; }
 .lib-grid .lib-full { column-span:all; }
+.pm-wrap { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+.pm { border-collapse:separate; border-spacing:0; font-size:12px; min-width:100%; }
+.pm th { font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:var(--muted); text-align:left; padding:0 10px 8px; vertical-align:bottom; white-space:nowrap; }
+.pm th.pm-day { min-width:126px; }
+.pm th .pm-daynum { display:block; font-size:9px; color:var(--faint); font-weight:500; margin-bottom:2px; }
+.pm td { padding:5px 10px; vertical-align:top; border-top:0.5px solid var(--border); }
+.pm td.pm-mus { font-size:9px; color:var(--faint); text-transform:uppercase; letter-spacing:0.05em; white-space:nowrap; width:66px; padding-top:8px; }
+.pm-ex { font-size:12px; line-height:1.35; margin-bottom:3px; white-space:nowrap; }
+.pm-ex .pm-sets { color:var(--faint); font-size:10px; margin-left:4px; }
+.pm-mod { font-size:8px; color:#92600A; background:rgba(146,96,10,0.1); border-radius:3px; padding:0 3px; margin-left:3px; text-transform:uppercase; }
+.pm-ss { border-left:2px solid #185FA5; padding-left:5px; margin-left:-7px; }
+.pm-empty { color:var(--border-md); font-size:12px; }
+.pm-col-today { background:rgba(46,125,50,0.045); }
+.pm-today-tag { display:inline-block; font-size:8px; font-weight:700; color:#2E7D32; background:rgba(46,125,50,0.12); border-radius:3px; padding:1px 4px; margin-left:4px; letter-spacing:0.04em; }
+.pm-foot td { border-top:0.5px solid var(--border-md); font-size:10px; color:var(--muted); padding:7px 10px; white-space:nowrap; }
+.pm-count { font-weight:600; color:var(--text); }
+.pm-bal { display:flex; flex-wrap:wrap; gap:6px; margin-top:12px; }
+.pm-chip { font-size:10px; padding:3px 8px; border-radius:5px; background:var(--bg); border:0.5px solid var(--border); }
+.pm-chip.low { border-left:2px solid #EF9F27; }
+.pm-chip.none { border-left:2px solid #B3261E; color:var(--muted); }
 .ss-badge { font-size:10px; font-weight:600; color:#185FA5; background:rgba(24,95,165,0.1); border-radius:4px; padding:1px 5px; margin-left:6px; }
 /* Session recap — self-contained enough to read from a screenshot alone */
 .recap { border:0.5px solid var(--border-md); border-radius:10px; padding:14px; margin-bottom:14px; background:var(--surface); }
@@ -4166,6 +4186,130 @@ function reconcileProgrammeProgress(){
   sb.from('programmes').update({current_day: next}).eq('id', prog.id);
 }
 
+// Matrix overview of a programme: training days across the top, muscle groups down the
+// side. Rest days are omitted entirely — they carry no exercises and cost a whole column.
+// Rows are grouped broadly (Chest/Back/Shoulders/Arms/Quads+Glutes/Hams+Calves/Core) so the
+// grid stays dense rather than one sparse row per individual muscle.
+const PM_ROWS = [
+  {label:'Chest', muscles:['Chest']},
+  {label:'Back', muscles:['Back','Traps']},
+  {label:'Shoulders', muscles:['Shoulders']},
+  {label:'Arms', muscles:['Biceps','Triceps','Forearms']},
+  {label:'Quads<br>Glutes', muscles:['Quads','Glutes','Adductors','Legs']},
+  {label:'Hams<br>Calves', muscles:['Hamstrings','Calves']},
+  {label:'Core', muscles:['Core']},
+  {label:'Cardio', muscles:['Cardio']}
+];
+
+function programmeMatrixHtml(prog, days){
+  // Training days only, keeping their real cycle position for the "Day N" label
+  const training = days.map((d,i) => ({d, i}))
+    .filter(x => x.d && x.d.type !== 'rest');
+  if(!training.length) return '';
+
+  // Resolve each day to its saved workout's exercise list
+  const cols = training.map(x => {
+    const w = (db.savedWorkouts||[]).find(w =>
+      (x.d.workoutId && String(w.id) === String(x.d.workoutId))
+      || ((w.sessionTitle || w.title) === x.d.workoutTitle));
+    return {
+      dayNum: x.i + 1,
+      title: x.d.workoutTitle || (w ? (w.sessionTitle||w.title) : 'Workout'),
+      isNext: x.i === (prog.current_day || 0),
+      exercises: w ? (w.exercises || []) : null
+    };
+  });
+
+  // Bucket each day's exercises into rows by their primary muscle
+  const cellFor = (col, row) => {
+    if(!col.exercises) return null;
+    return col.exercises.filter(ex => {
+      if(!ex) return false;
+      if(ex.isCardio) return row.muscles.includes('Cardio');
+      const lib = (db.library||[]).find(l => l.name === ex.name);
+      const raw = (lib && lib.muscle) ? lib.muscle : (ex.muscle||'');
+      const tags = String(raw).split(',').map(m=>m.trim()).filter(Boolean);
+      if(!tags.length) return false;
+      // Assign each exercise to exactly ONE row, chosen by its PRIMARY (first) muscle tag.
+      // Matching on "first row that contains any tag" instead would file a Romanian Deadlift
+      // under Back, since Back precedes Hamstrings in PM_ROWS.
+      const primaryTag = tags.find(t => PM_ROWS.some(r => r.muscles.includes(t)));
+      if(!primaryTag) return false;
+      const target = PM_ROWS.find(r => r.muscles.includes(primaryTag));
+      return target && target.label === row.label;
+    });
+  };
+
+  const exHtml = ex => {
+    const mod = ex.modifier === 'Unilateral' ? 'uni'
+      : ex.modifier === 'Isometric hold' ? 'iso'
+      : ex.modifier ? ex.modifier.slice(0,4).toLowerCase() : '';
+    const sets = ex.isCardio ? (ex.reps || '') : ((ex.sets||3) + '\u00d7' + String(ex.reps||'').replace(/\s*reps?/i,''));
+    return '<div class="pm-ex' + (ex.group ? ' pm-ss' : '') + '">' + ex.name
+      + (mod ? '<span class="pm-mod">' + mod + '</span>' : '')
+      + (sets ? '<span class="pm-sets">' + sets + '</span>' : '')
+      + '</div>';
+  };
+
+  const activeRows = PM_ROWS.filter(row => cols.some(c => { const cell = cellFor(c,row); return cell && cell.length; }));
+  if(!activeRows.length) return '';
+
+  let html = '<div class="card"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">'
+    + '<div class="card-title" style="margin-bottom:0;">Programme overview</div>'
+    + '<span style="font-size:11px;color:var(--faint);">' + cols.length + ' training day' + (cols.length===1?'':'s') + ' \u00b7 rest days omitted</span>'
+    + '</div><div class="pm-wrap"><table class="pm"><thead><tr><th></th>'
+    + cols.map(c => '<th class="pm-day' + (c.isNext?' pm-col-today':'') + '">'
+        + '<span class="pm-daynum">Day ' + c.dayNum + '</span>' + c.title
+        + (c.isNext ? '<span class="pm-today-tag">NEXT</span>' : '') + '</th>').join('')
+    + '</tr></thead><tbody>';
+
+  activeRows.forEach(row => {
+    html += '<tr><td class="pm-mus">' + row.label + '</td>';
+    cols.forEach(c => {
+      const cell = cellFor(c, row);
+      if(cell === null){ html += '<td class="pm-empty" title="Workout not found">?</td>'; return; }
+      html += '<td' + (c.isNext?' class="pm-col-today"':'') + '>'
+        + (cell.length ? cell.map(exHtml).join('') : '<span class="pm-empty">\u00b7</span>')
+        + '</td>';
+    });
+    html += '</tr>';
+  });
+
+  // Per-day totals
+  html += '</tbody><tfoot><tr class="pm-foot"><td>Per day</td>'
+    + cols.map(c => {
+        if(!c.exercises) return '<td>\u2014</td>';
+        const n = c.exercises.length;
+        const sets = c.exercises.reduce((t,ex) => t + (ex.isCardio ? 0 : (ex.sets||3)), 0);
+        return '<td' + (c.isNext?' class="pm-col-today"':'') + '><span class="pm-count">' + n + '</span> ex \u00b7 ' + sets + ' sets</td>';
+      }).join('')
+    + '</tr></tfoot></table></div>';
+
+  // Planned weekly set count per muscle, flagging thin coverage
+  const cycleWeeks = Math.max(1, days.length / 7);
+  const setsPerMuscle = {};
+  cols.forEach(c => (c.exercises||[]).forEach(ex => {
+    if(!ex || ex.isCardio) return;
+    const lib = (db.library||[]).find(l => l.name === ex.name);
+    const raw = (lib && lib.muscle) ? lib.muscle : (ex.muscle||'');
+    String(raw).split(',').map(m=>m.trim()).filter(Boolean).forEach(m => {
+      setsPerMuscle[m] = (setsPerMuscle[m]||0) + (ex.sets||3);
+    });
+  }));
+  const tracked = MUSCLES_W.filter(m => !MUSCLE_UMBRELLAS[m]);
+  const chips = tracked.map(m => {
+    const perWk = Math.round((setsPerMuscle[m]||0) / cycleWeeks);
+    if(!perWk) return '<span class="pm-chip none"><b>' + m + '</b> not covered</span>';
+    const cls = perWk < HARD_SETS_MIN ? ' low' : '';
+    return '<span class="pm-chip' + cls + '"><b>' + m + '</b> ' + perWk
+      + (perWk < HARD_SETS_MIN ? ' \u2014 below ' + HARD_SETS_MIN : '') + '</span>';
+  }).join('');
+  html += '<div class="pm-bal">' + chips + '</div>'
+    + '<div style="font-size:10px;color:var(--faint);margin-top:8px;">Planned sets per week across the cycle. Blue bar = superset \u00b7 uni/iso = modifier.</div>'
+    + '</div>';
+  return html;
+}
+
 function renderActiveProgramme() {
   const el = document.getElementById('active-programme-section');
   reconcileProgrammeProgress();
@@ -4243,7 +4387,8 @@ function renderActiveProgramme() {
     + previewHtml
     + '<div style="display:flex;gap:8px;"><button class="btn btn-sm" onclick="editProgramme(' + prog.id + ')">Edit</button><button class="btn btn-sm" onclick="deactivateProgramme()">Deactivate</button></div>'
     + '</div>'
-    + programmeReviewHtml(prog, days);
+    + programmeReviewHtml(prog, days)
+    + programmeMatrixHtml(prog, days);
 }
 
 // The active-programme tracker appears on BOTH the Overview and Programme pages.
