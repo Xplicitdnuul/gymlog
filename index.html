@@ -2525,6 +2525,9 @@ function renderLog() {
       html2+='<div class="set-head"><span class="set-head-sp"></span><span>weight (kg)</span><span>'+(isoEx?'hold (sec)':'reps')+'</span><span class="set-head-sp"></span></div>';
       html2+=warmupRowsHtml('ex-', ei, ex, wStep);
       html2+=setRows;
+      html2+='<div style="margin:2px 0 6px 48px;"><button type="button" class="btn btn-sm" style="font-size:11px;padding:3px 8px;" data-ei="'+ei+'" onclick="addLogSet(parseInt(this.dataset.ei))">+ Add set</button>'
+        +(numSets>1?'<button type="button" class="btn btn-sm" style="font-size:11px;padding:3px 8px;margin-left:6px;color:var(--faint);" data-ei="'+ei+'" onclick="removeLogSet(parseInt(this.dataset.ei))" title="Remove the last set">\u2212</button>':'')
+        +'</div>';
     }
     html2+=cueHtml;
     html2+='<input class="note-inp" type="text" id="ex-'+ei+'-note" placeholder="Note for this exercise..." value="'+( ex.savedNote||'')+'" oninput="autosaveDraft()">';
@@ -2576,6 +2579,50 @@ function swapLogExercise(ei,name){
 
 // Nudge a numeric input by delta (used by the +/- steppers). Never goes below 0.
 // autosave defaults on (Log screen); Just Train passes false since it has no draft.
+// Add or remove a set slot while logging. Values already typed are captured first, so the
+// re-render doesn't discard them. Removing only ever drops the LAST slot, and refuses to
+// discard data without asking.
+function addLogSet(ei){
+  const ex = db.activeSession && db.activeSession.exercises[ei];
+  if(!ex) return;
+  autosaveDraft();
+  ex.sets = (ex.sets||3) + 1;
+  renderLog();
+}
+function removeLogSet(ei){
+  const ex = db.activeSession && db.activeSession.exercises[ei];
+  if(!ex || (ex.sets||3) <= 1) return;
+  const last = (ex.sets||3) - 1;
+  const kg = document.getElementById('ex-'+ei+'-kg-'+last)?.value;
+  const reps = document.getElementById('ex-'+ei+'-reps-'+last)?.value;
+  if((kg||reps) && !confirm('That set has values logged. Remove it anyway?')) return;
+  autosaveDraft();
+  ex.sets = (ex.sets||3) - 1;
+  if(ex.draftSets) ex.draftSets = ex.draftSets.slice(0, ex.sets);
+  autosaveDraft();
+  renderLog();
+}
+
+function addJtSet(ei){
+  const ex = jtExercises[ei];
+  if(!ex) return;
+  jtCaptureInputs();
+  ex.sets = (ex.sets||3) + 1;
+  jtRenderSession();
+}
+function removeJtSet(ei){
+  const ex = jtExercises[ei];
+  if(!ex || (ex.sets||3) <= 1) return;
+  const last = (ex.sets||3) - 1;
+  const kg = document.getElementById('jt-'+ei+'-kg-'+last)?.value;
+  const reps = document.getElementById('jt-'+ei+'-reps-'+last)?.value;
+  if((kg||reps) && !confirm('That set has values logged. Remove it anyway?')) return;
+  jtCaptureInputs();
+  ex.sets = (ex.sets||3) - 1;
+  if(ex.draftSets) ex.draftSets = ex.draftSets.slice(0, ex.sets);
+  jtRenderSession();
+}
+
 function stepInput(id, delta, autosave){
   const el=document.getElementById(id);
   if(!el) return;
@@ -5294,6 +5341,9 @@ function jtRenderSession() {
           + '</div>')
       + banner
       + setRows
+      + (ex.isCardio ? '' : '<div style="margin:2px 0 6px 48px;"><button type="button" class="btn btn-sm" style="font-size:11px;padding:3px 8px;" data-ei="' + ei + '" onclick="addJtSet(parseInt(this.dataset.ei))">+ Add set</button>'
+        + ((ex.sets||3)>1 ? '<button type="button" class="btn btn-sm" style="font-size:11px;padding:3px 8px;margin-left:6px;color:var(--faint);" data-ei="' + ei + '" onclick="removeJtSet(parseInt(this.dataset.ei))" title="Remove the last set">\u2212</button>' : '')
+        + '</div>')
       + cueHtml
       + '<input class="note-inp" type="text" id="jt-' + ei + '-note" value="' + String(ex.draftNote||'').replace(/"/g,'&quot;') + '" placeholder="Note for this exercise..." oninput="jtSaveDraft()">'
       + '</div>'
@@ -5365,9 +5415,10 @@ async function jtParseVoice(){
     + 'RULES:\n'
     + '- Weights are kilograms. "three sets of eight at sixty" = 3 sets, each {kg:60, reps:8}.\n'
     + '- If sets differ ("60 for 8 then 65 for 5"), output each set separately.\n'
-    + '- NEVER infer a set count. If no number of sets is stated, output EXACTLY ONE set.\n'
-    + '  "24 kilos, twelve reps each side" = ONE set {kg:24, reps:12} with modifier "Unilateral".\n'
-    + '  "each side"/"per arm"/"per leg" describes HOW the set was done — it never means two sets.\n'
+    + '- If a number of sets IS stated, use exactly that many. If NO set count is stated, default\n'
+    + '  to THREE identical sets with the given weight and reps.\n'
+    + '  "24 kilos, twelve reps each side" = THREE sets of {kg:24, reps:12}, modifier "Unilateral".\n'
+    + '  "each side"/"per arm"/"per leg" describes HOW a set was done — it never means two sets.\n'
     + '- "to failure"/"as many as possible" with a stated estimate ("about eight") => use that number.\n'
     + '- A hold ("held for 30 seconds", "planke") => modifier "Isometric hold", SECONDS go in reps, kg null unless weighted.\n'
     + '- Bodyweight moves have kg null.\n'
@@ -5429,7 +5480,7 @@ async function jtParseVoice(){
       const mins = pe.minutes != null ? pe.minutes
         : (sets.length && sets[0].reps != null ? sets[0].reps : (sets.length && sets[0].kg != null ? sets[0].kg : null));
       jtExercises.push({
-        name: lib.name, muscle: lib.muscle, sets: isCardio ? 1 : Math.max(sets.length, 1),
+        name: lib.name, muscle: lib.muscle, sets: isCardio ? 1 : Math.max(sets.length, 3),
         isCardio, equipment: isCardio ? '' : equipment, modifier,
         group: (!isCardio && /^[A-E]$/.test(String(pe.group||'').toUpperCase())) ? String(pe.group).toUpperCase() : '',
         reps: isCardio ? ((mins != null ? mins : 30) + ' min') : '10 reps',
@@ -5603,7 +5654,7 @@ async function jtResolveUnmatched(ui){
     : (uSets.length && uSets[0].reps != null ? uSets[0].reps : null);
   jtCaptureInputs();
   jtExercises.push({
-    name: lib.name, muscle: lib.muscle, sets: isCardio ? 1 : Math.max(uSets.length, 1),
+    name: lib.name, muscle: lib.muscle, sets: isCardio ? 1 : Math.max(uSets.length, 3),
     isCardio, equipment: isCardio ? '' : (EQUIPMENT.includes(u.equipment) ? u.equipment : (lastEquipmentFor(lib.name)||'')),
     modifier: MODIFIERS.includes(u.modifier) ? u.modifier : '',
     reps: isCardio ? ((uMins != null ? uMins : 30) + ' min') : '10 reps',
