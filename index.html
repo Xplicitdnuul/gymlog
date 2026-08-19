@@ -567,6 +567,9 @@ html.mobile-layout .topbar { display:flex; align-items:center; gap:6px; position
           <button class="filter-pill" onclick="setStrengthRef(this,365)">1 year</button>
           <button class="filter-pill sel" onclick="setStrengthRef(this,0)">Match period</button>
         </div>
+        <div style="display:flex;gap:8px;margin-bottom:8px;align-items:center;">
+          <select id="strength-ex-add" class="set-inp" style="flex:1;min-width:0;width:auto;font-size:12px;padding:5px 8px;" onchange="addStrengthEx(this.value)"></select>
+        </div>
         <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap;" id="strength-ex-filter"></div>
         <div style="position:relative;width:100%;height:200px;"><canvas id="chart-strength"></canvas></div>
       </div>
@@ -3539,13 +3542,27 @@ async function renderProgress() {
   renderVolumeChart(sessions);
 
   // ── STRENGTH EXERCISE FILTER ── (keyed by movement + equipment so variants stay separate)
-  const exItems = [...new Map(sessions.flatMap(s => (s.exercises||[])
-      .filter(e => !e.isCardio && e.loggedSets?.sets?.some(st => st.kg))
-      .map(e => { const eq=e.equipment||''; const key=e.name+'|||'+eq; const label=e.name+(eq?' · '+eq:''); return [key,{key,label}]; })
-    )).values()];
+  const exCount = {};
+  const exMap = new Map();
+  sessions.forEach(s => (s.exercises||[])
+    .filter(e => !e.isCardio && e.loggedSets?.sets?.some(st => st.kg))
+    .forEach(e => {
+      const eq = e.equipment||'';
+      const key = e.name+'|||'+eq;
+      exCount[key] = (exCount[key]||0) + 1;
+      if(!exMap.has(key)){
+        const lib = (db.library||[]).find(l => l.name === e.name);
+        exMap.set(key, {key, label: e.name + (eq?' \u00b7 '+eq:''), name: e.name,
+          muscle: (lib && lib.muscle) ? lib.muscle.split(',')[0].trim() : (e.muscle||'Other').split(',')[0].trim()});
+      }
+    }));
+  const exItems = [...exMap.values()]
+    .map(x => ({...x, n: exCount[x.key]||0}))
+    .sort((a,b) => b.n - a.n || a.label.localeCompare(b.label));
+  // Default to the three most-logged lifts rather than whichever happened to come first
   if(!strengthExercises.length) strengthExercises = exItems.slice(0, 3).map(x => x.key);
-  document.getElementById('strength-ex-filter').innerHTML =
-    exItems.map(x => `<button class="filter-pill${strengthExercises.includes(x.key) ? ' sel' : ''}" data-key="${x.key.replace(/"/g,'&quot;')}" onclick="toggleStrengthEx(this,this.dataset.key)">${x.label}</button>`).join('');
+  _strengthExItems = exItems;
+  renderStrengthPicker();
   renderStrengthChart(sessions);
 
   // ── CARDIO PANEL ──
@@ -3611,9 +3628,50 @@ async function renderProgress() {
     '<p style="font-size:13px;color:var(--muted);">No logged sets yet.</p>';
 }
 
-function toggleStrengthEx(btn, n) {
-  btn.classList.toggle('sel');
-  strengthExercises = strengthExercises.includes(n) ? strengthExercises.filter(x => x !== n) : [...strengthExercises, n];
+// Exercise picker for the strength chart. A flat wall of pills doesn't scale past a dozen
+// lifts, so: pick from a dropdown grouped by muscle and ordered by how often you've logged
+// it, and the chosen lifts appear as removable chips. Unit and period controls are untouched.
+let _strengthExItems = [];
+
+function renderStrengthPicker(){
+  const sel = document.getElementById('strength-ex-add');
+  const chips = document.getElementById('strength-ex-filter');
+  if(!sel || !chips) return;
+
+  const available = _strengthExItems.filter(x => !strengthExercises.includes(x.key));
+  const byMuscle = {};
+  available.forEach(x => { (byMuscle[x.muscle] = byMuscle[x.muscle] || []).push(x); });
+  sel.innerHTML = '<option value="">'
+    + (available.length ? 'Add an exercise\u2026' : 'All logged exercises shown')
+    + '</option>'
+    + Object.keys(byMuscle).sort().map(m =>
+        '<optgroup label="' + m + '">'
+        + byMuscle[m].map(x => '<option value="' + x.key.replace(/"/g,'&quot;') + '">'
+            + x.label + ' (' + x.n + ' session' + (x.n===1?'':'s') + ')</option>').join('')
+        + '</optgroup>').join('');
+  sel.value = '';
+
+  const chosen = strengthExercises
+    .map(k => _strengthExItems.find(x => x.key === k))
+    .filter(Boolean);
+  chips.innerHTML = chosen.length
+    ? chosen.map(x => '<span class="filter-pill sel" style="display:inline-flex;align-items:center;gap:6px;">'
+        + x.label
+        + '<span data-key="' + x.key.replace(/"/g,'&quot;') + '" onclick="removeStrengthEx(this.dataset.key)" style="cursor:pointer;font-size:14px;line-height:1;opacity:0.7;">\u00d7</span>'
+        + '</span>').join('')
+    : '<span style="font-size:12px;color:var(--muted);">Pick an exercise above to plot it.</span>';
+}
+
+function addStrengthEx(key){
+  if(!key || strengthExercises.includes(key)) return;
+  strengthExercises = [...strengthExercises, key];
+  renderStrengthPicker();
+  renderStrengthChart(getFilteredSessions());
+}
+
+function removeStrengthEx(key){
+  strengthExercises = strengthExercises.filter(x => x !== key);
+  renderStrengthPicker();
   renderStrengthChart(getFilteredSessions());
 }
 
