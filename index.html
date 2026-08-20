@@ -1687,8 +1687,13 @@ async function renderOverview() {
         + '</div>';
     }).join('');
 
-    const musclesHtml = selectedDayData && selectedDayData.muscles
-      ? selectedDayData.muscles.slice(0,3).map(m => '<span class="tag tag-blue" style="margin-right:3px;">' + m + '</span>').join('') : '';
+    const ovPrev = programmeDayPreview(selectedDayData, {maxMuscles:4, maxLifts:5});
+    const musclesHtml = ovPrev.muscles.length
+      ? ovPrev.muscles.map(m => '<span class="tag tag-blue" style="margin-right:3px;">' + m + '</span>').join('') : '';
+    const ovLiftsHtml = ovPrev.lifts.length
+      ? '<div style="font-size:12px;color:var(--muted);margin-bottom:8px;line-height:1.5;">'
+        + ovPrev.lifts.join(' \u00b7 ') + (ovPrev.more ? ' \u00b7 +' + ovPrev.more + ' more' : '') + '</div>'
+      : '';
     const isRest = selectedDayData && selectedDayData.type === 'rest';
     const isScheduledDay = selectedDay === currentDay;
 
@@ -1701,7 +1706,8 @@ async function renderOverview() {
       + '</div>'
       + '<div class="day-strip" style="margin-bottom:12px;">' + dotHtml + '</div>'
       + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
-      + '<div>' + musclesHtml + '</div>'
+      + (musclesHtml ? '<div style="margin-bottom:6px;">' + musclesHtml + '</div>' : '')
+      + ovLiftsHtml
       + (!isScheduledDay ? '<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:20px;background:#FAEEDA;color:#633806;">out of order</span>' : '')
       + '</div>'
       + '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">'
@@ -4314,6 +4320,42 @@ function programmeMatrixHtml(prog, days){
   return html;
 }
 
+// Preview lines for a programme day: primary muscle groups (deduped, ranked by how many of
+// the day's exercises hit them) and the actual lifts. The stored `muscles` array holds each
+// exercise's whole comma-joined tag string per element, so using it raw produces runs like
+// "Hamstrings Hamstrings, Glutes, Back". Shared by the Overview and Programme panels.
+function programmeDayPreview(dayData, opts){
+  opts = opts || {};
+  const maxMuscles = opts.maxMuscles || 5;
+  const maxLifts = opts.maxLifts || 6;
+  if(!dayData || dayData.type === 'rest') return {muscles: [], lifts: [], exercises: []};
+  const w = (db.savedWorkouts||[]).find(w =>
+    (dayData.workoutId && String(w.id) === String(dayData.workoutId))
+    || ((w.sessionTitle || w.title) === dayData.workoutTitle));
+  const exercises = w ? (w.exercises || []) : [];
+
+  const freq = {};
+  exercises.forEach(ex => {
+    if(!ex || ex.isCardio) return;
+    const lib = (db.library||[]).find(l => l.name === ex.name);
+    const raw = (lib && lib.muscle) ? lib.muscle : (ex.muscle||'');
+    String(raw).split(',').map(m=>m.trim()).filter(Boolean)
+      .filter(m => MUSCLES_W.includes(m) && !MUSCLE_UMBRELLAS[m])
+      .forEach(m => { freq[m] = (freq[m]||0) + 1; });
+  });
+  let muscles = Object.keys(freq).sort((a,b) => freq[b]-freq[a]).slice(0, maxMuscles);
+  if(!muscles.length && dayData.muscles){
+    muscles = [...new Set(dayData.muscles.flatMap(m => String(m).split(',').map(x=>x.trim())).filter(Boolean))]
+      .slice(0, maxMuscles);
+  }
+  return {
+    muscles,
+    lifts: exercises.slice(0, maxLifts).map(ex => ex.name),
+    more: Math.max(0, exercises.length - maxLifts),
+    exercises
+  };
+}
+
 function renderActiveProgramme() {
   const el = document.getElementById('active-programme-section');
   reconcileProgrammeProgress();
@@ -4362,39 +4404,13 @@ function renderActiveProgramme() {
   // The stored `muscles` array holds each exercise's full comma-joined tag string as a single
   // element, so rendering it directly produced runs like "Hamstrings Hamstrings, Glutes, Back".
   // Split, dedupe, and show the PRIMARY muscles by how much of the day they account for.
-  const previewWorkout = selectedDayData && !(selectedDayData.type === 'rest')
-    ? (db.savedWorkouts||[]).find(w =>
-        (selectedDayData.workoutId && String(w.id) === String(selectedDayData.workoutId))
-        || ((w.sessionTitle || w.title) === selectedDayData.workoutTitle))
-    : null;
-  const previewExercises = previewWorkout ? (previewWorkout.exercises || []) : [];
-
-  // Line 1 — primary muscle groups, ranked by number of exercises hitting them
-  const muscleFreq = {};
-  previewExercises.forEach(ex => {
-    if(!ex || ex.isCardio) return;
-    const lib = (db.library||[]).find(l => l.name === ex.name);
-    const raw = (lib && lib.muscle) ? lib.muscle : (ex.muscle||'');
-    String(raw).split(',').map(m=>m.trim()).filter(Boolean)
-      .filter(m => MUSCLES_W.includes(m) && !MUSCLE_UMBRELLAS[m])
-      .forEach(m => { muscleFreq[m] = (muscleFreq[m]||0) + 1; });
-  });
-  let topMuscles = Object.keys(muscleFreq).sort((a,b) => muscleFreq[b]-muscleFreq[a]).slice(0,5);
-  if(!topMuscles.length && selectedDayData && selectedDayData.muscles){
-    // Fall back to the stored tags when the workout can't be resolved — split and deduped
-    topMuscles = [...new Set(selectedDayData.muscles
-      .flatMap(m => String(m).split(',').map(x => x.trim()))
-      .filter(Boolean))].slice(0,5);
-  }
-  const muscleTagsHtml = topMuscles.length
-    ? topMuscles.map(m => '<span class="tag tag-blue" style="margin-right:4px;">' + m + '</span>').join('')
+  const dayPrev = programmeDayPreview(selectedDayData);
+  const muscleTagsHtml = dayPrev.muscles.length
+    ? dayPrev.muscles.map(m => '<span class="tag tag-blue" style="margin-right:4px;">' + m + '</span>').join('')
     : '';
-
-  // Line 2 — the actual lifts, so you know what you're walking into
-  const liftsHtml = previewExercises.length
+  const liftsHtml = dayPrev.lifts.length
     ? '<div style="font-size:12px;color:var(--color-text-secondary);margin-bottom:10px;line-height:1.5;">'
-      + previewExercises.slice(0,6).map(ex => ex.name).join(' \u00b7 ')
-      + (previewExercises.length > 6 ? ' \u00b7 +' + (previewExercises.length-6) + ' more' : '')
+      + dayPrev.lifts.join(' \u00b7 ') + (dayPrev.more ? ' \u00b7 +' + dayPrev.more + ' more' : '')
       + '</div>'
     : '';
   const isRestDay = selectedDayData && selectedDayData.type === 'rest';
