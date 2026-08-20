@@ -4359,8 +4359,44 @@ function renderActiveProgramme() {
   }).join('');
 
   // Preview panel for selected day
-  const muscleTagsHtml = (selectedDayData && selectedDayData.muscles) ?
-    selectedDayData.muscles.map(m => '<span class="tag tag-blue" style="margin-right:4px;">' + m + '</span>').join('') : '';
+  // The stored `muscles` array holds each exercise's full comma-joined tag string as a single
+  // element, so rendering it directly produced runs like "Hamstrings Hamstrings, Glutes, Back".
+  // Split, dedupe, and show the PRIMARY muscles by how much of the day they account for.
+  const previewWorkout = selectedDayData && !(selectedDayData.type === 'rest')
+    ? (db.savedWorkouts||[]).find(w =>
+        (selectedDayData.workoutId && String(w.id) === String(selectedDayData.workoutId))
+        || ((w.sessionTitle || w.title) === selectedDayData.workoutTitle))
+    : null;
+  const previewExercises = previewWorkout ? (previewWorkout.exercises || []) : [];
+
+  // Line 1 — primary muscle groups, ranked by number of exercises hitting them
+  const muscleFreq = {};
+  previewExercises.forEach(ex => {
+    if(!ex || ex.isCardio) return;
+    const lib = (db.library||[]).find(l => l.name === ex.name);
+    const raw = (lib && lib.muscle) ? lib.muscle : (ex.muscle||'');
+    String(raw).split(',').map(m=>m.trim()).filter(Boolean)
+      .filter(m => MUSCLES_W.includes(m) && !MUSCLE_UMBRELLAS[m])
+      .forEach(m => { muscleFreq[m] = (muscleFreq[m]||0) + 1; });
+  });
+  let topMuscles = Object.keys(muscleFreq).sort((a,b) => muscleFreq[b]-muscleFreq[a]).slice(0,5);
+  if(!topMuscles.length && selectedDayData && selectedDayData.muscles){
+    // Fall back to the stored tags when the workout can't be resolved — split and deduped
+    topMuscles = [...new Set(selectedDayData.muscles
+      .flatMap(m => String(m).split(',').map(x => x.trim()))
+      .filter(Boolean))].slice(0,5);
+  }
+  const muscleTagsHtml = topMuscles.length
+    ? topMuscles.map(m => '<span class="tag tag-blue" style="margin-right:4px;">' + m + '</span>').join('')
+    : '';
+
+  // Line 2 — the actual lifts, so you know what you're walking into
+  const liftsHtml = previewExercises.length
+    ? '<div style="font-size:12px;color:var(--color-text-secondary);margin-bottom:10px;line-height:1.5;">'
+      + previewExercises.slice(0,6).map(ex => ex.name).join(' \u00b7 ')
+      + (previewExercises.length > 6 ? ' \u00b7 +' + (previewExercises.length-6) + ' more' : '')
+      + '</div>'
+    : '';
   const isRestDay = selectedDayData && selectedDayData.type === 'rest';
   const isScheduledDay = selectedDay === currentDay;
 
@@ -4373,7 +4409,8 @@ function renderActiveProgramme() {
     + (!isScheduledDay ? '<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:20px;background:#FAEEDA;color:#633806;">out of order</span>' : '')
     + '</div>'
     + '<div style="font-size:15px;font-weight:500;margin-bottom:8px;">' + (selectedDayData.workoutTitle || 'Rest day') + '</div>'
-    + '<div style="margin-bottom:10px;">' + muscleTagsHtml + '</div>'
+    + (muscleTagsHtml ? '<div style="margin-bottom:6px;">' + muscleTagsHtml + '</div>' : '')
+    + liftsHtml
     + (isRestDay
         ? '<button class="btn btn-sm" onclick="skipProgrammeDay()">Mark rest day done →</button>'
         : '<div style="display:flex;gap:8px;flex-wrap:wrap;">'
