@@ -2503,7 +2503,15 @@ function renderLog() {
   html2+='<div style="font-size:16px;font-weight:500;margin-bottom:2px;">'+( s.sessionTitle||'Session')+'</div>';
   html2+='<div style="font-size:13px;color:var(--muted);margin-bottom:12px;">'+(s.muscles?s.muscles.join(', '):'')+'</div>';
   if(isDraft) html2+='<div class="draft-banner"><span>Autosaved draft — your progress is safe.</span></div>';
-  html2+='<div style="margin-bottom:10px;"><button class="btn btn-sm" style="border-color:#9FE1CB;color:#0F6E56;background:#E1F5EE;" onclick="addCardioBlock()">+ Add cardio</button></div>';
+  // Add-on exercises: a scheduled workout is a plan, not a cage — extra work should be
+  // loggable in the session rather than forcing a separate Just Train entry.
+  const addOpts = '<option value="">+ Add exercise\u2026</option>'
+    + activeLibrary().slice().sort((a,b)=>a.name.localeCompare(b.name))
+        .map(l=>'<option value="'+l.name.replace(/"/g,'&quot;')+'">'+l.name+'</option>').join('');
+  html2+='<div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center;">'
+    +'<select class="set-inp" style="flex:1;min-width:140px;width:auto;font-size:12px;padding:5px 8px;color:var(--muted);" onchange="addLogExercise(this.value);this.value=\'\';">'+addOpts+'</select>'
+    +'<button class="btn btn-sm" style="border-color:#9FE1CB;color:#0F6E56;background:#E1F5EE;" onclick="addCardioBlock()">+ Add cardio</button>'
+    +'</div>';
   html2+='<div id="cardio-blocks"></div>';
 
   const swapOpts = '<option value="">Swap exercise\u2026</option>' + activeLibrary().slice().sort((a,b)=>a.name.localeCompare(b.name)).map(l=>'<option value="'+l.name.replace(/"/g,'&quot;')+'">'+l.name.replace(/</g,'&lt;')+'</option>').join('');
@@ -2601,7 +2609,11 @@ function renderLog() {
     html2+='<div class="ex-block">';
     html2+='<div class="ex-head" onclick="toggleExBlock('+ei+')">';
     html2+='<span style="font-size:14px;font-weight:500;">'+ex.name+'</span>';
-    html2+='<span style="display:flex;align-items:center;gap:8px;"><span class="'+(ex.isCardio?'tag-cardio':ex.isRepeat?'tag-repeat':'tag-new')+'">'+(ex.isCardio?'cardio':ex.isRepeat?'repeated':'fresh pick')+'</span><span class="ex-caret" id="excaret-'+ei+'" style="color:var(--faint);font-size:13px;">'+(exExpanded?'\u25be':'\u25b8')+'</span></span>';
+    html2+='<span style="display:flex;align-items:center;gap:8px;">'
+      +(ex.isExtra?'<span class="tag-repeat" style="background:rgba(46,125,50,0.12);color:#2E7D32;">added</span>':'')
+      +'<span class="'+(ex.isCardio?'tag-cardio':ex.isRepeat?'tag-repeat':'tag-new')+'">'+(ex.isCardio?'cardio':ex.isRepeat?'repeated':'fresh pick')+'</span>'
+      +(ex.isExtra?'<span data-ei="'+ei+'" onclick="event.stopPropagation();removeLogExercise(parseInt(this.dataset.ei))" title="Remove from this session" style="color:var(--faint);font-size:15px;cursor:pointer;line-height:1;">\u00d7</span>':'')
+      +'<span class="ex-caret" id="excaret-'+ei+'" style="color:var(--faint);font-size:13px;">'+(exExpanded?'\u25be':'\u25b8')+'</span></span>';
     html2+='</div>';
     html2+='<div class="ex-body" id="exbody-'+ei+'"'+(exExpanded?'':' style="display:none;"')+'>';
     html2+='<div style="font-size:12px;color:var(--muted);margin-bottom:8px;">'+(ex.isCardio?ex.muscle+' &middot; '+ex.reps:ex.muscle+' &middot; target '+numSets+' sets &times; '+ex.reps)+'</div>';
@@ -2679,6 +2691,35 @@ function swapLogExercise(ei,name){
 // Add or remove a set slot while logging. Values already typed are captured first, so the
 // re-render doesn't discard them. Removing only ever drops the LAST slot, and refuses to
 // discard data without asking.
+// Append an exercise to the session in progress. Marked isExtra so it's visually distinct
+// from the planned work and doesn't imply the saved workout changed.
+function addLogExercise(name){
+  if(!name || !db.activeSession) return;
+  const lib = (db.library||[]).find(l => l.name === name);
+  if(!lib) return;
+  const isCardio = String(lib.muscle||'').toLowerCase().includes('cardio');
+  autosaveDraft();
+  db.activeSession.exercises.push({
+    name: lib.name, muscle: lib.muscle, sets: 3, reps: '10 reps',
+    isCardio, equipment: isCardio ? '' : (lastEquipmentFor(lib.name)||''),
+    modifier: '', group: '', isRepeat: false, isExtra: true,
+    wuHidden: true, wuDrafts: []
+  });
+  autosaveDraft();
+  renderLog();
+  toast('Added ' + lib.name + ' to this session.');
+}
+
+function removeLogExercise(ei){
+  const ex = db.activeSession && db.activeSession.exercises[ei];
+  if(!ex) return;
+  if(!confirm('Remove ' + ex.name + ' from this session?')) return;
+  autosaveDraft();
+  db.activeSession.exercises.splice(ei, 1);
+  autosaveDraft();
+  renderLog();
+}
+
 function addLogSet(ei){
   const ex = db.activeSession && db.activeSession.exercises[ei];
   if(!ex) return;
@@ -5065,13 +5106,25 @@ function sessionInsights(s){
     const sameKey = priorEx(ex.name)
       .filter(e => (e.equipment||'')===(ex.equipment||'') && (e.modifier||'')===(ex.modifier||''));
 
-    // Heaviest weight ever for this exercise/equipment/modifier
+    // Heaviest weight for this exercise/equipment/modifier.
+    // The comparison is bucket-scoped (unilateral work isn't comparable to bilateral), but
+    // the LABEL must not overstate it: claiming "heaviest ever" when the same weight was
+    // already hit under another variant made the same number read as a record repeatedly.
     if(!isIsometric(ex)){
       const maxKg = Math.max(...sets.filter(t=>t.kg).map(t=>t.kg||0), 0);
       const prevMax = sameKey.length
         ? Math.max(...sameKey.flatMap(e => workingSets(e).filter(t=>t.kg).map(t=>t.kg||0)), 0) : 0;
+      // Best for this movement across every equipment/modifier variant
+      const allPrevMax = Math.max(...priorEx(ex.name)
+        .flatMap(e => workingSets(e).filter(t=>t.kg).map(t=>t.kg||0)), 0);
       if(maxKg > 0 && maxKg > prevMax && sameKey.length){
-        out.push({type:'pr', text:'Heaviest ever ' + ex.name + ' — ' + maxKg + 'kg, up from ' + prevMax + 'kg'});
+        const variant = [ex.equipment, ex.modifier].filter(Boolean).join(', ');
+        if(maxKg > allPrevMax){
+          out.push({type:'pr', text:'Heaviest ever ' + ex.name + ' \u2014 ' + maxKg + 'kg, up from ' + prevMax + 'kg'});
+        } else {
+          out.push({type:'pr', text:'Best ' + ex.name + (variant ? ' (' + variant + ')' : '')
+            + ' \u2014 ' + maxKg + 'kg, up from ' + prevMax + 'kg'});
+        }
       }
       // Estimated 1RM record (catches rep PRs at the same weight)
       const e1 = Math.max(...sets.filter(t=>t.kg&&t.reps).map(t=>t.kg*(1+t.reps/30)), 0);
