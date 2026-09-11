@@ -4970,9 +4970,13 @@ function renderHistoryList() {
     const vol = calcVolume(exercises);
     const volStr = vol > 0 ? (vol > 1000 ? (vol/1000).toFixed(1) + 'k' : vol) + ' kg vol' : '';
     const cardioEx = exercises.filter(e => e.isCardio);
-    const liftEx = exercises.filter(e => !e.isCardio);
+    // Only count exercises that were actually logged — a planned-but-skipped exercise is
+    // still stored on the session, and counting it overstates what was done.
+    const liftEx = exercises.filter(e => !e.isCardio && (e.loggedSets?.sets||[]).length);
+    const skippedEx = exercises.filter(e => !e.isCardio && !(e.loggedSets?.sets||[]).length);
     const exSummary = [
-      liftEx.length ? liftEx.length + ' exercise' + (liftEx.length !== 1 ? 's' : '') : '',
+      liftEx.length ? liftEx.length + ' exercise' + (liftEx.length !== 1 ? 's' : '')
+        + (skippedEx.length ? ' (+' + skippedEx.length + ' skipped)' : '') : '',
       cardioEx.length ? cardioEx.length + ' cardio' : '',
       volStr
     ].filter(Boolean).join(' · ');
@@ -5245,7 +5249,7 @@ function sessionRecap(s){
     + '<div class="recap-stats">'
       + stat(Math.round(vol/1000*10)/10 + 'k', 'kg volume')
       + stat(setCount, 'sets')
-      + stat(exercises.filter(e=>!e.isCardio).length, 'exercises')
+      + stat(exercises.filter(e=>!e.isCardio && (e.loggedSets?.sets||[]).length).length, 'exercises')
       + (cardioMins ? stat(Math.round(cardioMins), 'min cardio') : '')
     + '</div>'
     + sessionMatrix(exercises, s.date)
@@ -6284,7 +6288,7 @@ function exportHistoryCSV() {
 
   const rows = [];
   // Header
-  rows.push(['Date','Session title','Muscles','Exercise','Sets','Set','kg','Reps','Exercise note','Session note'].join(','));
+  rows.push(['Date','Session title','Muscles','Exercise','Equipment','Modifier','Group','Sets','Set','Warm-up','kg','Reps','Status','Exercise note','Session note'].join(','));
 
   db.sessions.forEach(s => {
     const date = s.date ? localDateKey(s.date) : '';
@@ -6294,7 +6298,7 @@ function exportHistoryCSV() {
     const exercises = safeJSON(s.exercises, []);
 
     if(!exercises.length) {
-      rows.push([date, title, muscles, '', '', '', '', '', '', sessionNote].join(','));
+      rows.push([date, title, muscles, '', '', '', '', '', '', '', '', '', 'no exercises', '', sessionNote].join(','));
       return;
     }
 
@@ -6303,8 +6307,14 @@ function exportHistoryCSV() {
       const exNote = (ex.loggedSets && ex.loggedSets.note ? ex.loggedSets.note : '').replace(/,/g, ';').replace(/\n/g, ' ');
       const sets = ex.loggedSets && ex.loggedSets.sets ? ex.loggedSets.sets : [];
 
+      const eq = (ex.equipment || '').replace(/,/g, ';');
+      const mod = (ex.modifier || '').replace(/,/g, ';');
+      const grp = ex.group || '';
+
+      // An exercise that was planned but never logged: kept as one row marked "skipped"
+      // rather than silently dropped, so planned-vs-done stays visible in the export.
       if(!sets.length) {
-        rows.push([date, title, muscles, exName, ex.sets || '', '', '', '', exNote, sessionNote].join(','));
+        rows.push([date, title, muscles, exName, eq, mod, grp, ex.sets || '', '', '', '', '', 'skipped', exNote, sessionNote].join(','));
         return;
       }
 
@@ -6314,10 +6324,15 @@ function exportHistoryCSV() {
           title,
           muscles,
           exName,
+          eq,
+          mod,
+          grp,
           ex.sets || sets.length,
           si + 1,
+          st.warmup ? 'yes' : '',
           st.kg != null ? st.kg : '',
           st.reps != null ? st.reps : '',
+          'logged',
           exNote,
           sessionNote
         ].join(','));
