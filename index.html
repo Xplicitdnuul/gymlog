@@ -2026,9 +2026,11 @@ function renderWorkoutEditor(w, idx) {
       +'<option value="cardio"'+(isCardio?' selected':'')+'>Cardio</option>'
       +'</select></div>'
       +'</div>'
-      +(isCardio?'':'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;">'
+      +(isCardio?'':'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px;">'
           +'<div class="form-group"><label class="form-label">Equipment</label>'
           +'<select data-ei="'+ei+'" onchange="weUpdateEquipment(parseInt(this.dataset.ei),this.value)">'+equipmentOptions(ex.equipment)+'</select></div>'
+          +'<div class="form-group"><label class="form-label">Performed as</label>'
+          +'<select data-ei="'+ei+'" onchange="weUpdateModifier(parseInt(this.dataset.ei),this.value)">'+modifierOptions(ex.modifier)+'</select></div>'
           +'<div class="form-group"><label class="form-label">Superset group</label>'
           +'<select data-ei="'+ei+'" onchange="weUpdateGroup(parseInt(this.dataset.ei),this.value)">'+builderGroupOptions(ex.group)+'</select></div>'
           +'</div>')
@@ -2064,6 +2066,7 @@ function weUpdateReps(ei, reps) { editingWorkoutExercises[ei].reps = reps; }
 function weUpdateCardio(ei, isCardio) { editingWorkoutExercises[ei].isCardio = isCardio; }
 function weUpdateEquipment(ei, val) { editingWorkoutExercises[ei].equipment = val; }
 function weUpdateGroup(ei, val) { editingWorkoutExercises[ei].group = val||''; }
+function weUpdateModifier(ei, val) { editingWorkoutExercises[ei].modifier = val||''; }
 
 function weRemoveExercise(ei) {
   editingWorkoutExercises.splice(ei, 1);
@@ -4035,6 +4038,7 @@ function renderBuilderList(){
     +'<div style="font-size:13px;font-weight:500;">'+ex.name+(ex.group?'<span class="ss-badge">SS '+ex.group+'</span>':'')+'</div>'
     +'<div style="font-size:11px;color:var(--muted);">'+ex.muscle+' &middot; '+ex.sets+' sets &times; '+ex.reps+'</div>'
     +(ex.isCardio?'':'<select data-i="'+i+'" onchange="builderUpdateEquipment(parseInt(this.dataset.i),this.value)" style="margin-top:5px;width:auto;min-width:140px;font-size:11px;padding:4px 7px;border:0.5px solid var(--border-md);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);font-family:var(--font);">'+equipmentOptions(ex.equipment)+'</select>')
+    +(ex.isCardio?'':'<select data-i="'+i+'" title="How the exercise is performed" onchange="builderUpdateModifier(parseInt(this.dataset.i),this.value)" style="margin-top:5px;margin-left:6px;width:auto;min-width:130px;font-size:11px;padding:4px 7px;border:0.5px solid var(--border-md);border-radius:var(--radius-sm);background:var(--surface);color:'+(ex.modifier?'#92600A':'var(--muted)')+';font-family:var(--font);">'+modifierOptions(ex.modifier)+'</select>')
     +'</div>'
     +'<div style="display:flex;gap:8px;align-items:center;">'
     +(ex.isCardio?'':'<select data-i="'+i+'" title="Group with adjacent exercises as a superset" onchange="setBuilderGroup(parseInt(this.dataset.i),this.value)" style="width:auto;font-size:11px;padding:3px 5px;border:0.5px solid var(--border-md);border-radius:var(--radius-sm);background:var(--surface);color:var(--muted);font-family:var(--font);">'+builderGroupOptions(ex.group)+'</select>')
@@ -4051,6 +4055,11 @@ function builderGroupOptions(cur){
 }
 function setBuilderGroup(i,val){
   if(builderExercises[i]) builderExercises[i].group = val||'';
+  renderBuilderList();
+}
+
+function builderUpdateModifier(i,val){
+  if(builderExercises[i]) builderExercises[i].modifier = val||'';
   renderBuilderList();
 }
 
