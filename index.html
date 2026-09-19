@@ -1424,7 +1424,29 @@ async function saveSettings() {
 }
 
 // ── HELPERS ───────────────────────────────────────────────────────
-const MUSCLES_W=['Chest','Back','Shoulders','Biceps','Triceps','Legs','Quads','Hamstrings','Glutes','Adductors','Calves','Core','Forearms','Traps'];
+// Baseline muscle names. This is a SEED and an ordering hint, not a whitelist: the tracked
+// set is derived from the library at runtime (see trackedMuscles), so recategorising the
+// library introduces new groups without a code change. A hardcoded list silently dropped
+// any tag that wasn't in it.
+const MUSCLES_W_BASE=['Chest','Back','Shoulders','Biceps','Triceps','Legs','Quads','Hamstrings','Glutes','Adductors','Calves','Core','Forearms','Traps'];
+// Tags that are categories of movement rather than muscles — never shown as muscle groups.
+const NON_MUSCLE_TAGS=['Cardio','Plyometrics','General'];
+let _trackedCache=null;
+function trackedMuscles(){
+  if(_trackedCache) return _trackedCache;
+  // Library only. Retired categories still sitting in old sessions are deliberately NOT
+  // tracked — the library is the single source of truth for which groups exist, so
+  // recategorising retires the old names everywhere instead of leaving ghosts on the charts.
+  const set=new Set();
+  (db.library||[]).forEach(e => String(e.muscle||'').split(',').map(m=>m.trim()).filter(Boolean)
+    .forEach(m => { if(!NON_MUSCLE_TAGS.includes(m)) set.add(m); }));
+  const all=[...set];
+  // Known names first in their canonical order, then anything new alphabetically
+  const known=MUSCLES_W_BASE.filter(m => all.includes(m));
+  const extra=all.filter(m => !MUSCLES_W_BASE.includes(m)).sort();
+  _trackedCache=[...known, ...extra];
+  return _trackedCache;
+}
 // Umbrella categories and the specific muscles they cover. "Legs" is a container, not a
 // muscle: training Quads must count as training Legs, and a legacy session tagged only
 // "Legs" must count toward Quads/Hamstrings/Glutes. Without this, umbrella terms look
@@ -1809,7 +1831,7 @@ async function renderOverview() {
     try {
       const last28 = db.sessions.filter(s => (Date.now()-new Date(s.date))/864e5 <= 28);
       const hs = hardSetsPerMuscle(last28, 4);
-      const low = MUSCLES_W.filter(m => !MUSCLE_UMBRELLAS[m])
+      const low = trackedMuscles().filter(m => !MUSCLE_UMBRELLAS[m])
         .map(m => ({m, n: hs[m]||0}))
         .filter(x => x.n > 0 && x.n < HARD_SETS_MIN)
         .sort((a,b) => a.n - b.n);
@@ -1827,7 +1849,7 @@ async function renderOverview() {
 
   // ── NEEDS ATTENTION (triage: muscle groups overdue for training) ──
   const dotColor = days => days <= 4 ? '#639922' : days <= 10 ? '#97C459' : days <= 18 ? '#D3D1C7' : '#E24B4A';
-  const due = MUSCLES_W
+  const due = trackedMuscles()
     .map(m => { const days = daysSince(m); const last = days>=999 ? null : new Date(Date.now()-days*864e5); return {m, last, days}; })
     .filter(x => x.days > 7)
     .sort((a,b) => b.days - a.days)
@@ -1886,7 +1908,7 @@ async function renderPlanner() {
   if(libData) db.library = libData.map(e=>({name:e.name,muscle:e.muscle}));
   document.getElementById('planner-date').textContent=new Date().toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long'});
   const goalMuscles=getGoalMuscles();
-  document.getElementById('planner-weights').innerHTML=MUSCLES_W.map(m=>{
+  document.getElementById('planner-weights').innerHTML=trackedMuscles().map(m=>{
     const days=daysSince(m),isSug=days>7,isGoal=goalMuscles.includes(m);
     const cls=['mpill',isGoal?'goal-linked':(isSug?'suggested':''),db.selectedMuscles.includes(m)?'sel':''].filter(Boolean).join(' ');
     return '<button class="'+cls+'" data-m="'+m+'" onclick="togglePlanMuscle(this,this.dataset.m)">'+m+(days<999?' <span class="days-lbl">'+days+'d</span>':'')+'</button>';
@@ -1904,7 +1926,7 @@ function togglePlanMuscle(btn,m){
 }
 
 function renderMuscleSettings(){
-  const weightSel=db.selectedMuscles.filter(m=>MUSCLES_W.includes(m));
+  const weightSel=db.selectedMuscles.filter(m=>trackedMuscles().includes(m));
   const card=document.getElementById('muscle-settings-card');
   if(!weightSel.length){card.style.display='none';return;}
   card.style.display='block';
@@ -1943,7 +1965,7 @@ function selTimeCardio(btn,t){
 
 function updateEstimate(){
   const tLift=parseInt(db.selectedTime||60), tCardio=parseInt(db.selectedTimeCardio||15);
-  const weightSel=db.selectedMuscles.filter(m=>MUSCLES_W.includes(m));
+  const weightSel=db.selectedMuscles.filter(m=>trackedMuscles().includes(m));
   const cardioSel=db.selectedMuscles.filter(m=>MUSCLES_C.includes(m));
   let totalMin=0, totalEx=0;
   weightSel.forEach(m=>{const s=db.muscleSettings[m]||{sets:3,expm:2};totalEx+=s.expm;totalMin+=s.expm*((s.sets*2)+(s.sets*(db.rest.hyp||90)/60));});
@@ -2178,7 +2200,7 @@ async function saveSavedWorkouts(workout){
 // which is why it couldn't prioritise stale muscles or suggest a working weight.
 function buildTrainingContext(){
   // 1. Days since each tracked muscle was last trained (999 = never)
-  const recency = MUSCLES_W.map(m => ({muscle:m, days:daysSince(m)}))
+  const recency = trackedMuscles().map(m => ({muscle:m, days:daysSince(m)}))
     .sort((a,b) => b.days - a.days);
   const recencyTxt = recency
     .map(r => '- ' + r.muscle
@@ -2280,7 +2302,7 @@ async function generateSession(auto) {
   const ctx=buildTrainingContext();
   const libTxt=activeLibrary().map(e=>e.name+' ('+e.muscle+')').join('\n');
   const goalTxt=db.goals.map(g=>g.text).join(', ')||'None';
-  const wm=db.selectedMuscles.filter(m=>MUSCLES_W.includes(m)),cm=db.selectedMuscles.filter(m=>MUSCLES_C.includes(m));
+  const wm=db.selectedMuscles.filter(m=>trackedMuscles().includes(m)),cm=db.selectedMuscles.filter(m=>MUSCLES_C.includes(m));
   const muscleLines=wm.map(m=>{const s=db.muscleSettings[m]||{goal:'hypertrophy',sets:3,expm:2};return '- '+m+': '+s.expm+' exercise(s), '+s.sets+' sets, goal='+s.goal;}).join('\n');
   const defGoal=(db.profile&&db.profile.goal)||'hypertrophy';
 
@@ -3061,7 +3083,11 @@ const RADAR_ORDER = ['Chest','Shoulders','Triceps','Back','Biceps','Traps','Fore
                      'Quads','Hamstrings','Glutes','Adductors','Calves','Core'];
 function renderHardSets(sessions, weeks){
   const perWeek = hardSetsPerMuscle(sessions, weeks);
-  const labels = RADAR_ORDER.filter(m => MUSCLES_W.includes(m) && !MUSCLE_UMBRELLAS[m]);
+  // Known muscles keep their anatomical order; newly introduced categories are appended
+  // rather than silently dropped from the chart.
+  const tracked = trackedMuscles().filter(m => !MUSCLE_UMBRELLAS[m]);
+  const labels = [...RADAR_ORDER.filter(m => tracked.includes(m)),
+                  ...tracked.filter(m => !RADAR_ORDER.includes(m))];
   const data = labels.map(m => perWeek[m] || 0);
   const note = document.getElementById('hardsets-content');
 
@@ -3249,7 +3275,7 @@ function categorizeWorkout(exercises){
 // sessions. Falls back to the stored snapshot for exercises no longer in the library.
 // Drop the per-session muscle cache — call whenever library tags change, or retagging an
 // exercise won't affect recency until the next reload.
-function invalidateMuscleCache(){ (db.sessions||[]).forEach(s=>{ delete s._effMuscles; }); }
+function invalidateMuscleCache(){ (db.sessions||[]).forEach(s=>{ delete s._effMuscles; }); _trackedCache=null; }
 
 function effectiveSessionMuscles(s){
   if(!s) return [];
@@ -3323,7 +3349,7 @@ function buildProgressContext(){
     return v;
   };
   const vNow = volFor(cur4), vPrev = volFor(prev4);
-  const volTxt = MUSCLES_W.map(m => {
+  const volTxt = trackedMuscles().map(m => {
     const a = Math.round(vNow[m]||0), b = Math.round(vPrev[m]||0);
     if(!a && !b) return null;
     return '- ' + m + ': ' + a + 'kg this 4wk vs ' + b + 'kg prior 4wk';
@@ -3578,10 +3604,10 @@ async function renderProgress() {
       });
     });
   });
-  const allMuscles = [...new Set([...Object.keys(muscleLastTrained), ...MUSCLES_W])];
+  const allMuscles = [...new Set([...Object.keys(muscleLastTrained), ...trackedMuscles()])];
   const heatEl = document.getElementById('muscle-heatmap');
   heatEl.innerHTML = '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:7px;">' +
-    MUSCLES_W.map(m => {
+    trackedMuscles().map(m => {
       const days = daysSince(m);
       const last = days < 999;
       const cls = !last ? '' : days <= 4 ? 'hot' : days <= 10 ? 'warm' : days <= 18 ? '' : 'stale';
@@ -3772,7 +3798,7 @@ function renderVolumeChart(sessions){
     String(raw).split(',').map(m=>m.trim()).filter(Boolean).forEach(m => { vol[m] = (vol[m]||0) + kg; });
   }));
 
-  const rows = MUSCLES_W.filter(m => !MUSCLE_UMBRELLAS[m])
+  const rows = trackedMuscles().filter(m => !MUSCLE_UMBRELLAS[m])
     .map(m => ({m, total: vol[m]||0, perWk: Math.round((vol[m]||0)/Math.max(1,weeks))}))
     .filter(r => r.total > 0)
     .sort((a,b) => b.perWk - a.perWk);
@@ -4299,9 +4325,9 @@ function programmeMatrixHtml(prog, days){
       // Assign each exercise to exactly ONE row, chosen by its PRIMARY (first) muscle tag.
       // Matching on "first row that contains any tag" instead would file a Romanian Deadlift
       // under Back, since Back precedes Hamstrings in PM_ROWS.
-      const primaryTag = tags.find(t => PM_ROWS.some(r => r.muscles.includes(t)));
+      const primaryTag = tags.find(t => allRows.some(r => r.muscles.includes(t)));
       if(!primaryTag) return false;
-      const target = PM_ROWS.find(r => r.muscles.includes(primaryTag));
+      const target = allRows.find(r => r.muscles.includes(primaryTag));
       return target && target.label === row.label;
     });
   };
@@ -4317,7 +4343,19 @@ function programmeMatrixHtml(prog, days){
       + '</div>';
   };
 
-  const activeRows = PM_ROWS.filter(row => cols.some(c => { const cell = cellFor(c,row); return cell && cell.length; }));
+  // Categories that don't fit the predefined rows get their own, so a recategorised library
+  // doesn't make exercises disappear from the matrix.
+  const extraTags = new Set();
+  cols.forEach(c => (c.exercises||[]).forEach(ex => {
+    if(!ex || ex.isCardio) return;
+    const lib = (db.library||[]).find(l => l.name === ex.name);
+    const raw = (lib && lib.muscle) ? lib.muscle : (ex.muscle||'');
+    const tags = String(raw).split(',').map(m=>m.trim()).filter(Boolean);
+    const primary = tags.find(t => PM_ROWS.some(r => r.muscles.includes(t)));
+    if(!primary && tags.length && !NON_MUSCLE_TAGS.includes(tags[0])) extraTags.add(tags[0]);
+  }));
+  const allRows = [...PM_ROWS, ...[...extraTags].sort().map(t => ({label:t, muscles:[t]}))];
+  const activeRows = allRows.filter(row => cols.some(c => { const cell = cellFor(c,row); return cell && cell.length; }));
   if(!activeRows.length) return '';
 
   let html = '<div class="card"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">'
@@ -4362,7 +4400,7 @@ function programmeMatrixHtml(prog, days){
       setsPerMuscle[m] = (setsPerMuscle[m]||0) + (ex.sets||3);
     });
   }));
-  const tracked = MUSCLES_W.filter(m => !MUSCLE_UMBRELLAS[m]);
+  const tracked = trackedMuscles().filter(m => !MUSCLE_UMBRELLAS[m]);
   const chips = tracked.map(m => {
     const perWk = Math.round((setsPerMuscle[m]||0) / cycleWeeks);
     if(!perWk) return '<span class="pm-chip none"><b>' + m + '</b> not covered</span>';
@@ -4396,7 +4434,7 @@ function programmeDayPreview(dayData, opts){
     const lib = (db.library||[]).find(l => l.name === ex.name);
     const raw = (lib && lib.muscle) ? lib.muscle : (ex.muscle||'');
     String(raw).split(',').map(m=>m.trim()).filter(Boolean)
-      .filter(m => MUSCLES_W.includes(m) && !MUSCLE_UMBRELLAS[m])
+      .filter(m => trackedMuscles().includes(m) && !MUSCLE_UMBRELLAS[m])
       .forEach(m => { freq[m] = (freq[m]||0) + 1; });
   });
   let muscles = Object.keys(freq).sort((a,b) => freq[b]-freq[a]).slice(0, maxMuscles);
@@ -5503,7 +5541,7 @@ async function renderJustTrain() {
   // the library introduces (e.g. "Plyometrics"). Deriving this from db.library alone left
   // the list empty whenever the library hadn't loaded yet.
   if(musclePick){
-    const muscles = new Set([...MUSCLES_W, ...MUSCLES_C]);
+    const muscles = new Set([...trackedMuscles(), ...MUSCLES_C]);
     activeLibrary().forEach(e => String(e.muscle||'').split(',').map(m=>m.trim()).filter(Boolean).forEach(m=>muscles.add(m)));
     const prev = musclePick.value || '__all';
     musclePick.innerHTML = '<option value="__all">All exercises</option>'
