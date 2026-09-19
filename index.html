@@ -6341,7 +6341,7 @@ function exportHistoryCSV() {
 
   const rows = [];
   // Header
-  rows.push(['Date','Session title','Muscles','Exercise','Equipment','Modifier','Group','Sets','Set','Warm-up','kg','Reps','Status','Exercise note','Session note'].join(','));
+  rows.push(['Date','Session title','Session muscles','Exercise','Primary muscle','Secondary muscles','Equipment','Modifier','Group','Sets','Set','Warm-up','kg','Reps','Status','Exercise note','Session note'].join(','));
 
   db.sessions.forEach(s => {
     const date = s.date ? localDateKey(s.date) : '';
@@ -6351,7 +6351,7 @@ function exportHistoryCSV() {
     const exercises = safeJSON(s.exercises, []);
 
     if(!exercises.length) {
-      rows.push([date, title, muscles, '', '', '', '', '', '', '', '', '', 'no exercises', '', sessionNote].join(','));
+      rows.push([date, title, muscles, '', '', '', '', '', '', '', '', '', '', '', 'no exercises', '', sessionNote].join(','));
       return;
     }
 
@@ -6364,10 +6364,20 @@ function exportHistoryCSV() {
       const mod = (ex.modifier || '').replace(/,/g, ';');
       const grp = ex.group || '';
 
+      // Per-exercise muscle tags — the session-level column repeats one concatenated string
+      // on every row, which makes per-muscle volume impossible to compute downstream.
+      // Current library tags win; the tags stored on the logged exercise are the fallback.
+      const libEx = ex.name ? (db.library||[]).find(l => l.name === ex.name) : null;
+      const exTags = String((libEx && libEx.muscle) ? libEx.muscle : (ex.muscle || ''))
+        .split(',').map(m => m.trim()).filter(Boolean);
+      // Convention: the first tag is the primary mover
+      const primaryMus = (exTags[0] || '').replace(/,/g, ';');
+      const secondaryMus = exTags.slice(1).join('; ').replace(/,/g, ';');
+
       // An exercise that was planned but never logged: kept as one row marked "skipped"
       // rather than silently dropped, so planned-vs-done stays visible in the export.
       if(!sets.length) {
-        rows.push([date, title, muscles, exName, eq, mod, grp, ex.sets || '', '', '', '', '', 'skipped', exNote, sessionNote].join(','));
+        rows.push([date, title, muscles, exName, primaryMus, secondaryMus, eq, mod, grp, ex.sets || '', '', '', '', '', 'skipped', exNote, sessionNote].join(','));
         return;
       }
 
@@ -6377,6 +6387,8 @@ function exportHistoryCSV() {
           title,
           muscles,
           exName,
+          primaryMus,
+          secondaryMus,
           eq,
           mod,
           grp,
