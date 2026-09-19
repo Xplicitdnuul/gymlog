@@ -553,8 +553,8 @@ html.mobile-layout .topbar { display:flex; align-items:center; gap:6px; position
           <p style="font-size:12px;color:var(--muted);margin-bottom:8px;">Working sets per muscle per week. The inner ring is 10 sets, the outer 20 — the rough range for growth.</p>
           <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;align-items:center;">
             <span style="font-size:11px;color:var(--faint);margin-right:2px;">Count:</span>
-            <button class="filter-pill sel" onclick="setVolumeMode(this,'primary')">Primary only</button>
-            <button class="filter-pill" onclick="setVolumeMode(this,'weighted')">Include secondary (&frac12;)</button>
+            <button class="filter-pill" onclick="setVolumeMode(this,'primary')">Primary only</button>
+            <button class="filter-pill sel" onclick="setVolumeMode(this,'weighted')">Include secondary (&frac12;)</button>
           </div>
           <div style="position:relative;width:100%;height:300px;"><canvas id="chart-hardsets"></canvas></div>
           <div id="hardsets-content" style="margin-top:8px;"></div>
@@ -1459,9 +1459,10 @@ function exerciseTags(ex){
   const lib = ex.name ? (db.library||[]).find(l => l.name === ex.name) : null;
   return parseMuscleTags((lib && lib.muscle) ? lib.muscle : (ex.muscle || ''));
 }
-// How per-muscle volume is counted. 'primary' is the default because secondary-tag inflation
-// actively hides gaps; 'weighted' credits secondaries at half a set.
-let volumeMode = 'primary';
+// How per-muscle volume is counted. 'weighted' is the default: secondaries count half a set,
+// which reflects real stimulus better than counting every tag fully (that made Glutes read
+// 24 sets/week with no direct glute work) or ignoring them entirely.
+let volumeMode = 'weighted';
 function setVolumeMode(btn, mode){
   volumeMode = mode;
   [...btn.parentElement.querySelectorAll('.filter-pill')].forEach(b=>b.classList.remove('sel'));
