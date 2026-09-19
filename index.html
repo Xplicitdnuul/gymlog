@@ -772,6 +772,7 @@ html.mobile-layout .topbar { display:flex; align-items:center; gap:6px; position
         <textarea id="lib-paste" rows="8" style="font-size:13px;" placeholder="Bench press: Chest&#10;Overhead press: Shoulders&#10;Pull-up: Back&#10;Seated row: Back&#10;Lateral raise: Shoulders&#10;Squat: Legs&#10;Romanian deadlift: Hamstrings&#10;Standing calf raise: Calves&#10;Spinning: Cardio&#10;Running: Cardio&#10;Incline walking: Cardio"></textarea>
         <div style="display:flex;gap:10px;margin-top:10px;">
           <button class="btn btn-dark btn-sm" onclick="importLib()">Import</button>
+          <button class="btn btn-sm" onclick="exportLib()">Export library</button>
           <button class="btn btn-sm" onclick="clearLib()">Clear all</button>
           <button class="btn btn-sm" id="sug-btn" onclick="getExerciseSuggestions()">Get AI suggestions ↗</button>
           <span id="sug-status" style="font-size:13px;color:var(--muted);align-self:center;"></span>
@@ -3134,13 +3135,18 @@ function renderStalling(){
     + '</div>').join('');
 }
 
+// Weeks in the selected period, as a FRACTION. Rounding up (Math.ceil) divided a 30-day
+// period by 5 weeks instead of 4.29, understating every per-week figure by ~14% — which
+// pushed muscles below the 10-set line that were actually above it.
 function weeksForPeriod(sessions){
-  if(progressPeriod) return Math.min(26, Math.max(1, Math.ceil(progressPeriod/7)));
+  if(progressPeriod) return Math.min(26, Math.max(1, progressPeriod/7));
   if(!sessions || !sessions.length) return 12;
   const earliest = new Date(Math.min(...sessions.map(s => new Date(s.date).getTime())));
-  const wk = Math.ceil((Date.now() - earliest.getTime()) / (7*864e5));
+  const wk = (Date.now() - earliest.getTime()) / (7*864e5);
   return Math.min(26, Math.max(4, wk));
 }
+// For display only — "averaged over 4.3 weeks" is noise
+function weeksLabel(w){ return Math.round(w*10)/10; }
 
 function setPeriod(btn, days) {
   document.querySelectorAll('#period-filters .filter-pill').forEach(p => p.classList.remove('sel'));
@@ -6435,13 +6441,34 @@ function resetCardioBlocks() {
 }
 
 // ── LIBRARY ───────────────────────────────────────────────────────
+// Export the library in the same "Name: Muscle1, Muscle2" format the importer accepts,
+// so it round-trips: export, edit the tags, paste back.
+function exportLib(){
+  if(!db.library.length){ toast('Library is empty.','error'); return; }
+  const lines = db.library.slice().sort((a,b)=>a.name.localeCompare(b.name))
+    .map(e => e.name + ': ' + (e.muscle || 'General') + (e.archived ? '   # archived' : ''));
+  const text = lines.join('\n');
+  const blob = new Blob([text], {type:'text/plain;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'gymlog-library-' + dayKey(new Date()) + '.txt';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url), 1000);
+  // Also drop it in the paste box so it can be edited and re-imported without leaving the page
+  const ta = document.getElementById('lib-paste');
+  if(ta) ta.value = text;
+  toast(db.library.length + ' exercises exported.');
+}
+
 async function importLib(){
   const raw=document.getElementById('lib-paste').value.trim();if(!raw)return;
   const lines=raw.split('\n').map(l=>l.trim()).filter(Boolean);
   const parsed=lines.map(l=>{
     const colonIdx=l.indexOf(':');
     const name=colonIdx>-1?l.slice(0,colonIdx).trim():l.trim();
-    const muscleRaw=colonIdx>-1?l.slice(colonIdx+1).trim():'General';
+    // Strip the "# archived" marker the exporter adds, so exports round-trip cleanly
+    const muscleRaw=(colonIdx>-1?l.slice(colonIdx+1):'General').split('#')[0].trim()||'General';
     // Support multiple muscles separated by comma: "Exercise: Chest, Shoulders"
     const muscles=muscleRaw.split(',').map(m=>m.trim()).filter(Boolean);
     return {name, muscle:muscles.join(', ')};
@@ -6454,15 +6481,20 @@ async function importLib(){
   });
   if(!newEx.length && !existing.length){ toast('Nothing to import — all exercises already match.','error'); return; }
   if(newEx.length){
-    const rows = newEx.map(e => ({user_id: currentUser.id, name: e.name, muscle: e.muscle}));
+    // If a name was archived before (e.g. deleted then re-added by a replace import),
+    // restore that state rather than silently reactivating it in every picker.
+    const priorArchived = new Set(db.library.filter(x => x.archived).map(x => x.name.toLowerCase()));
+    const rows = newEx.map(e => ({user_id: currentUser.id, name: e.name, muscle: e.muscle,
+      archived: priorArchived.has(e.name.toLowerCase())}));
     const {data:libData, error:libErr} = await sb.from('library').insert(rows).select();
     if(libErr){ dbErr('Library insert', libErr); return; }
-    if(libData) db.library = [...db.library, ...libData.map(d => ({id:d.id, name:d.name, muscle:d.muscle}))];
+    if(libData) db.library = [...db.library, ...libData.map(d => ({id:d.id, name:d.name, muscle:d.muscle, archived:!!d.archived}))];
   }
   for(const e of existing){
     const {error:upErr} = await sb.from('library').update({muscle: e.muscle}).eq('id', e.id);
     if(!upErr){ const ex = db.library.find(x => x.id === e.id); if(ex) ex.muscle = e.muscle; }
   }
+  invalidateMuscleCache();
   db.library.sort((a,b) => a.name.localeCompare(b.name));
   const msgs = [];
   if(newEx.length) msgs.push(newEx.length + ' added');
