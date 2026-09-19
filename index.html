@@ -232,6 +232,13 @@ html.mobile-layout .topbar { display:flex; align-items:center; gap:6px; position
 .pm-chip.none { border-left:2px solid #B3261E; color:var(--muted); }
 .ss-badge { font-size:10px; font-weight:600; color:#185FA5; background:rgba(24,95,165,0.1); border-radius:4px; padding:1px 5px; margin-left:6px; }
 /* Session recap — self-contained enough to read from a screenshot alone */
+/* Chart takes the width it needs to be legible; the written summary sits beside it on a
+   wide screen and stacks underneath on a phone. */
+.hs-split { display:grid; grid-template-columns:7fr 3fr; gap:18px; align-items:start; }
+.hs-chart { position:relative; width:100%; height:380px; min-width:0; }
+.hs-text { font-size:12px; line-height:1.55; min-width:0; padding-top:6px; }
+html.mobile-layout .hs-split { grid-template-columns:1fr; gap:10px; }
+html.mobile-layout .hs-chart { height:300px; }
 .recap { border:0.5px solid var(--border-md); border-radius:10px; padding:14px; margin-bottom:14px; background:var(--surface); }
 .recap-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:12px; }
 .recap-head-main { min-width:0; }
@@ -555,9 +562,14 @@ html.mobile-layout .topbar { display:flex; align-items:center; gap:6px; position
             <span style="font-size:11px;color:var(--faint);margin-right:2px;">Count:</span>
             <button class="filter-pill" onclick="setVolumeMode(this,'primary')">Primary only</button>
             <button class="filter-pill sel" onclick="setVolumeMode(this,'weighted')">Include secondary (&frac12;)</button>
+            <span style="font-size:11px;color:var(--faint);margin:0 2px 0 8px;">View:</span>
+            <button class="filter-pill sel" onclick="setRadarDetail(this,false)">Grouped</button>
+            <button class="filter-pill" onclick="setRadarDetail(this,true)">Detailed</button>
           </div>
-          <div style="position:relative;width:100%;height:300px;"><canvas id="chart-hardsets"></canvas></div>
-          <div id="hardsets-content" style="margin-top:8px;"></div>
+          <div class="hs-split">
+            <div class="hs-chart"><canvas id="chart-hardsets"></canvas></div>
+            <div id="hardsets-content" class="hs-text"></div>
+          </div>
         </div>
 
         <div class="card" id="card-stalling">
@@ -3127,6 +3139,33 @@ function strengthTrendSummary(sessions){
 // Radar: same axes, same unit, and a target band drawn as reference rings — the one case
 // where a spiderweb genuinely helps, since imbalance reads as shape rather than as a list.
 // Axes are ordered anatomically (push / pull / legs / core) so neighbours are related.
+// Radar axis grouping. 20 individual muscles produce an unreadable star, so the default
+// view aggregates to regions; "Detailed" shows every tracked muscle.
+const RADAR_GROUPS = [
+  {label:'Chest',      muscles:['Chest']},
+  {label:'Front delts',muscles:['Front delts']},
+  {label:'Side delts', muscles:['Side delts']},
+  {label:'Rear delts', muscles:['Rear delts','Rotator cuff']},
+  {label:'Triceps',    muscles:['Triceps']},
+  {label:'Biceps',     muscles:['Biceps','Forearms']},
+  {label:'Traps',      muscles:['Traps']},
+  {label:'Upper back', muscles:['Mid-back','Lats','Back']},
+  {label:'Erectors',   muscles:['Erectors']},
+  {label:'Glutes',     muscles:['Glutes']},
+  {label:'Hamstrings', muscles:['Hamstrings']},
+  {label:'Calves',     muscles:['Calves']},
+  {label:'Quads',      muscles:['Quads']},
+  {label:'Hips',       muscles:['Adductors','Abductors']},
+  {label:'Core',       muscles:['Core','Obliques']}
+];
+let radarDetail = false;
+function setRadarDetail(btn, on){
+  radarDetail = on;
+  [...btn.parentElement.querySelectorAll('.filter-pill')].forEach(b=>b.classList.remove('sel'));
+  btn.classList.add('sel');
+  renderProgress();
+}
+
 const RADAR_ORDER = ['Chest','Front delts','Side delts','Triceps','Shoulders',
                      'Rear delts','Rotator cuff','Traps','Mid-back','Lats','Back','Biceps','Forearms',
                      'Erectors','Glutes','Hamstrings','Calves','Quads','Adductors','Abductors',
@@ -3136,9 +3175,23 @@ function renderHardSets(sessions, weeks){
   // Known muscles keep their anatomical order; newly introduced categories are appended
   // rather than silently dropped from the chart.
   const tracked = trackedMuscles().filter(m => !MUSCLE_UMBRELLAS[m]);
-  const labels = [...RADAR_ORDER.filter(m => tracked.includes(m)),
-                  ...tracked.filter(m => !RADAR_ORDER.includes(m))];
-  const data = labels.map(m => perWeek[m] || 0);
+  let labels, data;
+  if(radarDetail){
+    labels = [...RADAR_ORDER.filter(m => tracked.includes(m)),
+              ...tracked.filter(m => !RADAR_ORDER.includes(m))];
+    data = labels.map(m => perWeek[m] || 0);
+  } else {
+    // Regional axes. Each muscle belongs to exactly one group, so nothing is double-counted;
+    // anything not covered by a group gets its own axis rather than being dropped.
+    const grouped = RADAR_GROUPS.filter(g => g.muscles.some(m => tracked.includes(m)));
+    const covered = new Set(RADAR_GROUPS.flatMap(g => g.muscles));
+    const extras = tracked.filter(m => !covered.has(m));
+    labels = [...grouped.map(g => g.label), ...extras];
+    data = [
+      ...grouped.map(g => Math.round(g.muscles.reduce((t,m)=>t+(perWeek[m]||0),0)*10)/10),
+      ...extras.map(m => perWeek[m] || 0)
+    ];
+  }
   const note = document.getElementById('hardsets-content');
 
   if(!data.some(v => v > 0)){
@@ -3150,13 +3203,18 @@ function renderHardSets(sessions, weeks){
   const canvas = document.getElementById('chart-hardsets');
   if(!canvas) return;
   if(progressCharts.hardsets){ try { progressCharts.hardsets.destroy(); } catch(e){} }
-  const maxVal = Math.max(HARD_SETS_MAX + 4, ...data);
+  // Beyond ~22 sets/week the exact number stops mattering, and letting one big axis set the
+  // scale squashes everything else toward the centre. Cap the axis and clamp the plotted
+  // value; the true figure stays in the tooltip and the summary text below.
+  const RADAR_CAP = HARD_SETS_MAX + 2;
+  const maxVal = RADAR_CAP;
+  const plotted = data.map(v => Math.min(v, RADAR_CAP));
   progressCharts.hardsets = new Chart(canvas, {
     type: 'radar',
     data: {
       labels,
       datasets: [
-        { label: 'Sets / week', data, fill: true,
+        { label: 'Sets / week', data: plotted, fill: true,
           backgroundColor: 'rgba(26,86,160,0.14)', borderColor: '#1A56A0', borderWidth: 2,
           pointBackgroundColor: '#1A56A0', pointRadius: 2.5 },
         { label: 'Target min (10)', data: labels.map(()=>HARD_SETS_MIN), fill: false,
@@ -3170,9 +3228,11 @@ function renderHardSets(sessions, weeks){
     options: {
       responsive: true, maintainAspectRatio: false,
       plugins: { legend: { display:false },
-        tooltip: { callbacks: { label: c => c.dataset.label + ': ' + c.parsed.r } } },
+        tooltip: { callbacks: { label: c => c.datasetIndex === 0
+          ? c.dataset.label + ': ' + data[c.dataIndex] + (data[c.dataIndex] > RADAR_CAP ? ' (capped on chart)' : '')
+          : c.dataset.label + ': ' + c.parsed.r } } },
       scales: { r: {
-        min: 0, suggestedMax: maxVal,
+        min: 0, max: maxVal,
         ticks: { stepSize: 5, font:{size:9}, color:'rgba(0,0,0,0.35)', backdropColor:'transparent' },
         grid: { color:'rgba(0,0,0,0.07)' },
         angleLines: { color:'rgba(0,0,0,0.07)' },
@@ -3189,10 +3249,13 @@ function renderHardSets(sessions, weeks){
   if(low.length) parts.push('<b>Below 10:</b> ' + low.map(x=>x.m+' ('+x.n+')').join(', '));
   if(none.length) parts.push('<b>Untrained:</b> ' + none.join(', '));
   if(high.length) parts.push('<b>Above 20:</b> ' + high.map(x=>x.m+' ('+x.n+')').join(', '));
-  if(note) note.innerHTML = parts.length
-    ? '<div style="font-size:12px;color:var(--muted);line-height:1.5;">' + parts.join('<br>') + '</div>'
-      + '<div style="font-size:10px;color:var(--faint);margin-top:4px;">Averaged over ' + weeks + ' week' + (weeks===1?'':'s') + '.</div>'
-    : '<div style="font-size:12px;color:#2E7D32;">Every muscle inside the 10\u201320 range.</div>';
+  const over = labels.map((m,i)=>({m,n:data[i]})).filter(x => x.n > RADAR_CAP);
+  if(note) note.innerHTML = (parts.length
+      ? '<div style="color:var(--muted);">' + parts.join('<br><br>') + '</div>'
+      : '<div style="color:#2E7D32;">Every muscle inside the 10\u201320 range.</div>')
+    + (over.length ? '<div style="font-size:11px;color:var(--faint);margin-top:10px;">Above the '
+        + RADAR_CAP + '-set chart limit: ' + over.map(x=>x.m+' ('+x.n+')').join(', ') + '</div>' : '')
+    + '<div style="font-size:10px;color:var(--faint);margin-top:10px;">Averaged over ' + weeksLabel(weeks) + ' weeks.</div>';
 }
 
 function renderStalling(){
