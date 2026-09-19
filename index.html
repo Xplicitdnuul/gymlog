@@ -550,7 +550,12 @@ html.mobile-layout .topbar { display:flex; align-items:center; gap:6px; position
             <div class="card-title" style="margin-bottom:0;">Weekly hard sets per muscle</div>
             <button class="btn btn-sm" onclick="toggleCard('card-hardsets')">hide</button>
           </div>
-          <p style="font-size:12px;color:var(--muted);margin-bottom:10px;">Working sets per muscle per week. The inner ring is 10 sets, the outer 20 — the rough range for growth. Shape shows imbalance at a glance.</p>
+          <p style="font-size:12px;color:var(--muted);margin-bottom:8px;">Working sets per muscle per week. The inner ring is 10 sets, the outer 20 — the rough range for growth.</p>
+          <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;align-items:center;">
+            <span style="font-size:11px;color:var(--faint);margin-right:2px;">Count:</span>
+            <button class="filter-pill sel" onclick="setVolumeMode(this,'primary')">Primary only</button>
+            <button class="filter-pill" onclick="setVolumeMode(this,'weighted')">Include secondary (&frac12;)</button>
+          </div>
           <div style="position:relative;width:100%;height:300px;"><canvas id="chart-hardsets"></canvas></div>
           <div id="hardsets-content" style="margin-top:8px;"></div>
         </div>
@@ -1432,6 +1437,48 @@ const MUSCLES_W_BASE=['Chest','Back','Shoulders','Biceps','Triceps','Legs','Quad
 // Tags that are categories of movement rather than muscles — never shown as muscle groups.
 const NON_MUSCLE_TAGS=['Cardio','Plyometrics','General'];
 let _trackedCache=null;
+// ── MUSCLE TAG PARSING ────────────────────────────────────────────
+// Tags are a comma list where the FIRST tag is the primary mover. An optional trailing "*"
+// marks additional primaries, for movements with two genuine prime movers
+// (e.g. "Deadlift: Glutes*, Hamstrings*, Erectors, Traps").
+// Secondary tags are passengers: a bench press does not give triceps a full set of triceps
+// stimulus, which is why counting every tag equally made Glutes read 24 sets/week with no
+// direct glute work at all.
+function parseMuscleTags(raw){
+  const tags = String(raw||'').split(',').map(m=>m.trim()).filter(Boolean);
+  if(!tags.length) return {primary:[], secondary:[], all:[]};
+  const starred = tags.filter(t => t.endsWith('*')).map(t => t.slice(0,-1).trim());
+  const clean = tags.map(t => t.endsWith('*') ? t.slice(0,-1).trim() : t);
+  const primary = starred.length ? starred : [clean[0]];
+  const secondary = clean.filter(t => !primary.includes(t));
+  return {primary, secondary, all: clean};
+}
+// Tags for a logged exercise, resolved from the CURRENT library so retagging is retroactive.
+function exerciseTags(ex){
+  if(!ex) return {primary:[], secondary:[], all:[]};
+  const lib = ex.name ? (db.library||[]).find(l => l.name === ex.name) : null;
+  return parseMuscleTags((lib && lib.muscle) ? lib.muscle : (ex.muscle || ''));
+}
+// How per-muscle volume is counted. 'primary' is the default because secondary-tag inflation
+// actively hides gaps; 'weighted' credits secondaries at half a set.
+let volumeMode = 'primary';
+function setVolumeMode(btn, mode){
+  volumeMode = mode;
+  [...btn.parentElement.querySelectorAll('.filter-pill')].forEach(b=>b.classList.remove('sel'));
+  btn.classList.add('sel');
+  renderProgress();
+}
+// Credit for one logged set, per muscle, under the current mode.
+function setCredit(ex){
+  const t = exerciseTags(ex);
+  const out = {};
+  t.primary.forEach(m => { out[m] = (out[m]||0) + 1; });
+  if(volumeMode === 'weighted') t.secondary.forEach(m => { out[m] = (out[m]||0) + 0.5; });
+  return out;
+}
+
+function parseMuscleTagsAnchor(){}
+
 function trackedMuscles(){
   if(_trackedCache) return _trackedCache;
   // Library only. Retired categories still sitting in old sessions are deliberately NOT
@@ -3006,12 +3053,8 @@ function hardSetsPerMuscle(sessions, weeks){
       if(!ex || ex.isCardio) return;
       const n = workingSets(ex).filter(st => st && (st.kg || st.reps)).length;
       if(!n) return;
-      // Current library tags win, so retagging applies retroactively here too
-      const lib = (db.library||[]).find(l => l.name === ex.name);
-      const raw = (lib && lib.muscle) ? lib.muscle : (ex.muscle || '');
-      String(raw).split(',').map(m=>m.trim()).filter(Boolean).forEach(m => {
-        counts[m] = (counts[m]||0) + n;
-      });
+      const credit = setCredit(ex);
+      Object.keys(credit).forEach(m => { counts[m] = (counts[m]||0) + n * credit[m]; });
     });
   });
   const perWeek = {};
@@ -3350,9 +3393,8 @@ function buildProgressContext(){
     const v = {};
     list.forEach(s => (s.exercises||[]).forEach(ex => {
       const kg = calcVolume([ex]); if(!kg) return;
-      const lib = (db.library||[]).find(l => l.name === ex.name);
-      const raw = (lib && lib.muscle) ? lib.muscle : (ex.muscle||'');
-      String(raw).split(',').map(m=>m.trim()).filter(Boolean).forEach(m => { v[m] = (v[m]||0) + kg; });
+      const credit = setCredit(ex);
+      Object.keys(credit).forEach(m => { v[m] = (v[m]||0) + kg * credit[m]; });
     }));
     return v;
   };
@@ -3801,9 +3843,8 @@ function renderVolumeChart(sessions){
     if(!ex || ex.isCardio) return;
     const kg = calcVolume([ex]);
     if(!kg) return;
-    const lib = (db.library||[]).find(l => l.name === ex.name);
-    const raw = (lib && lib.muscle) ? lib.muscle : (ex.muscle || '');
-    String(raw).split(',').map(m=>m.trim()).filter(Boolean).forEach(m => { vol[m] = (vol[m]||0) + kg; });
+    const credit = setCredit(ex);
+    Object.keys(credit).forEach(m => { vol[m] = (vol[m]||0) + kg * credit[m]; });
   }));
 
   const rows = trackedMuscles().filter(m => !MUSCLE_UMBRELLAS[m])
@@ -6505,6 +6546,8 @@ function exportLib(){
   if(!db.library.length){ toast('Library is empty.','error'); return; }
   const lines = db.library.slice().sort((a,b)=>a.name.localeCompare(b.name))
     .map(e => e.name + ': ' + (e.muscle || 'General') + (e.archived ? '   # archived' : ''));
+  // Note: a trailing "*" on a tag marks an extra primary mover, e.g.
+  // "Deadlift: Glutes*, Hamstrings*, Erectors". The first tag is primary by default.
   const text = lines.join('\n');
   const blob = new Blob([text], {type:'text/plain;charset=utf-8'});
   const url = URL.createObjectURL(blob);
