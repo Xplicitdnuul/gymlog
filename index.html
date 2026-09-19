@@ -1452,8 +1452,12 @@ function trackedMuscles(){
 // "Legs" must count toward Quads/Hamstrings/Glutes. Without this, umbrella terms look
 // permanently untrained (e.g. "Legs 104d ago") purely because tagging got more granular.
 const MUSCLE_UMBRELLAS={
-  'Legs':['Quads','Hamstrings','Glutes','Adductors','Calves'],
-  'Arms':['Biceps','Triceps','Forearms']
+  'Legs':['Quads','Hamstrings','Glutes','Adductors','Abductors','Calves'],
+  'Arms':['Biceps','Triceps','Forearms'],
+  // Retired containers kept as umbrellas so historic sessions tagged with them still
+  // credit the split muscles that replaced them.
+  'Shoulders':['Front delts','Side delts','Rear delts','Rotator cuff'],
+  'Back':['Lats','Mid-back','Traps','Erectors']
 };
 // Every name that should count as having trained `muscle` (itself, its parts, its parent).
 function relatedMuscles(muscle){
@@ -3079,8 +3083,10 @@ function strengthTrendSummary(sessions){
 // Radar: same axes, same unit, and a target band drawn as reference rings — the one case
 // where a spiderweb genuinely helps, since imbalance reads as shape rather than as a list.
 // Axes are ordered anatomically (push / pull / legs / core) so neighbours are related.
-const RADAR_ORDER = ['Chest','Shoulders','Triceps','Back','Biceps','Traps','Forearms',
-                     'Quads','Hamstrings','Glutes','Adductors','Calves','Core'];
+const RADAR_ORDER = ['Chest','Front delts','Side delts','Triceps','Shoulders',
+                     'Rear delts','Rotator cuff','Traps','Mid-back','Lats','Back','Biceps','Forearms',
+                     'Erectors','Glutes','Hamstrings','Calves','Quads','Adductors','Abductors',
+                     'Core','Obliques'];
 function renderHardSets(sessions, weeks){
   const perWeek = hardSetsPerMuscle(sessions, weeks);
   // Known muscles keep their anatomical order; newly introduced categories are appended
@@ -3231,8 +3237,10 @@ function getPrevPeriodSessions() {
 // Classify a workout by its training focus, for the calendar overview. Looks at which
 // region each (non-cardio) exercise targets — based on its muscle tags — and picks the
 // dominant one. Returns Upper / Lower / Full body / Core / Cardio (Other only if empty).
-const WORKOUT_UPPER = ['Chest','Back','Shoulders','Biceps','Triceps','Traps','Forearms'];
-const WORKOUT_LOWER = ['Legs','Quads','Hamstrings','Glutes','Adductors','Calves'];
+// Kept broad so both the old and the split vocabulary classify correctly.
+const WORKOUT_UPPER = ['Chest','Back','Lats','Mid-back','Shoulders','Front delts','Side delts',
+                       'Rear delts','Rotator cuff','Biceps','Triceps','Traps','Forearms'];
+const WORKOUT_LOWER = ['Legs','Quads','Hamstrings','Glutes','Adductors','Abductors','Calves'];
 const CATEGORY_COLORS = {
   'Upper':     '#1A56A0',
   'Lower':     '#BA7517',
@@ -4284,12 +4292,12 @@ function reconcileProgrammeProgress(){
 // grid stays dense rather than one sparse row per individual muscle.
 const PM_ROWS = [
   {label:'Chest', muscles:['Chest']},
-  {label:'Back', muscles:['Back','Traps']},
-  {label:'Shoulders', muscles:['Shoulders']},
+  {label:'Shoulders', muscles:['Shoulders','Front delts','Side delts','Rear delts','Rotator cuff']},
+  {label:'Back', muscles:['Back','Lats','Mid-back','Traps','Erectors']},
   {label:'Arms', muscles:['Biceps','Triceps','Forearms']},
-  {label:'Quads<br>Glutes', muscles:['Quads','Glutes','Adductors','Legs']},
+  {label:'Quads<br>Glutes', muscles:['Quads','Glutes','Adductors','Abductors','Legs']},
   {label:'Hams<br>Calves', muscles:['Hamstrings','Calves']},
-  {label:'Core', muscles:['Core']},
+  {label:'Core', muscles:['Core','Obliques']},
   {label:'Cardio', muscles:['Cardio']}
 ];
 
