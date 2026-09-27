@@ -2696,12 +2696,14 @@ function renderLog() {
 
     if(groupInfo[ei] && groupInfo[ei].isStart) html2+='<div class="ss-group"><div class="ss-label">'+groupInfo[ei].label+'</div>';
     const exExpanded = (ex.collapsed===undefined) ? expandSet.has(ei) : !ex.collapsed;
-    html2+='<div class="ex-block">';
+    html2+='<div class="ex-block"'+(ex.skipped?' style="opacity:0.45;"':'')+'>';
     html2+='<div class="ex-head" onclick="toggleExBlock('+ei+')">';
     html2+='<span style="font-size:14px;font-weight:500;">'+ex.name+'</span>';
     html2+='<span style="display:flex;align-items:center;gap:8px;">'
       +(ex.isExtra?'<span class="tag-repeat" style="background:rgba(46,125,50,0.12);color:#2E7D32;">added</span>':'')
       +'<span class="'+(ex.isCardio?'tag-cardio':ex.isRepeat?'tag-repeat':'tag-new')+'">'+(ex.isCardio?'cardio':ex.isRepeat?'repeated':'fresh pick')+'</span>'
+      +(ex.skipped?'<span class="tag-repeat" style="background:var(--bg);color:var(--muted);">skipped</span>':'')
+      +(!ex.isExtra&&!ex.isCardio?'<span data-ei="'+ei+'" onclick="event.stopPropagation();toggleSkipExercise(parseInt(this.dataset.ei))" style="font-size:11px;color:var(--muted);cursor:pointer;border:0.5px solid var(--border-md);border-radius:4px;padding:1px 6px;">'+(ex.skipped?'Undo':'Skip')+'</span>':'')
       +(ex.isExtra?'<span data-ei="'+ei+'" onclick="event.stopPropagation();removeLogExercise(parseInt(this.dataset.ei))" title="Remove from this session" style="color:var(--faint);font-size:15px;cursor:pointer;line-height:1;">\u00d7</span>':'')
       +'<span class="ex-caret" id="excaret-'+ei+'" style="color:var(--faint);font-size:13px;">'+(exExpanded?'\u25be':'\u25b8')+'</span></span>';
     html2+='</div>';
@@ -2798,6 +2800,18 @@ function addLogExercise(name){
   autosaveDraft();
   renderLog();
   toast('Added ' + lib.name + ' to this session.');
+}
+
+// Skip a planned exercise for this session. Kept in the session (so planned-vs-done stays
+// visible in history and export) but saved with no sets, regardless of prefilled values.
+function toggleSkipExercise(ei){
+  const ex = db.activeSession && db.activeSession.exercises[ei];
+  if(!ex) return;
+  autosaveDraft();
+  ex.skipped = !ex.skipped;
+  if(ex.skipped) ex.collapsed = true;
+  autosaveDraft();
+  renderLog();
 }
 
 function removeLogExercise(ei){
@@ -2971,6 +2985,13 @@ async function saveSession(){
   const s=db.activeSession;if(!s)return;
   s.exercises.forEach((ex,ei)=>{
     const sets=[];
+    // Skipped: inputs are prefilled from last session, so reading them would log a
+    // workout that didn't happen. Store the exercise with no sets instead.
+    if(ex.skipped){
+      ex.loggedSets={sets:[],note:'',kg:null,targetReps:parseInt(ex.reps)||0,skipped:true};
+      delete ex.draftSets;
+      return;
+    }
     const numSets=ex.sets||3;
     for(let i=0;i<numSets;i++){
       const kg=parseFloat(document.getElementById('ex-'+ei+'-kg-'+i)?.value)||null;
