@@ -230,6 +230,16 @@ html.mobile-layout .topbar { display:flex; align-items:center; gap:6px; position
 .pm-chip { font-size:10px; padding:3px 8px; border-radius:5px; background:var(--bg); border:0.5px solid var(--border); }
 .pm-chip.low { border-left:2px solid #EF9F27; }
 .pm-chip.none { border-left:2px solid #B3261E; color:var(--muted); }
+.exh-btn { flex-shrink:0; background:var(--surface); border:0.5px solid var(--border-md); border-radius:var(--radius-sm); font-size:12px; padding:5px 10px; color:var(--muted); cursor:pointer; font-family:var(--font); white-space:nowrap; }
+.exh-panel { margin:0 0 10px; padding:8px 10px; background:var(--bg); border-radius:6px; overflow-x:auto; }
+.exh { width:100%; border-collapse:collapse; font-size:11px; }
+.exh th { text-align:left; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:var(--faint); padding:0 8px 5px 0; }
+.exh td { padding:4px 8px 4px 0; border-top:0.5px solid var(--border); vertical-align:top; white-space:nowrap; }
+.exh tr.exh-match td { font-weight:500; }
+.exh tr:not(.exh-match) td { color:var(--muted); }
+.exh-x, .exh-faint { color:var(--faint); }
+.exh-note { font-size:10px; color:var(--faint); margin-top:6px; }
+.exh-empty { font-size:12px; color:var(--muted); }
 .ss-badge { font-size:10px; font-weight:600; color:#185FA5; background:rgba(24,95,165,0.1); border-radius:4px; padding:1px 5px; margin-left:6px; }
 /* Session recap — self-contained enough to read from a screenshot alone */
 /* Chart takes the width it needs to be legible; the written summary sits beside it on a
@@ -1007,7 +1017,7 @@ window.addEventListener('online', async () => {
       console.warn('Session lost after network restore — signing out');
       currentUser = null;
       _dataLoadedForUid = null;
-      db = {...defaultDb};
+      db = freshDb();
       document.getElementById('app').style.display = 'none';
       document.getElementById('auth-screen').style.display = 'flex';
       toast('Session expired. Please sign in again.', 'error');
@@ -1233,11 +1243,27 @@ function closeSidebar(){
   document.getElementById('overlay').classList.remove('show');
   document.getElementById('hamburger').textContent='☰';
 }
+function freshDb(){ return JSON.parse(JSON.stringify(defaultDb)); }
+
+function resetUserState(){
+  currentUser = null;
+  db = freshDb();
+  _trackedCache = null;
+  programmes = []; activeProgrammeId = null; progDays = [];
+  jtExercises = []; _jtPendingUnmatched = []; cardioBlocks = [];
+  builderExercises = []; editingWorkoutExercises = [];
+  strengthExercises = []; _strengthExItems = [];
+  exerciseSuggestions = []; addedSuggestions = new Set();
+  _pendingExpandId = null; historyShownCount = 20;
+  Object.values(progressCharts||{}).forEach(c => { try { c.destroy(); } catch(e){} });
+  progressCharts = {};
+}
+
 async function signOut() {
   await sb.auth.signOut();
   document.getElementById('app').style.display='none';
   document.getElementById('auth-screen').style.display='flex';
-  currentUser=null; db={...defaultDb};
+  resetUserState();
 }
 
 // onAuthStateChange handles UI transitions only — NOT data loading.
@@ -1245,8 +1271,7 @@ async function signOut() {
 sb.auth.onAuthStateChange((event, session) => {
   console.log('Auth event:', event);
   if(event === 'SIGNED_OUT' || event === 'USER_DELETED') {
-    currentUser = null;
-    db = {...defaultDb};
+    resetUserState();
     document.getElementById('auth-screen').style.display = 'flex';
     document.getElementById('app').style.display = 'none';
   }
@@ -1303,7 +1328,7 @@ async function initApp() {
     }
   } else {
     currentUser = null;
-    db = {...defaultDb};
+    db = freshDb();
     document.getElementById('auth-screen').style.display = 'flex';
     document.getElementById('app').style.display = 'none';
   }
@@ -1319,7 +1344,7 @@ initApp();
 
 // ── DATA LAYER ───────────────────────────────────────────────────
 const defaultDb = { profile:{name:'',level:'intermediate',goal:'hypertrophy'}, library:[], sessions:[], body:[], goals:[], aliases:{}, timeOff:[], rest:{strength:180,hyp:90,end:60,trans:120}, selectedMuscles:[], selectedTime:'60', selectedTimeCardio:'15', muscleSettings:{}, progressFilter:'All', activeSession:null, pendingSession:null, savedWorkouts:[] };
-let db = {...defaultDb};
+let db = JSON.parse(JSON.stringify(defaultDb));
 
 let _loadingData = false;
 
@@ -1365,6 +1390,7 @@ async function loadUserData() {
     loadTimeOff().catch(e => { console.warn('time_off unavailable', e); db.timeOff = db.timeOff || []; })
   ]);
   console.log('core queries done in', Math.round(performance.now()-t0), 'ms');
+  invalidateMuscleCache(); // derived muscle list belongs to the user now loading
   console.log('loadUserData results - prof:', prof.error||prof.data?.name, 'lib:', lib.data?.length, 'sess:', sess.data?.length, 'lib error:', lib.error, 'sess error:', sess.error);
 
   // Parse profile data into db.profile
@@ -2716,7 +2742,9 @@ function renderLog() {
         +'</div>'
         +'<div style="display:flex;gap:8px;margin-bottom:8px;">'
         +'<select class="set-inp" data-ei="'+ei+'" onchange="swapLogExercise(parseInt(this.dataset.ei),this.value)" style="flex:1;min-width:0;width:auto;font-size:12px;padding:5px 8px;color:var(--muted);">'+swapOpts+'</select>'
-        +'</div>';
+        +'<button type="button" class="exh-btn" title="Last 10 logs of this exercise" onclick="toggleExHistory(\'ex-\','+ei+')">\u23f1 History</button>'
+        +'</div>'
+        +'<div id="ex-'+ei+'-hist" class="exh-panel" style="display:none;"></div>';
     }
     html2+=banner;
     if(ex.isCardio){
@@ -2745,20 +2773,100 @@ function renderLog() {
   renderSavedWorkouts();
 }
 
-function setLogModifier(ei,val){
-  if(db.activeSession&&db.activeSession.exercises[ei]){
-    db.activeSession.exercises[ei].modifier=val||'';
-    autosaveDraft();
-    renderLog();
+// Changing equipment or method switches to a different history bucket, so the prefilled
+// numbers belong to the wrong variant. autosaveDraft captured them as if typed, and the draft
+// outranks history on re-render — so they stuck. Clear any set still equal to the OLD
+// bucket's prefill; anything the user actually typed is kept.
+function clearUntouchedPrefill(ex, oldEq, oldMod){
+  if(!ex || !ex.draftSets) return;
+  const prev = getPrevData(ex.name, oldEq, oldMod);
+  const prevSets = (prev && prev.sets) || [];
+  ex.draftSets = ex.draftSets.map((d, i) => {
+    const p = prevSets[i];
+    const untouched = d && p
+      && String(d.kg ?? '') === String(p.kg ?? '')
+      && String(d.reps ?? '') === String(p.reps ?? '');
+    const empty = !d || (!d.kg && !d.reps);
+    return (untouched || empty) ? undefined : d;
+  });
+}
+
+// ── EXERCISE HISTORY LOOKUP ───────────────────────────────────────
+// Last N logs of an exercise across EVERY equipment/method variant, so you can see what you
+// did with dumbbells vs barbell, or unilateral vs bilateral, without leaving the session.
+function exerciseLogHistory(name, limit){
+  limit = limit || 10;
+  const out = [];
+  for(let i = db.sessions.length - 1; i >= 0 && out.length < limit; i--){
+    const s = db.sessions[i];
+    if(s.is_draft) continue;
+    (s.exercises || []).forEach(ex => {
+      if(out.length >= limit || !ex || ex.name !== name) return;
+      const sets = workingSets(ex).filter(st => st && (st.kg || st.reps));
+      if(!sets.length) return;
+      out.push({date: s.date, equipment: ex.equipment || '', modifier: ex.modifier || '', sets,
+        iso: isIsometric(ex)});
+    });
   }
+  return out;
+}
+
+function exerciseHistoryHtml(ex){
+  const rows = exerciseLogHistory(ex.name, 10);
+  if(!rows.length) return '<div class="exh-empty">No previous logs of ' + ex.name + '.</div>';
+  const fmtSets = r => {
+    // Collapse runs of identical sets: "80×6 ×3" instead of "80×6, 80×6, 80×6"
+    const parts = [];
+    r.sets.forEach(st => {
+      const txt = (st.kg != null && st.kg !== '' ? st.kg : 'BW') + '\u00d7' + (st.reps || '?') + (r.iso ? 's' : '');
+      const last = parts[parts.length - 1];
+      if(last && last.txt === txt) last.n++; else parts.push({txt, n:1});
+    });
+    return parts.map(p => p.txt + (p.n > 1 ? '<span class="exh-x"> \u00d7' + p.n + '</span>' : '')).join(', ');
+  };
+  return '<table class="exh"><thead><tr><th>Date</th><th>Setup</th><th>Sets</th></tr></thead><tbody>'
+    + rows.map(r => {
+        const same = (r.equipment || '') === (ex.equipment || '') && (r.modifier || '') === (ex.modifier || '');
+        return '<tr' + (same ? ' class="exh-match"' : '') + '>'
+          + '<td>' + fmt(r.date) + '</td>'
+          + '<td>' + (r.equipment || '<span class="exh-faint">\u2014</span>')
+            + (r.modifier ? ' <span class="pm-mod">' + (r.modifier === 'Unilateral' ? 'uni' : r.modifier === 'Isometric hold' ? 'iso' : r.modifier.slice(0,4).toLowerCase()) + '</span>' : '')
+          + '</td>'
+          + '<td>' + fmtSets(r) + '</td></tr>';
+      }).join('')
+    + '</tbody></table>'
+    + '<div class="exh-note">Highlighted rows match your current equipment and method. Warm-ups excluded.</div>';
+}
+
+function toggleExHistory(prefix, ei){
+  const el = document.getElementById(prefix + ei + '-hist');
+  if(!el) return;
+  const show = el.style.display === 'none';
+  if(show){
+    const ex = prefix === 'jt-' ? jtExercises[ei] : (db.activeSession && db.activeSession.exercises[ei]);
+    el.innerHTML = exerciseHistoryHtml(ex);
+  }
+  el.style.display = show ? '' : 'none';
+}
+
+function setLogModifier(ei,val){
+  const ex = db.activeSession && db.activeSession.exercises[ei];
+  if(!ex) return;
+  autosaveDraft();
+  const oldEq = ex.equipment, oldMod = ex.modifier;
+  ex.modifier = val||'';
+  clearUntouchedPrefill(ex, oldEq, oldMod);
+  renderLog();
 }
 
 function setLogEquipment(ei,val){
-  if(db.activeSession&&db.activeSession.exercises[ei]){
-    db.activeSession.exercises[ei].equipment=val;
-    autosaveDraft();
-    renderLog();
-  }
+  const ex = db.activeSession && db.activeSession.exercises[ei];
+  if(!ex) return;
+  autosaveDraft();
+  const oldEq = ex.equipment, oldMod = ex.modifier;
+  ex.equipment = val;
+  clearUntouchedPrefill(ex, oldEq, oldMod);
+  renderLog();
 }
 
 // Swap a planned exercise for any library exercise mid-session. Keeps the slot's set/rep
@@ -5917,7 +6025,9 @@ function jtRenderSession() {
       + (ex.isCardio ? '' : '<div style="display:flex;gap:8px;margin-bottom:8px;">'
           + '<select class="set-inp" data-ei="' + ei + '" onchange="setJtEquipment(parseInt(this.dataset.ei),this.value)" style="flex:1;min-width:0;width:auto;font-size:12px;padding:5px 8px;">' + equipmentOptions(ex.equipment) + '</select>'
           + '<select class="set-inp" data-ei="' + ei + '" onchange="setJtModifier(parseInt(this.dataset.ei),this.value)" style="flex:1;min-width:0;width:auto;font-size:12px;padding:5px 8px;' + (ex.modifier?'color:#92600A;font-weight:500;':'color:var(--muted);') + '">' + modifierOptions(ex.modifier) + '</select>'
+          + '<button type="button" class="exh-btn" title="Last 10 logs of this exercise" onclick="toggleExHistory(\'jt-\',' + ei + ')">\u23f1</button>'
           + '</div>'
+          + '<div id="jt-' + ei + '-hist" class="exh-panel" style="display:none;"></div>'
           + '<div style="display:flex;gap:8px;margin-bottom:8px;align-items:center;">'
           + '<span style="font-size:11px;color:var(--muted);">Superset group</span>'
           + '<select class="set-inp" data-ei="' + ei + '" title="Give adjacent exercises the same letter to group them" onchange="setJtGroup(parseInt(this.dataset.ei),this.value)" style="width:auto;font-size:12px;padding:4px 8px;color:var(--muted);">' + builderGroupOptions(ex.group) + '</select>'
@@ -6265,19 +6375,23 @@ function setJtGroup(ei, val) {
 }
 
 function setJtModifier(ei, val) {
-  if(jtExercises[ei]) {
-    jtCaptureInputs();
-    jtExercises[ei].modifier = val || '';
-    jtRenderSession();
-  }
+  const ex = jtExercises[ei];
+  if(!ex) return;
+  jtCaptureInputs();
+  const oldEq = ex.equipment, oldMod = ex.modifier;
+  ex.modifier = val || '';
+  clearUntouchedPrefill(ex, oldEq, oldMod);
+  jtRenderSession();
 }
 
 function setJtEquipment(ei, val) {
-  if(jtExercises[ei]) {
-    jtCaptureInputs();
-    jtExercises[ei].equipment = val;
-    jtRenderSession();
-  }
+  const ex = jtExercises[ei];
+  if(!ex) return;
+  jtCaptureInputs();
+  const oldEq = ex.equipment, oldMod = ex.modifier;
+  ex.equipment = val;
+  clearUntouchedPrefill(ex, oldEq, oldMod);
+  jtRenderSession();
 }
 
 // Copy a Just Train set's weight & reps into the sets below it.
