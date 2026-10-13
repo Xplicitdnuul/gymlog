@@ -240,6 +240,16 @@ html.mobile-layout .topbar { display:flex; align-items:center; gap:6px; position
 .exh-x, .exh-faint { color:var(--faint); }
 .exh-note { font-size:10px; color:var(--faint); margin-top:6px; }
 .exh-empty { font-size:12px; color:var(--muted); }
+.na-row { display:flex; align-items:center; gap:6px; margin:6px 0 8px; flex-wrap:wrap; }
+.na-lbl { font-size:11px; color:var(--faint); margin-right:2px; }
+.na-btn { font-size:11px; padding:3px 9px; border:0.5px solid var(--border-md); border-radius:12px; background:var(--surface); color:var(--muted); cursor:pointer; font-family:var(--font); }
+.na-btn.na-sel.na-up { background:rgba(46,125,50,0.12); color:#2E7D32; border-color:rgba(46,125,50,0.35); font-weight:600; }
+.na-btn.na-sel.na-hold { background:var(--bg); color:var(--text); border-color:var(--border-md); font-weight:600; }
+.na-btn.na-sel.na-down { background:rgba(179,38,30,0.08); color:#B3261E; border-color:rgba(179,38,30,0.3); font-weight:600; }
+.na-badge { font-size:10px; font-weight:600; border-radius:4px; padding:1px 5px; margin-left:6px; }
+.na-badge.na-up { color:#2E7D32; background:rgba(46,125,50,0.1); }
+.na-badge.na-hold { color:var(--muted); background:var(--bg); }
+.na-badge.na-down { color:#B3261E; background:rgba(179,38,30,0.08); }
 .ss-badge { font-size:10px; font-weight:600; color:#185FA5; background:rgba(24,95,165,0.1); border-radius:4px; padding:1px 5px; margin-left:6px; }
 /* Session recap — self-contained enough to read from a screenshot alone */
 /* Chart takes the width it needs to be legible; the written summary sits beside it on a
@@ -1582,6 +1592,21 @@ function weightStep(equipment){
   return (equipment==='Dumbbell'||equipment==='Kettlebell') ? 2 : 2.5;
 }
 // Most recent equipment the user logged for a given movement (for pre-selecting).
+// The equipment AND method from the most recent session where this exercise was actually
+// performed — taken together from one session, so they always form a bucket that has history.
+// Templates store the setup frozen at build time; once you start doing an exercise differently
+// (e.g. Lat Pulldown went unilateral), prefill kept finding the old setup's numbers, which
+// usually meant "last time I did this workout" rather than "last time I did this exercise".
+function lastSetupFor(name){
+  for(let i=db.sessions.length-1;i>=0;i--){
+    const s=db.sessions[i];
+    if(!s.exercises || s.is_draft) continue;
+    const ex=s.exercises.find(e=>e && e.name===name && workingSets(e).length);
+    if(ex) return {equipment: ex.equipment||'', modifier: ex.modifier||''};
+  }
+  return null;
+}
+
 function lastEquipmentFor(name){
   for(let i=db.sessions.length-1;i>=0;i--){
     const s=db.sessions[i];
@@ -1825,7 +1850,7 @@ async function renderOverview() {
       + '</div>'
       + '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">'
       + (isRest
-          ? '<button class="btn btn-sm" onclick="skipProgrammeDay()">Mark rest day done →</button>'
+          ? restDayActionsHtml(prog, isScheduledDay)
           : (selectedDayData
               ? '<button class="btn btn-dark btn-sm" data-prog="' + prog.id + '" data-day="' + selectedDay + '" onclick="startProgrammeDayByIndex(this.dataset.prog,parseInt(this.dataset.day))">Start ' + (selectedDayData.workoutTitle||'session') + '</button>'
               : ''))
@@ -2250,11 +2275,18 @@ function weCancelEdit() {
 function loadSavedWorkout(i){
   const w = db.savedWorkouts[i];
   if(!w){ toast('Workout not found.','error'); return; }
-  const exercises = safeJSON(w.exercises,[]);
+  const exercises = JSON.parse(JSON.stringify(safeJSON(w.exercises,[])));
   const muscles = safeJSON(w.muscles,[]);
+  // Start each exercise on the setup you last actually used, so prefill comes from your most
+  // recent session of the exercise. The template's stored setup is only the fallback.
+  exercises.forEach(ex => {
+    if(!ex || ex.isCardio) return;
+    const last = lastSetupFor(ex.name);
+    if(last){ ex.equipment = last.equipment; ex.modifier = last.modifier; }
+  });
   db.activeSession = {
     sessionTitle: w.sessionTitle || w.title || 'Custom workout',
-    exercises: JSON.parse(JSON.stringify(exercises)),
+    exercises: exercises,
     muscles: JSON.parse(JSON.stringify(muscles)),
     coachNote: w.coachNote||'',
     date: new Date().toISOString(),
@@ -2590,6 +2622,34 @@ function getPrevData(name, equipment, modifier){
 // Most recent logged data for this movement under DIFFERENT equipment. Used only to show a
 // hint when there's no history for the selected equipment — never to prefill, since e.g.
 // 60kg barbell and 60kg dumbbell are not the same load.
+// Closest variant with history when the selected setup has none. Same equipment with a
+// different method is the most useful reference (your Cable numbers, not Machine), so it's
+// tried first; any other equipment second. Returns what differs so the banner can say so.
+function getNearestVariant(name, equipment, modifier){
+  const eq=equipment||'', mod=modifier||'';
+  const scan = pred => {
+    for(let i=db.sessions.length-1;i>=0;i--){
+      const s=db.sessions[i];
+      if(!s.exercises || s.is_draft) continue;
+      const ex=s.exercises.find(e=>e && e.name===name && pred(e) && workingSets(e).length);
+      if(ex) return {equipment:ex.equipment||'', modifier:ex.modifier||'', sets:workingSets(ex)};
+    }
+    return null;
+  };
+  const sameEq = scan(e => (e.equipment||'')===eq && (e.modifier||'')!==mod);
+  if(sameEq) return {...sameEq, differs:'method'};
+  const other = scan(e => (e.equipment||'')!==eq);
+  if(other) return {...other, differs:'equipment'};
+  return null;
+}
+function nearestVariantBanner(v){
+  const setup = (v.equipment||'no equipment') + (v.modifier ? ' \u00b7 ' + v.modifier : (v.differs==='method' ? ' \u00b7 standard' : ''));
+  const ref = v.sets.map(st=>(st.kg||'BW')+'\u00d7'+(st.reps||'?')).join(', ');
+  return '<div class="banner banner-gray" style="margin-bottom:10px;">No history for this '
+    + (v.differs==='method' ? 'method' : 'equipment') + ' yet. Closest: <b>' + setup + '</b> \u2014 ' + ref
+    + '. Enter numbers for this setup.</div>';
+}
+
 function getPrevDataOtherEquipment(name, equipment){
   const eq=equipment||'';
   for(let i=db.sessions.length-1;i>=0;i--){
@@ -2668,7 +2728,9 @@ function renderLog() {
     if(prev&&prev.sets&&prev.sets.length){
       const tgt=prev.targetReps||0;
       const allHit=prev.sets.every(st=>st.reps>=tgt);
-      if(allHit&&prev.sets[0]?.kg){
+      if(prev.nextAction){
+        banner=manualVerdictBanner(prev, ex);
+      } else if(allHit&&prev.sets[0]?.kg){
         const nk=Math.round(prev.sets[0].kg*1.025*2)/2;
         banner='<div class="banner banner-green" style="margin-bottom:10px;"><b>Increase weight</b> — you hit all targets last session. Try <b>'+nk+' kg</b> today.</div>';
       } else if(prev.sets.some(st=>tgt>0&&st.reps<tgt)){
@@ -2676,10 +2738,9 @@ function renderLog() {
       }
       if(prev.note) banner+='<div style="font-size:12px;color:var(--muted);font-style:italic;margin-bottom:8px;">Last note: &ldquo;'+prev.note+'&rdquo;</div>';
     } else {
-      const other=getPrevDataOtherEquipment(ex.name, ex.equipment);
-      if(other){
-        const ref=other.sets.map(st=>(st.kg||'?')+'\u00d7'+(st.reps||'?')).join(', ');
-        banner='<div class="banner banner-gray" style="margin-bottom:10px;">No history with this equipment yet. Last time on <b>'+other.equipment+'</b>: '+ref+' \u2014 enter numbers for this setup.</div>';
+      const near=getNearestVariant(ex.name, ex.equipment, ex.modifier);
+      if(near){
+        banner=nearestVariantBanner(near);
       } else {
         banner='<div class="banner banner-gray" style="margin-bottom:10px;">First time logging this exercise — enter your starting numbers below.</div>';
       }
@@ -2693,7 +2754,7 @@ function renderLog() {
       const draftSet=ex.draftSets?ex.draftSets[i]:null;
       const lastSet=prev&&prev.sets?prev.sets[i]:null;
       // Draft takes priority — user's current input beats last session
-      const prefillKg=draftSet&&draftSet.kg?draftSet.kg:(lastSet&&lastSet.kg?lastSet.kg:'');
+      const prefillKg=draftSet&&draftSet.kg?draftSet.kg:(lastSet&&lastSet.kg?adjustedPrefillKg(lastSet.kg,prev,ex.equipment):'');
       let prefillReps=draftSet&&draftSet.reps?draftSet.reps:(lastSet&&lastSet.reps?lastSet.reps:'');
       // Isometric holds default to a 2s hold when nothing is logged yet
       if(prefillReps===''&&isoEx) prefillReps=ISOMETRIC_DEFAULT_SECONDS;
@@ -2728,6 +2789,7 @@ function renderLog() {
     html2+='<span style="display:flex;align-items:center;gap:8px;">'
       +(ex.isExtra?'<span class="tag-repeat" style="background:rgba(46,125,50,0.12);color:#2E7D32;">added</span>':'')
       +'<span class="'+(ex.isCardio?'tag-cardio':ex.isRepeat?'tag-repeat':'tag-new')+'">'+(ex.isCardio?'cardio':ex.isRepeat?'repeated':'fresh pick')+'</span>'
+      +(ex.nextAction?'<span class="na-badge na-'+ex.nextAction+'">'+NEXT_ACTION_LABEL[ex.nextAction]+'</span>':'')
       +(ex.skipped?'<span class="tag-repeat" style="background:var(--bg);color:var(--muted);">skipped</span>':'')
       +(!ex.isExtra&&!ex.isCardio?'<span data-ei="'+ei+'" onclick="event.stopPropagation();toggleSkipExercise(parseInt(this.dataset.ei))" style="font-size:11px;color:var(--muted);cursor:pointer;border:0.5px solid var(--border-md);border-radius:4px;padding:1px 6px;">'+(ex.skipped?'Undo':'Skip')+'</span>':'')
       +(ex.isExtra?'<span data-ei="'+ei+'" onclick="event.stopPropagation();removeLogExercise(parseInt(this.dataset.ei))" title="Remove from this session" style="color:var(--faint);font-size:15px;cursor:pointer;line-height:1;">\u00d7</span>':'')
@@ -2759,6 +2821,7 @@ function renderLog() {
         +'</div>';
     }
     html2+=cueHtml;
+    if(!ex.isCardio && !ex.skipped) html2+=nextActionHtml('ex-', ei, ex.nextAction);
     html2+='<input class="note-inp" type="text" id="ex-'+ei+'-note" placeholder="Note for this exercise..." value="'+( ex.savedNote||'')+'" oninput="autosaveDraft()">';
     html2+='</div>';
     html2+='</div>';
@@ -2805,7 +2868,7 @@ function exerciseLogHistory(name, limit){
       const sets = workingSets(ex).filter(st => st && (st.kg || st.reps));
       if(!sets.length) return;
       out.push({date: s.date, equipment: ex.equipment || '', modifier: ex.modifier || '', sets,
-        iso: isIsometric(ex)});
+        iso: isIsometric(ex), nextAction: (ex.loggedSets && ex.loggedSets.nextAction) || ''});
     });
   }
   return out;
@@ -2832,7 +2895,9 @@ function exerciseHistoryHtml(ex){
           + '<td>' + (r.equipment || '<span class="exh-faint">\u2014</span>')
             + (r.modifier ? ' <span class="pm-mod">' + (r.modifier === 'Unilateral' ? 'uni' : r.modifier === 'Isometric hold' ? 'iso' : r.modifier.slice(0,4).toLowerCase()) + '</span>' : '')
           + '</td>'
-          + '<td>' + fmtSets(r) + '</td></tr>';
+          + '<td>' + fmtSets(r)
+            + (r.nextAction ? ' <span class="na-badge na-' + r.nextAction + '">' + ({up:'\u2191',hold:'=',down:'\u2193'})[r.nextAction] + '</span>' : '')
+          + '</td></tr>';
       }).join('')
     + '</tbody></table>'
     + '<div class="exh-note">Highlighted rows match your current equipment and method. Warm-ups excluded.</div>';
@@ -3113,7 +3178,7 @@ async function saveSession(){
       if(wkg||wreps) sets.unshift({kg:wkg,reps:wreps,warmup:true});
     }
     const note=document.getElementById('ex-'+ei+'-note')?.value||'';
-    ex.loggedSets={sets,note,kg:sets[0]?.kg,targetReps:parseInt(ex.reps)||0};
+    ex.loggedSets={sets,note,kg:sets[0]?.kg,targetReps:parseInt(ex.reps)||0,nextAction:ex.nextAction||''};
     delete ex.draftSets;
   });
   // Append cardio blocks as exercises
@@ -4499,25 +4564,102 @@ function programmeReviewHtml(prog, days){
 // If the programme's current day's workout has actually been completed — whether started
 // from the tracker (stamped) or just loaded directly from saved workouts (matched by title)
 // — roll the pointer to the next day. Forward-only, idempotent, and persisted.
+// ── WHAT IS TODAY IN THE PROGRAMME ────────────────────────────────
+// Derived from logged history rather than stored and nudged forward. The old pointer only
+// advanced when the single latest session matched the current day exactly, so it stuck on
+// rest days, ignored the calendar, and broke when days were done out of order.
+//
+// Rules:
+//  - Anchor on the most recent COMPLETED programme workout, in any order.
+//  - The next training day is the one after it in the cycle — you move through the programme
+//    as a sequence, so doing Day 5 makes Day 6 next rather than sending you back to Day 3.
+//  - Rest days between them are served by elapsed calendar days: trained yesterday with a rest
+//    next → today is Rest; once enough days have passed, the rest counts as taken.
+//  - A manual Skip / pick-a-day wins until you log your next session.
+
+// Which programme day (index) a logged session completed, or -1.
+function programmeDayForSession(s, prog, days, hintIdx){
+  if(!s || s.is_draft) return -1;
+  const performed = (s.exercises||[]).some(ex => ex && (workingSets(ex).length || (ex.isCardio && ex.loggedSets)));
+  if(!performed) return -1;
+  // 1. stamped when started from the programme
+  if(s.programme_id && String(s.programme_id) === String(prog.id) && s.programme_day != null
+     && days[s.programme_day] && days[s.programme_day].type !== 'rest') return s.programme_day;
+  // 2. matched by title (Load & log). If a workout appears on several days, pick the first
+  //    one at or after where the programme expected you to be.
+  const title = s.sessionTitle || s.title;
+  if(!title) return -1;
+  const cands = days.map((d,i)=>({d,i})).filter(x => x.d && x.d.type !== 'rest' && x.d.workoutTitle === title).map(x=>x.i);
+  if(!cands.length) return -1;
+  const n = days.length, h = ((hintIdx||0) % n + n) % n;
+  return cands.slice().sort((a,b)=>((a-h+n)%n)-((b-h+n)%n))[0];
+}
+
+function daysBetweenLocal(a, b){
+  const d1 = new Date(dayKey(a)+'T12:00:00'), d2 = new Date(dayKey(b)+'T12:00:00');
+  return Math.round((d2 - d1) / 864e5);
+}
+
+// Full state for the active programme: where you are today and why.
+function programmeTodayState(prog){
+  const days = safeJSON(prog.days, []);
+  const n = days.length;
+  if(!n) return null;
+  const stored = ((prog.current_day||0) % n + n) % n;
+
+  // Most recent completed programme session
+  let last = null;
+  const sessions = (db.sessions||[]).filter(s => !s.is_draft)
+    .slice().sort((a,b) => new Date(b.date) - new Date(a.date));
+  for(const s of sessions){
+    const idx = programmeDayForSession(s, prog, days, stored);
+    if(idx >= 0){ last = {idx, date: s.date}; break; }
+  }
+
+  // A manual choice made after the last logged session wins
+  const setAt = prog.current_day_set_at ? new Date(prog.current_day_set_at) : null;
+  if(!last || (setAt && setAt > new Date(last.date))){
+    const d = days[stored];
+    return {todayIdx: stored, isRest: !!(d && d.type === 'rest'),
+      nextTrainIdx: nextTrainingIdx(days, stored, d && d.type === 'rest'), last, source: last ? 'manual' : 'start'};
+  }
+
+  // Walk forward from the last completed day, letting elapsed days serve any rest slots
+  const elapsed = Math.max(0, daysBetweenLocal(last.date, new Date()));
+  let k = 1, idx = (last.idx + 1) % n, guard = 0;
+  while(days[idx] && days[idx].type === 'rest' && guard < n){
+    // Rest slot k falls on day (last + k). It's only served once that day has passed, so
+    // trained yesterday + rest next = rest TODAY, not "already served".
+    if(elapsed > k){ k++; idx = (idx + 1) % n; guard++; continue; }
+    return {todayIdx: idx, isRest: true, nextTrainIdx: nextTrainingIdx(days, idx, true), last, source:'history'};
+  }
+  return {todayIdx: idx, isRest: false, nextTrainIdx: idx, last, source:'history'};
+}
+
+function nextTrainingIdx(days, from, skipFrom){
+  const n = days.length;
+  for(let k = skipFrom ? 1 : 0; k <= n; k++){
+    const i = (from + k) % n;
+    if(days[i] && days[i].type !== 'rest') return i;
+  }
+  return from;
+}
+
+// Keeps the stored pointer in line with the derived state (other screens read current_day).
+// Does NOT touch current_day_set_at — that's reserved for genuine manual choices.
 function reconcileProgrammeProgress(){
   if(!activeProgrammeId) return;
   const prog = programmes.find(p => String(p.id) === String(activeProgrammeId));
   if(!prog) return;
-  const days = safeJSON(prog.days, []);
-  if(days.length < 2) return;
-  const cur = prog.current_day || 0;
-  const day = days[cur];
-  if(!day || day.type === 'rest') return;
-  const sessions = (db.sessions || []).filter(s => !s.is_draft);
-  if(!sessions.length) return;
-  const latest = sessions.reduce((a,b) => new Date(b.date) > new Date(a.date) ? b : a);
-  const byStamp = latest.programme_id && String(latest.programme_id) === String(prog.id) && latest.programme_day === cur;
-  const byTitle = day.workoutTitle && (latest.sessionTitle === day.workoutTitle || latest.title === day.workoutTitle);
-  if(!byStamp && !byTitle) return;
-  const next = (cur + 1) % days.length;
-  prog.current_day = next;
-  if(typeof prog._selectedDay === 'undefined' || prog._selectedDay === cur) prog._selectedDay = next;
-  sb.from('programmes').update({current_day: next}).eq('id', prog.id);
+  const st = programmeTodayState(prog);
+  if(!st) return;
+  prog._today = st;
+  if(st.todayIdx !== (prog.current_day||0)){
+    const prev = prog.current_day || 0;
+    prog.current_day = st.todayIdx;
+    if(typeof prog._selectedDay === 'undefined' || prog._selectedDay === prev) prog._selectedDay = st.todayIdx;
+    sb.from('programmes').update({current_day: st.todayIdx}).eq('id', prog.id);
+  }
 }
 
 // Matrix overview of a programme: training days across the top, muscle groups down the
@@ -4692,6 +4834,23 @@ function programmeDayPreview(dayData, opts){
   };
 }
 
+// Rest-day panel content: a rest day is served by the calendar, so instead of asking you to
+// tick it off, say what's next and let you start it now if you feel ready.
+function restDayActionsHtml(prog, isScheduledDay){
+  const days = safeJSON(prog.days, []);
+  const st = prog._today || programmeTodayState(prog);
+  const nxt = st ? st.nextTrainIdx : null;
+  const nd = (nxt != null) ? days[nxt] : null;
+  if(!nd || nd.type === 'rest') return '<button class="btn btn-sm" onclick="skipProgrammeDay()">Skip rest \u2192</button>';
+  return '<div style="font-size:12px;color:var(--muted);margin-bottom:8px;">'
+      + (isScheduledDay ? 'Recovery day. ' : '') + 'Next: <b>' + (nd.workoutTitle || ('Day ' + (nxt+1))) + '</b></div>'
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap;">'
+      + '<button class="btn btn-sm" data-prog="' + prog.id + '" data-day="' + nxt + '" '
+      + 'onclick="startProgrammeDayByIndex(this.dataset.prog,parseInt(this.dataset.day))">Train anyway: '
+      + (nd.workoutTitle || 'next session') + '</button>'
+    + '</div>';
+}
+
 function renderActiveProgramme() {
   const el = document.getElementById('active-programme-section');
   reconcileProgrammeProgress();
@@ -4764,7 +4923,7 @@ function renderActiveProgramme() {
     + (muscleTagsHtml ? '<div style="margin-bottom:6px;">' + muscleTagsHtml + '</div>' : '')
     + liftsHtml
     + (isRestDay
-        ? '<button class="btn btn-sm" onclick="skipProgrammeDay()">Mark rest day done →</button>'
+        ? restDayActionsHtml(prog, isScheduledDay)
         : '<div style="display:flex;gap:8px;flex-wrap:wrap;">'
           + '<button class="btn btn-dark btn-sm" data-prog="' + prog.id + '" data-day="' + selectedDay + '" onclick="startProgrammeDayByIndex(this.dataset.prog,parseInt(this.dataset.day))">Start this session</button>'
           + (!isScheduledDay ? '<button class="btn btn-sm" onclick="skipToDay(' + prog.id + ',' + selectedDay + ')">Set as current day</button>' : '<button class="btn btn-sm" onclick="skipProgrammeDay()">Skip day</button>')
@@ -4825,7 +4984,8 @@ async function skipToDay(progId, dayIndex) {
   const days = safeJSON(prog.days, []);
   prog.current_day = dayIndex;
   prog._selectedDay = dayIndex;
-  await sb.from('programmes').update({current_day: dayIndex}).eq('id', prog.id);
+  prog.current_day_set_at = new Date().toISOString();
+  await sb.from('programmes').update({current_day: dayIndex, current_day_set_at: prog.current_day_set_at}).eq('id', prog.id);
   refreshActiveProgrammeView();
   toast('Programme updated to day ' + (dayIndex+1) + '.', 'ok');
 }
@@ -4892,7 +5052,8 @@ async function advanceProgrammeDay(prog) {
   const next = ((prog.current_day || 0) + 1) % days.length;
   prog.current_day = next;
   prog._selectedDay = next;
-  await sb.from('programmes').update({current_day: next}).eq('id', prog.id);
+  prog.current_day_set_at = new Date().toISOString();
+  await sb.from('programmes').update({current_day: next, current_day_set_at: prog.current_day_set_at}).eq('id', prog.id);
   refreshActiveProgrammeView();
 }
 
@@ -5470,6 +5631,20 @@ function sessionMatrix(exercises, sDate){
     const sets = workingSets(ex);
     const iso = isIsometric(ex);
     const topKg = Math.max(...sets.filter(t=>t.kg).map(t=>t.kg||0), 0);
+    // Heaviest weight ever lifted for this exercise/equipment/method BEFORE this session.
+    // Highlighting compares against this, not against the session's own top set — a cell is
+    // marked only when it set a new all-time best. No history means nothing to beat, so no mark.
+    let priorBest = null;
+    if(!iso && sDate){
+      const prior = db.sessions
+        .filter(p => !p.is_draft && new Date(p.date) < new Date(sDate))
+        .flatMap(p => safeJSON(p.exercises,[]))
+        .filter(e => e && e.name===ex.name && (e.equipment||'')===(ex.equipment||'')
+          && (e.modifier||'')===(ex.modifier||''));
+      const kgs = prior.flatMap(e => workingSets(e).filter(t=>t.kg).map(t=>parseFloat(t.kg)||0));
+      if(kgs.length) priorBest = Math.max(...kgs);
+    }
+    const pbIdx = priorBest == null ? -1 : sets.findIndex(t => (parseFloat(t.kg)||0) > priorBest);
 
     // Change in top set vs the previous time this exact exercise/equipment/modifier was done
     let delta = '';
@@ -5505,8 +5680,9 @@ function sessionMatrix(exercises, sDate){
       const w = st.kg ? st.kg : 'BW';
       // First set that reaches the top weight only — comparing by value highlights every
       // set when they're all the same weight, which defeats the purpose.
-      const isTop = !iso && st.kg && st.kg === topKg && sets.findIndex(t => t.kg === topKg) === i;
-      html += '<td' + (isTop ? ' class="rm-top"' : '') + '><span class="rm-w">' + w + '</span><span class="rm-r">' + (st.reps||'?') + (iso?'s':'') + '</span></td>';
+      // First set this session that beat the previous all-time best
+      const isPB = i === pbIdx;
+      html += '<td' + (isPB ? ' class="rm-top" title="Personal best \u2014 previous best ' + priorBest + ' kg"' : '') + '><span class="rm-w">' + w + '</span><span class="rm-r">' + (st.reps||'?') + (iso?'s':'') + '</span></td>';
     }
     html += '</tr>';
   });
@@ -5840,6 +6016,7 @@ function jtAddExercise() {
   const sets = parseInt(document.getElementById('jt-sets-pick').value) || 3;
   const isCardio = muscle.toLowerCase().includes('cardio');
   jtCaptureInputs();
+  if(jtExercises.length) jtExercises[jtExercises.length-1].collapsed = true;
   jtExercises.push({ name, muscle, sets, isCardio, equipment: isCardio ? '' : (lastEquipmentFor(name)||''), modifier: '', reps: isCardio ? '30 min' : '10 reps' });
   pick.value = '';
   jtRenderSession();
@@ -5925,6 +6102,102 @@ function jtCaptureInputs(){
   });
 }
 
+// ── JUST TRAIN: COLLAPSE + SWAP ───────────────────────────────────
+// Collapse state lives on the exercise (ex.collapsed) so it survives re-renders and the
+// localStorage draft. Superset members toggle together, as on the Log screen.
+// ── "NEXT TIME" INDICATOR ─────────────────────────────────────────
+// A manual judgement on how the exercise felt: go heavier, stay, or back off. Stored on the
+// logged exercise (loggedSets.nextAction), so getPrevData carries it to the next session of
+// the same exercise/equipment/method — where it adjusts the prefill by one weight step.
+// Your own read beats inferring it from reps, which can't tell an easy 8 from a grinding 8.
+const NEXT_ACTION_LABEL = {up:'\u2191 heavier next', hold:'= same next', down:'\u2193 lighter next'};
+function manualVerdictBanner(prev, ex){
+  if(!prev || !prev.nextAction) return '';
+  const top = prev.sets && prev.sets[0] ? prev.sets[0].kg : null;
+  const next = top != null ? adjustedPrefillKg(top, prev, ex.equipment) : null;
+  if(prev.nextAction === 'up')
+    return '<div class="banner banner-green" style="margin-bottom:10px;"><b>You marked: go heavier</b> \u2014 prefilled '
+      + (next != null ? '<b>' + next + ' kg</b>, up from ' + top + ' kg.' : 'one step heavier.') + '</div>';
+  if(prev.nextAction === 'down')
+    return '<div class="banner banner-amber" style="margin-bottom:10px;"><b>You marked: go lighter</b> \u2014 prefilled '
+      + (next != null ? '<b>' + next + ' kg</b>, down from ' + top + ' kg.' : 'one step lighter.') + '</div>';
+  return '<div class="banner banner-gray" style="margin-bottom:10px;"><b>You marked: keep the weight</b>'
+    + (top != null ? ' \u2014 ' + top + ' kg again.' : '.') + '</div>';
+}
+
+function nextActionHtml(prefix, ei, cur){
+  const b = (val, txt, title) => '<button type="button" class="na-btn' + (cur===val ? ' na-sel na-'+val : '')
+    + '" title="' + title + '" onclick="setNextAction(\'' + prefix + '\',' + ei + ',\'' + val + '\')">' + txt + '</button>';
+  return '<div class="na-row"><span class="na-lbl">Next time:</span>'
+    + b('up', '\u2191 Heavier', 'Felt easy \u2014 prefill one step heavier next time')
+    + b('hold', '= Same', 'Right weight \u2014 keep it next time')
+    + b('down', '\u2193 Lighter', 'Too heavy \u2014 prefill one step lighter next time')
+    + '</div>';
+}
+function setNextAction(prefix, ei, val){
+  const ex = prefix === 'jt-' ? jtExercises[ei] : (db.activeSession && db.activeSession.exercises[ei]);
+  if(!ex) return;
+  if(prefix === 'jt-') jtCaptureInputs(); else autosaveDraft();
+  ex.nextAction = (ex.nextAction === val) ? '' : val;   // tap again to clear
+  if(prefix === 'jt-'){ jtRenderSession(); if(typeof jtSaveDraft==='function') jtSaveDraft(); }
+  else renderLog();
+}
+// Prefill adjustment from last session's verdict. Only ever applied to numbers coming from
+// history — never to anything already typed or dictated this session.
+function adjustedPrefillKg(kg, prev, equipment){
+  if(kg === '' || kg == null || !prev || !prev.nextAction) return kg;
+  const step = weightStep(equipment);
+  const n = parseFloat(kg);
+  if(isNaN(n)) return kg;
+  if(prev.nextAction === 'up') return Math.round((n + step)*10)/10;
+  if(prev.nextAction === 'down') return Math.max(0, Math.round((n - step)*10)/10);
+  return kg;
+}
+
+function jtGroupMembers(ei){
+  const g = (jtExercises[ei] && jtExercises[ei].group) || '';
+  if(!g) return [ei];
+  let a = ei, b = ei;
+  while(a > 0 && (jtExercises[a-1].group||'') === g) a--;
+  while(b < jtExercises.length-1 && (jtExercises[b+1].group||'') === g) b++;
+  const out = []; for(let k=a;k<=b;k++) out.push(k);
+  return out.length > 1 ? out : [ei];
+}
+function jtToggleBlock(ei){
+  if(!jtExercises[ei]) return;
+  jtCaptureInputs();
+  const collapse = !jtExercises[ei].collapsed;
+  jtGroupMembers(ei).forEach(k => { jtExercises[k].collapsed = collapse; });
+  jtRenderSession();
+  if(typeof jtSaveDraft === 'function') jtSaveDraft();
+}
+// One-line summary shown in a collapsed header, so a folded exercise still says what was done
+function jtLoggedSummary(ei){
+  const d = (jtExercises[ei] && jtExercises[ei].draftSets) || [];
+  const done = d.filter(x => x && (x.kg || x.reps));
+  if(!done.length) return 'no sets yet';
+  const top = done.reduce((a,b) => (parseFloat(b.kg)||0) > (parseFloat(a.kg)||0) ? b : a, done[0]);
+  return done.length + ' set' + (done.length>1?'s':'') + ' \u00b7 top ' + (top.kg||'BW') + '\u00d7' + (top.reps||'?');
+}
+// Swap keeps typed and dictated numbers. The usual reason to swap in Just Train is a voice
+// import that matched the wrong exercise — wiping what was just dictated would be wrong.
+// Only untouched history prefill is dropped, since it belonged to the old exercise.
+function swapJtExercise(ei, name){
+  const ex = jtExercises[ei];
+  if(!ex || !name || name === ex.name) return;
+  const lib = (db.library||[]).find(l => l.name === name);
+  if(!lib) return;
+  jtCaptureInputs();
+  clearUntouchedPrefill(ex, ex.equipment, ex.modifier);
+  ex.name = lib.name;
+  ex.muscle = lib.muscle;
+  ex.isCardio = String(lib.muscle||'').toLowerCase().includes('cardio');
+  ex.equipment = ex.isCardio ? '' : (lastEquipmentFor(lib.name) || ex.equipment || '');
+  jtRenderSession();
+  if(typeof jtSaveDraft === 'function') jtSaveDraft();
+  toast('Swapped to ' + lib.name + ' \u2014 your numbers were kept.');
+}
+
 function jtRenderSession() {
   jtSaveDraft();
   const el = document.getElementById('jt-session-content');
@@ -5951,6 +6224,9 @@ function jtRenderSession() {
     gi=gj;
   }
 
+  const jtSwapOpts = '<option value="">Swap exercise\u2026</option>' + activeLibrary().slice()
+    .sort((a,b)=>a.name.localeCompare(b.name))
+    .map(l=>'<option value="'+l.name.replace(/"/g,'&quot;')+'">'+l.name.replace(/</g,'&lt;')+'</option>').join('');
   el.innerHTML = jtExercises.map((ex, ei) => {
     const prev = getPrevData(ex.name, ex.equipment, ex.modifier);
     const cue = getFormCue(ex.name);
@@ -5960,17 +6236,18 @@ function jtRenderSession() {
     if(prev && prev.sets && prev.sets.length) {
       const tgt = prev.targetReps || 0;
       const allHit = prev.sets.every(st => st.reps >= tgt);
-      if(allHit && prev.sets[0]?.kg) {
+      if(prev.nextAction) {
+        banner = manualVerdictBanner(prev, ex);
+      } else if(allHit && prev.sets[0]?.kg) {
         const nk = Math.round(prev.sets[0].kg * 1.025 * 2) / 2;
         banner = '<div class="banner banner-green" style="margin-bottom:8px;"><b>Increase weight</b> — last session all sets hit. Try <b>' + nk + ' kg</b>.</div>';
       } else if(tgt > 0 && prev.sets.some(st => st.reps < tgt)) {
         banner = '<div class="banner banner-amber" style="margin-bottom:8px;"><b>Hold steady</b> — some sets fell short last time.</div>';
       }
     } else {
-      const other = getPrevDataOtherEquipment(ex.name, ex.equipment);
-      if(other){
-        const ref = other.sets.map(st => (st.kg||'?') + '\u00d7' + (st.reps||'?')).join(', ');
-        banner = '<div class="banner banner-gray" style="margin-bottom:8px;">No history with this equipment yet. Last time on <b>' + other.equipment + '</b>: ' + ref + '.</div>';
+      const near = getNearestVariant(ex.name, ex.equipment, ex.modifier);
+      if(near){
+        banner = nearestVariantBanner(near);
       } else {
         banner = '<div class="banner banner-gray" style="margin-bottom:8px;">First time — enter your starting numbers.</div>';
       }
@@ -5989,7 +6266,7 @@ function jtRenderSession() {
         // If we captured this row, its value is authoritative — including a deliberately
         // cleared field. Only fall back to last session's numbers when nothing was captured.
         const captured = ex.draftSets && i < ex.draftSets.length ? ex.draftSets[i] : null;
-        const prefillKg = captured ? (captured.kg || '') : (prev_set && prev_set.kg ? prev_set.kg : '');
+        const prefillKg = captured ? (captured.kg || '') : (prev_set && prev_set.kg ? adjustedPrefillKg(prev_set.kg, prev, ex.equipment) : '');
         let prefillReps = captured ? (captured.reps || '') : (prev_set && prev_set.reps ? prev_set.reps : '');
         if(prefillReps === '' && isoEx) prefillReps = ISOMETRIC_DEFAULT_SECONDS;
         const kgId = 'jt-' + ei + '-kg-' + i, repsId = 'jt-' + ei + '-reps-' + i;
@@ -6017,11 +6294,22 @@ function jtRenderSession() {
     const gInfo = jtGroupInfo[ei];
     return (gInfo && gInfo.isStart ? '<div class="ss-group"><div class="ss-label">' + gInfo.label + '</div>' : '')
       + '<div class="card" style="margin-bottom:10px;">'
-      + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">'
-      + '<span style="font-size:14px;font-weight:500;">' + ex.name + (ex.group?'<span class="ss-badge">SS ' + ex.group + '</span>':'') + '</span>'
-      + '<button data-ei="' + ei + '" onclick="jtRemoveExercise(parseInt(this.dataset.ei))" style="background:none;border:none;cursor:pointer;color:var(--faint);font-size:16px;">\u00d7</button>'
+      // Header is the collapse target. The × stops propagation so removing doesn't also toggle.
+      + '<div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;" onclick="jtToggleBlock(' + ei + ')">'
+      + '<span style="font-size:14px;font-weight:500;">' + ex.name + (ex.group?'<span class="ss-badge">SS ' + ex.group + '</span>':'')
+        + (ex.nextAction ? '<span class="na-badge na-' + ex.nextAction + '">' + NEXT_ACTION_LABEL[ex.nextAction] + '</span>' : '')
+        + (ex.collapsed ? '<span style="font-size:11px;color:var(--faint);font-weight:400;margin-left:6px;">' + jtLoggedSummary(ei) + '</span>' : '')
+      + '</span>'
+      + '<span style="display:flex;align-items:center;gap:10px;">'
+        + '<button data-ei="' + ei + '" onclick="event.stopPropagation();jtRemoveExercise(parseInt(this.dataset.ei))" style="background:none;border:none;cursor:pointer;color:var(--faint);font-size:16px;">\u00d7</button>'
+        + '<span style="color:var(--faint);font-size:13px;">' + (ex.collapsed ? '\u25b8' : '\u25be') + '</span>'
+      + '</span>'
       + '</div>'
+      + '<div id="jtbody-' + ei + '" style="margin-top:6px;' + (ex.collapsed ? 'display:none;' : '') + '">'
       + '<div style="font-size:12px;color:var(--muted);margin-bottom:8px;">' + ex.muscle + ' · ' + ex.sets + ' sets</div>'
+      + (ex.isCardio ? '' : '<div style="display:flex;gap:8px;margin-bottom:8px;">'
+          + '<select class="set-inp" data-ei="' + ei + '" onchange="swapJtExercise(parseInt(this.dataset.ei),this.value)" style="flex:1;min-width:0;width:auto;font-size:12px;padding:5px 8px;color:var(--muted);">' + jtSwapOpts + '</select>'
+          + '</div>')
       + (ex.isCardio ? '' : '<div style="display:flex;gap:8px;margin-bottom:8px;">'
           + '<select class="set-inp" data-ei="' + ei + '" onchange="setJtEquipment(parseInt(this.dataset.ei),this.value)" style="flex:1;min-width:0;width:auto;font-size:12px;padding:5px 8px;">' + equipmentOptions(ex.equipment) + '</select>'
           + '<select class="set-inp" data-ei="' + ei + '" onchange="setJtModifier(parseInt(this.dataset.ei),this.value)" style="flex:1;min-width:0;width:auto;font-size:12px;padding:5px 8px;' + (ex.modifier?'color:#92600A;font-weight:500;':'color:var(--muted);') + '">' + modifierOptions(ex.modifier) + '</select>'
@@ -6038,7 +6326,9 @@ function jtRenderSession() {
         + ((ex.sets||3)>1 ? '<button type="button" class="btn btn-sm" style="font-size:11px;padding:3px 8px;margin-left:6px;color:var(--faint);" data-ei="' + ei + '" onclick="removeJtSet(parseInt(this.dataset.ei))" title="Remove the last set">\u2212</button>' : '')
         + '</div>')
       + cueHtml
+      + (ex.isCardio ? '' : nextActionHtml('jt-', ei, ex.nextAction))
       + '<input class="note-inp" type="text" id="jt-' + ei + '-note" value="' + String(ex.draftNote||'').replace(/"/g,'&quot;') + '" placeholder="Note for this exercise..." oninput="jtSaveDraft()">'
+      + '</div>'
       + '</div>'
       + (gInfo && gInfo.isEnd ? '</div>' : '');
   }).join('');
@@ -6435,7 +6725,7 @@ async function jtSaveSession() {
       }
     }
     const note = document.getElementById('jt-' + ei + '-note')?.value || '';
-    ex.loggedSets = { sets, note, kg: sets[0]?.kg, targetReps: parseInt(ex.reps) || 0 };
+    ex.loggedSets = { sets, note, kg: sets[0]?.kg, targetReps: parseInt(ex.reps) || 0, nextAction: ex.nextAction || '' };
   });
 
   // Append cardio blocks
