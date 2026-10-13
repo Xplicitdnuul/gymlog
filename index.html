@@ -4607,13 +4607,18 @@ function programmeTodayState(prog){
   if(!n) return null;
   const stored = ((prog.current_day||0) % n + n) % n;
 
-  // Most recent completed programme session
-  let last = null;
-  const sessions = (db.sessions||[]).filter(s => !s.is_draft)
-    .slice().sort((a,b) => new Date(b.date) - new Date(a.date));
+  // Most recent completed programme session. Walked OLDEST → NEWEST so that when a workout
+  // appears on several days (Full-Body before Upper, and again before Lower), each session is
+  // matched as the next occurrence after the previous programme session. The tie-breaker must
+  // come from history alone: using the stored current_day made this function feed on its own
+  // output, and the answer flipped between the two occurrences on every render.
+  let last = null, expected = 0;
+  const since = prog.created_at ? new Date(prog.created_at) : null;
+  const sessions = (db.sessions||[]).filter(s => !s.is_draft && (!since || new Date(s.date) >= since))
+    .slice().sort((a,b) => new Date(a.date) - new Date(b.date));
   for(const s of sessions){
-    const idx = programmeDayForSession(s, prog, days, stored);
-    if(idx >= 0){ last = {idx, date: s.date}; break; }
+    const idx = programmeDayForSession(s, prog, days, expected);
+    if(idx >= 0){ last = {idx, date: s.date}; expected = (idx + 1) % n; }
   }
 
   // A manual choice made after the last logged session wins
