@@ -446,6 +446,7 @@ html.mobile-layout .hs-chart { height:300px; }
       <div id="overview-quickstart"></div>
       <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px;" id="overview-metrics"></div>
       <div id="overview-signals"></div>
+      <div id="overview-skipped"></div>
       <div id="overview-last-session"></div>
       <div class="ov-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;">
         <div class="card">
@@ -1765,6 +1766,87 @@ function weeklyStreak(sessions){
   return n;
 }
 
+// ── SKIPPED EXERCISES → CATCH-UP ──────────────────────────────────
+// Exercises skipped in the last few days that you haven't done since. One entry per exercise
+// (most recent skip), and anything you've since performed drops off — it's no longer owed.
+const CATCHUP_DAYS = 5;
+function exerciseWasSkipped(ex){
+  if(!ex || ex.isCardio) return false;
+  if(ex.skipped || (ex.loggedSets && ex.loggedSets.skipped)) return true;
+  return !workingSets(ex).length;   // planned but nothing logged (how skips were recorded before)
+}
+function recentSkippedExercises(){
+  const today = new Date();
+  const sessions = (db.sessions||[]).filter(s => !s.is_draft);
+  const done = name => sessions.filter(s => (s.exercises||[]).some(e => e && e.name===name && workingSets(e).length))
+                               .map(s => new Date(s.date).getTime());
+  const out = new Map();
+  sessions.slice().sort((a,b) => new Date(b.date) - new Date(a.date)).forEach(s => {
+    if(daysBetweenLocal(s.date, today) > CATCHUP_DAYS) return;
+    (s.exercises||[]).forEach(ex => {
+      if(!exerciseWasSkipped(ex) || out.has(ex.name)) return;
+      const skippedAt = new Date(s.date).getTime();
+      if(done(ex.name).some(t => t > skippedAt)) return;          // caught up since
+      out.set(ex.name, {name: ex.name, date: s.date, from: s.sessionTitle || s.title || 'Session',
+        sets: ex.sets || 3, reps: ex.reps || '10 reps', muscle: ex.muscle || '',
+        equipment: ex.equipment || '', modifier: ex.modifier || ''});
+    });
+  });
+  return [...out.values()];
+}
+
+function renderSkippedCard(){
+  const el = document.getElementById('overview-skipped');
+  if(!el) return;
+  const list = recentSkippedExercises();
+  if(!list.length){ el.innerHTML = ''; return; }
+  const dayName = d => new Date(d).toLocaleDateString('en-GB',{weekday:'short', day:'numeric', month:'short'});
+  el.innerHTML = '<div class="card" style="padding:12px 14px;margin-bottom:14px;">'
+    + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">'
+      + '<div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;">Skipped recently (' + list.length + ')</div>'
+      + '<span style="font-size:11px;color:var(--faint);">last ' + CATCHUP_DAYS + ' days</span>'
+    + '</div>'
+    + list.map((x,i) =>
+        '<label style="display:flex;align-items:center;gap:9px;padding:6px 0;border-top:0.5px solid var(--border);cursor:pointer;">'
+        + '<input type="checkbox" class="catchup-cb" data-i="' + i + '" style="width:16px;height:16px;flex-shrink:0;">'
+        + '<span style="flex:1;min-width:0;font-size:13px;">' + x.name
+          + (x.modifier ? ' <span class="pm-mod">' + (x.modifier==='Unilateral'?'uni':x.modifier==='Isometric hold'?'iso':x.modifier.slice(0,4).toLowerCase()) + '</span>' : '')
+        + '</span>'
+        + '<span style="font-size:11px;color:var(--faint);white-space:nowrap;">' + dayName(x.date) + ' \u00b7 ' + x.from + '</span>'
+        + '</label>').join('')
+    + '<div style="display:flex;gap:8px;margin-top:10px;">'
+      + '<button class="btn btn-dark btn-sm" onclick="startCatchUp()">Log catch-up \u2192</button>'
+      + '<button class="btn btn-sm" onclick="document.querySelectorAll(\'.catchup-cb\').forEach(c=>c.checked=true)">Select all</button>'
+    + '</div></div>';
+  el._list = list;
+}
+
+function startCatchUp(){
+  const el = document.getElementById('overview-skipped');
+  const list = (el && el._list) || recentSkippedExercises();
+  const picked = [...document.querySelectorAll('.catchup-cb:checked')].map(c => list[parseInt(c.dataset.i)]).filter(Boolean);
+  if(!picked.length){ toast('Tick the exercises you want to catch up.','error'); return; }
+  // Don't silently discard a session that's already in progress
+  const inProgress = db.activeSession && (db.activeSession.exercises||[]).some(e =>
+    e && ((e.draftSets||[]).some(d => d && (d.kg || d.reps)) || (e.loggedSets && e.loggedSets.sets && e.loggedSets.sets.length)));
+  if(inProgress && !confirm('You have a session in progress. Replace it with a catch-up session?')) return;
+  const exercises = picked.map(x => {
+    const lib = (db.library||[]).find(l => l.name === x.name);
+    const last = lastSetupFor(x.name);
+    return {name: x.name, muscle: (lib && lib.muscle) || x.muscle, sets: x.sets, reps: x.reps,
+      equipment: last ? last.equipment : x.equipment, modifier: last ? last.modifier : x.modifier,
+      group: '', isRepeat: true, isCatchUp: true};
+  });
+  db.activeSession = {
+    sessionTitle: 'Catch-up', exercises,
+    muscles: sessionMuscles(exercises), coachNote: '',
+    date: new Date().toISOString(), is_draft: false
+  };
+  updateNavBadge();
+  showPage('log');
+  toast('Catch-up session with ' + exercises.length + ' exercise' + (exercises.length>1?'s':'') + '.');
+}
+
 async function renderOverview() {
   await refreshData();
   reconcileProgrammeProgress();
@@ -1935,6 +2017,7 @@ async function renderOverview() {
   // ── WORTH KNOWING ──
   // One line each for the two signals that otherwise only live on Progress: a stalled lift
   // and a muscle below the weekly set threshold. Silent when there's nothing to say.
+  renderSkippedCard();
   const sigEl = document.getElementById('overview-signals');
   if(sigEl){
     const bits = [];
@@ -2252,6 +2335,10 @@ async function weSave(idx) {
   }).eq('id', editingWorkoutId);
 
   if(error) { dbErr('Update workout', error); return; }
+
+  // A rename must follow into every programme that uses this workout — days are linked by
+  // workoutId, but their displayed name was only ever updated when the day was re-picked.
+  await renameWorkoutInProgrammes(editingWorkoutId, title);
 
   // Update local state
   const w = db.savedWorkouts[idx];
@@ -4589,7 +4676,19 @@ function programmeDayForSession(s, prog, days, hintIdx){
   //    one at or after where the programme expected you to be.
   const title = s.sessionTitle || s.title;
   if(!title) return -1;
-  const cands = days.map((d,i)=>({d,i})).filter(x => x.d && x.d.type !== 'rest' && x.d.workoutTitle === title).map(x=>x.i);
+  // A day answers to its workout's CURRENT name (followed via workoutId) and to the name stored
+  // on the day. The first keeps working after a rename; the second recognises sessions logged
+  // under the old name. Matching the stored name alone broke the moment a workout was renamed.
+  const namesFor = d => {
+    const names = [];
+    if(d.workoutId){
+      const w = (db.savedWorkouts||[]).find(w => String(w.id) === String(d.workoutId));
+      if(w) names.push(w.sessionTitle || w.title);
+    }
+    if(d.workoutTitle) names.push(d.workoutTitle);
+    return names;
+  };
+  const cands = days.map((d,i)=>({d,i})).filter(x => x.d && x.d.type !== 'rest' && namesFor(x.d).includes(title)).map(x=>x.i);
   if(!cands.length) return -1;
   const n = days.length, h = ((hintIdx||0) % n + n) % n;
   return cands.slice().sort((a,b)=>((a-h+n)%n)-((b-h+n)%n))[0];
@@ -4854,6 +4953,24 @@ function restDayActionsHtml(prog, isScheduledDay){
       + 'onclick="startProgrammeDayByIndex(this.dataset.prog,parseInt(this.dataset.day))">Train anyway: '
       + (nd.workoutTitle || 'next session') + '</button>'
     + '</div>';
+}
+
+async function renameWorkoutInProgrammes(workoutId, newTitle){
+  if(!workoutId || !newTitle) return;
+  for(const p of (programmes||[])){
+    const days = safeJSON(p.days, []);
+    let changed = false;
+    days.forEach(d => {
+      if(d && d.type !== 'rest' && String(d.workoutId) === String(workoutId) && d.workoutTitle !== newTitle){
+        d.workoutTitle = newTitle; changed = true;
+      }
+    });
+    if(changed){
+      p.days = JSON.stringify(days);
+      try { await sb.from('programmes').update({days: p.days}).eq('id', p.id); }
+      catch(e){ console.warn('programme rename sync failed', e); }
+    }
+  }
 }
 
 function renderActiveProgramme() {
