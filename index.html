@@ -5934,8 +5934,12 @@ function openHistoryEdit(id) {
   editDiv.id = 'hist-edit-' + id;
   editDiv.style.cssText = 'padding:14px 1.25rem;background:var(--color-background-primary);border-top:2px solid var(--color-border-info);';
   editDiv.innerHTML = '<div style="font-size:13px;font-weight:500;margin-bottom:12px;">Edit session</div>'
-    + '<div class="form-group" style="margin-bottom:12px;"><label class="form-label">Session title</label>'
-    + '<input type="text" id="he-title-' + id + '" value="' + (s.sessionTitle||s.title||'').replace(/"/g,'&quot;') + '"></div>'
+    + '<div style="display:grid;grid-template-columns:1fr auto;gap:10px;margin-bottom:12px;">'
+      + '<div class="form-group" style="margin-bottom:0;"><label class="form-label">Session title</label>'
+      + '<input type="text" id="he-title-' + id + '" value="' + (s.sessionTitle||s.title||'').replace(/"/g,'&quot;') + '"></div>'
+      + '<div class="form-group" style="margin-bottom:0;"><label class="form-label">Date</label>'
+      + '<input type="date" id="he-date-' + id + '" value="' + dayKey(s.date) + '" max="' + dayKey(new Date()) + '"></div>'
+    + '</div>'
     + exRows
     + '<div class="form-group" style="margin-bottom:12px;"><label class="form-label">Session note</label>'
     + '<textarea id="he-sessionnote-' + id + '" rows="2" style="font-size:13px;font-family:var(--font-sans);">' + (s.note||'') + '</textarea></div>'
@@ -6037,10 +6041,26 @@ async function saveHistoryEdit(id) {
     });
   });
 
+  // Date: read only here and applied only after the database confirms, so Cancel or a failed
+  // save leaves the session where it was. The original time of day is kept, which keeps two
+  // sessions moved onto the same date in the order they were done.
+  const dateInput = document.getElementById('he-date-' + id);
+  const pickedDay = dateInput ? dateInput.value : '';
+  let newDate = s.date;
+  if(pickedDay && pickedDay !== dayKey(s.date)){
+    const [y,m,d] = pickedDay.split('-').map(Number);
+    const moved = new Date(s.date);
+    moved.setFullYear(y, m-1, d);              // local calendar date, local time of day preserved
+    if(isNaN(moved.getTime())){ toast('That date isn\'t valid.','error'); return; }
+    if(dayKey(moved) > dayKey(new Date())){ toast('A workout can\'t be dated in the future.','error'); return; }
+    newDate = moved.toISOString();
+  }
+
   const {error} = await sb.from('sessions').update({
     title,
     exercises: JSON.stringify(exercises),
-    note: sessionNote
+    note: sessionNote,
+    ...(newDate !== s.date ? {date: newDate} : {})
   }).eq('id', id);
 
   if(error) { dbErr('Update session', error); return; }
@@ -6049,6 +6069,11 @@ async function saveHistoryEdit(id) {
   s.title = title;
   s.exercises = exercises;
   s.note = sessionNote;
+  if(newDate !== s.date){
+    s.date = newDate;
+    // Prefill, PRs, recency and the programme all assume sessions in date order
+    db.sessions.sort((a,b) => new Date(a.date) - new Date(b.date));
+  }
 
   toast('Session updated!', 'ok');
   cancelHistoryEdit(id);
