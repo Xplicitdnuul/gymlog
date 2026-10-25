@@ -961,6 +961,16 @@ html.mobile-layout .hs-chart { height:300px; }
         <span id="rest-saved" style="font-size:12px;color:var(--green);margin-left:10px;display:none;">Saved.</span>
       </div>
       <div class="card">
+        <div class="card-title">Your data</div>
+        <p style="font-size:13px;color:var(--muted);margin-bottom:10px;">
+          A complete backup of everything you've stored — sessions (including drafts), exercise library,
+          saved workouts, programmes, goals, body log, time off and aliases — as one file. Take one before
+          any larger change to the app.
+        </p>
+        <button class="btn btn-dark btn-sm" id="backup-btn" onclick="exportFullBackup()">Download full backup \u2193</button>
+        <div id="backup-status" style="font-size:12px;color:var(--muted);margin-top:10px;"></div>
+      </div>
+      <div class="card">
         <div class="card-title">App version</div>
         <p style="font-size:13px;color:var(--muted);margin-bottom:10px;">
           Running <b id="settings-version">–</b> (build <span id="settings-build">–</span>).
@@ -7020,6 +7030,109 @@ async function deleteGoalFromPage(id) {
   renderGoalsPageList();
 }
 
+
+// ── FULL BACKUP ───────────────────────────────────────────────────
+// Every table this app writes to, with the column that ties a row to its owner. Core tables
+// must succeed; tables that only exist after an optional migration are reported, not fatal.
+const BACKUP_TABLES = [
+  {name:'profiles',         owner:'id',      core:true},
+  {name:'sessions',         owner:'user_id', core:true},
+  {name:'library',          owner:'user_id', core:true},
+  {name:'saved_workouts',   owner:'user_id', core:true},
+  {name:'programmes',       owner:'user_id', core:true},
+  {name:'goals',            owner:'user_id', core:true},
+  {name:'body_log',         owner:'user_id', core:true},
+  {name:'time_off',         owner:'user_id', core:false},
+  {name:'exercise_aliases', owner:'user_id', core:false}
+];
+const BACKUP_PAGE = 500;
+
+// Reads a whole table in pages. A single select is capped by the server (1,000 rows by
+// default), so a large history would otherwise be cut off silently — fatal for a backup.
+async function fetchAllRows(table, ownerCol, uid){
+  const rows = [];
+  for(let from = 0; ; from += BACKUP_PAGE){
+    const res = await sb.from(table).select('*').eq(ownerCol, uid).order('id', {ascending:true}).range(from, from + BACKUP_PAGE - 1);
+    if(res.error) throw new Error(res.error.message || 'read failed');
+    const page = res.data || [];
+    rows.push(...page);
+    if(page.length < BACKUP_PAGE) return rows;
+    if(from > 200000) throw new Error('unexpectedly large table — stopped');
+  }
+}
+
+async function exportFullBackup(){
+  if(!currentUser){ toast('Sign in first.','error'); return; }
+  const btn = document.getElementById('backup-btn');
+  const status = document.getElementById('backup-status');
+  const uid = currentUser.id;
+  if(btn) btn.disabled = true;
+  if(status) status.textContent = 'Reading your data\u2026';
+  const backup = {
+    format: 'gymlog-backup', formatVersion: 1,
+    appVersion: (typeof APP_VERSION !== 'undefined' ? APP_VERSION : ''),
+    exportedAt: new Date().toISOString(),
+    userId: uid, email: currentUser.email || '',
+    tables: {}, local: {}, complete: true, warnings: []
+  };
+  try {
+    for(const t of BACKUP_TABLES){
+      try {
+        const rows = await fetchAllRows(t.name, t.owner, uid);
+        backup.tables[t.name] = {status:'ok', count: rows.length, rows};
+      } catch(e){
+        backup.tables[t.name] = {status:'error', count: 0, rows: [], error: e.message};
+        if(t.core){ backup.complete = false; }
+        backup.warnings.push(t.name + ': ' + e.message);
+      }
+    }
+    // Things that live only in this browser: Just Train draft, cached coach review, etc.
+    try {
+      for(let i = 0; i < localStorage.length; i++){
+        const k = localStorage.key(i);
+        if(k && k.indexOf('gymlog_') === 0 && k.indexOf(uid) !== -1) backup.local[k] = localStorage.getItem(k);
+      }
+    } catch(e){ backup.warnings.push('local storage: ' + e.message); }
+
+    // Refuse to present a partial backup as a backup
+    if(!backup.complete){
+      const failed = BACKUP_TABLES.filter(t => t.core && backup.tables[t.name].status !== 'ok').map(t => t.name);
+      if(status) status.innerHTML = '<span style="color:#B3261E;">Backup NOT downloaded \u2014 could not read: ' + failed.join(', ')
+        + '. Nothing was saved, so you can\'t mistake it for a complete copy. Try again in a moment.</span>';
+      toast('Backup failed \u2014 nothing downloaded.','error');
+      return;
+    }
+
+    // Self-check: the file must parse back to the same row counts before it's offered
+    const text = JSON.stringify(backup, null, 1);
+    const reparsed = JSON.parse(text);
+    for(const t of BACKUP_TABLES){
+      const a = backup.tables[t.name], b = reparsed.tables[t.name];
+      if(!b || b.count !== a.count || (b.rows||[]).length !== a.count) throw new Error('self-check failed for ' + t.name);
+    }
+
+    const blob = new Blob([text], {type:'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'gymlog-backup-' + dayKey(new Date()) + '.json';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+
+    const c = n => (backup.tables[n] && backup.tables[n].status === 'ok') ? backup.tables[n].count : '\u2014';
+    if(status) status.innerHTML = '<b>Backup downloaded</b> \u00b7 '
+      + c('sessions') + ' sessions, ' + c('library') + ' exercises, ' + c('saved_workouts') + ' saved workouts, '
+      + c('programmes') + ' programmes, ' + c('goals') + ' goals, ' + c('body_log') + ' body entries, '
+      + c('time_off') + ' time off, ' + c('exercise_aliases') + ' aliases.'
+      + (backup.warnings.length ? '<br><span style="color:var(--faint);">Not included: ' + backup.warnings.join('; ') + '</span>' : '');
+    toast('Backup downloaded.');
+  } catch(e){
+    console.error(e);
+    if(status) status.innerHTML = '<span style="color:#B3261E;">Backup failed: ' + String(e.message || e).replace(/</g,'&lt;') + '. Nothing was downloaded.</span>';
+    toast('Backup failed.','error');
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
 
 function exportHistoryCSV() {
   if(!db.sessions.length) { toast('No sessions to export.', 'error'); return; }
