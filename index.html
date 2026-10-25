@@ -578,7 +578,7 @@ html.mobile-layout .hs-chart { height:300px; }
             <div class="card-title" style="margin-bottom:0;">Weekly hard sets per muscle</div>
             <button class="btn btn-sm" onclick="toggleCard('card-hardsets')">hide</button>
           </div>
-          <p style="font-size:12px;color:var(--muted);margin-bottom:8px;">Working sets per muscle per week. The inner ring is 10 sets, the outer 20 — the rough range for growth.</p>
+          <p style="font-size:12px;color:var(--muted);margin-bottom:8px;">Working sets per muscle per week. The inner ring is 10 sets, the outer 20 — the rough range for growth. Grouped axes show the average per muscle in that region; the list beside the chart judges each muscle on its own.</p>
           <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;align-items:center;">
             <span style="font-size:11px;color:var(--faint);margin-right:2px;">Count:</span>
             <button class="filter-pill" onclick="setVolumeMode(this,'primary')">Primary only</button>
@@ -1482,7 +1482,9 @@ async function saveProfile() {
 }
 
 async function saveSettings() {
-  const {error:setErr}=await sb.from('profiles').upsert({id:currentUser.id,name:db.profile.name,level:db.profile.level,goal:db.profile.goal,rest:JSON.stringify(db.rest)});if(setErr){dbErr('Save settings',setErr);}
+  const {error:setErr}=await sb.from('profiles').upsert({id:currentUser.id,name:db.profile.name,level:db.profile.level,goal:db.profile.goal,rest:JSON.stringify(db.rest)});
+  // "Saved" only after the write is confirmed — it used to show regardless of the result
+  if(setErr){ dbErr('Save settings',setErr); return; }
   document.getElementById('rest-saved').style.display='inline';
   setTimeout(()=>document.getElementById('rest-saved').style.display='none',2000);
 }
@@ -1503,6 +1505,13 @@ let _trackedCache=null;
 // Secondary tags are passengers: a bench press does not give triceps a full set of triceps
 // stimulus, which is why counting every tag equally made Glutes read 24 sets/week with no
 // direct glute work at all.
+// Muscle names from a tag string, with the "*" primary marker removed. Only parseMuscleTags
+// reads the marker; everything else needs plain names — before this, a starred tag created a
+// phantom "Glutes*" muscle alongside the real "Glutes".
+function tagList(raw){
+  return String(raw||'').split(',').map(t => t.trim().replace(/\*+$/,'').trim()).filter(Boolean);
+}
+
 function parseMuscleTags(raw){
   const tags = String(raw||'').split(',').map(m=>m.trim()).filter(Boolean);
   if(!tags.length) return {primary:[], secondary:[], all:[]};
@@ -1545,7 +1554,7 @@ function trackedMuscles(){
   // tracked — the library is the single source of truth for which groups exist, so
   // recategorising retires the old names everywhere instead of leaving ghosts on the charts.
   const set=new Set();
-  (db.library||[]).forEach(e => String(e.muscle||'').split(',').map(m=>m.trim()).filter(Boolean)
+  (db.library||[]).forEach(e => tagList(e.muscle||'')
     .forEach(m => { if(!NON_MUSCLE_TAGS.includes(m)) set.add(m); }));
   const all=[...set];
   // Known names first in their canonical order, then anything new alphabetically
@@ -2010,7 +2019,7 @@ async function renderOverview() {
       trend30.avgPct>=0 ? '#2E7D32' : '#B71C1C')
     + tile('Last session', daysSinceLast==null ? '\u2014' : (daysSinceLast===0 ? 'Today' : daysSinceLast + 'd ago'),
       latestWeight ? 'body weight ' + latestWeight + 'kg' : 'body weight not logged')
-    + tile('Volume / week', vol30 ? (vol30/4 >= 1000 ? (vol30/4/1000).toFixed(1)+'k' : Math.round(vol30/4)) : '\u2014',
+    + tile('Volume / week', vol30 ? (vol30/(30/7) >= 1000 ? (vol30/(30/7)/1000).toFixed(1)+'k' : Math.round(vol30/(30/7))) : '\u2014',
       'kg, last 30 days');
 
   // ── LAST SESSION ──
@@ -2875,7 +2884,7 @@ function renderLog() {
 
     // Form cue
     const cueHtml=cue
-      ?'<button class="cue-toggle" onclick="toggleCue('+('cue-'+ei)+')">▸ Form cue</button><div class="cue-body" id="cue-'+ei+'">'+cue+'</div>'
+      ?'<button class="cue-toggle" onclick="toggleCue(\'cue-'+ei+'\')">▸ Form cue</button><div class="cue-body" id="cue-'+ei+'">'+cue+'</div>'
       :'';
 
     if(groupInfo[ei] && groupInfo[ei].isStart) html2+='<div class="ss-group"><div class="ss-label">'+groupInfo[ei].label+'</div>';
@@ -3478,8 +3487,14 @@ function renderHardSets(sessions, weeks){
     const covered = new Set(RADAR_GROUPS.flatMap(g => g.muscles));
     const extras = tracked.filter(m => !covered.has(m));
     labels = [...grouped.map(g => g.label), ...extras];
+    // AVERAGE per muscle in the region, not the sum: the 10–20 rings are a per-muscle target,
+    // so summing (Biceps 6 + Forearms 6 = 12) drew an under-trained region inside the band.
     data = [
-      ...grouped.map(g => Math.round(g.muscles.reduce((t,m)=>t+(perWeek[m]||0),0)*10)/10),
+      ...grouped.map(g => {
+        const present = g.muscles.filter(m => tracked.includes(m));
+        const n = Math.max(1, present.length);
+        return Math.round(present.reduce((t,m)=>t+(perWeek[m]||0),0)/n*10)/10;
+      }),
       ...extras.map(m => perWeek[m] || 0)
     ];
   }
@@ -3533,14 +3548,17 @@ function renderHardSets(sessions, weeks){
   });
 
   // A short written verdict beneath, since shape alone doesn't give you numbers
-  const low = labels.map((m,i)=>({m,n:data[i]})).filter(x=>x.n>0 && x.n<HARD_SETS_MIN).sort((a,b)=>a.n-b.n);
-  const none = labels.filter((m,i)=>data[i]===0);
-  const high = labels.map((m,i)=>({m,n:data[i]})).filter(x=>x.n>HARD_SETS_MAX);
+  // Judged per INDIVIDUAL muscle regardless of the chart's grouping: a region can look fine
+  // on average while one of its muscles is well under target.
+  const indiv = tracked.map(m => ({m, n: Math.round((perWeek[m]||0)*10)/10}));
+  const low = indiv.filter(x=>x.n>0 && x.n<HARD_SETS_MIN).sort((a,b)=>a.n-b.n);
+  const none = indiv.filter(x=>x.n===0).map(x=>x.m);
+  const high = indiv.filter(x=>x.n>HARD_SETS_MAX);
   const parts = [];
   if(low.length) parts.push('<b>Below 10:</b> ' + low.map(x=>x.m+' ('+x.n+')').join(', '));
   if(none.length) parts.push('<b>Untrained:</b> ' + none.join(', '));
   if(high.length) parts.push('<b>Above 20:</b> ' + high.map(x=>x.m+' ('+x.n+')').join(', '));
-  const over = labels.map((m,i)=>({m,n:data[i]})).filter(x => x.n > RADAR_CAP);
+  const over = indiv.filter(x => x.n > RADAR_CAP);
   if(note) note.innerHTML = (parts.length
       ? '<div style="color:var(--muted);">' + parts.join('<br><br>') + '</div>'
       : '<div style="color:#2E7D32;">Every muscle inside the 10\u201320 range.</div>')
@@ -3568,12 +3586,20 @@ function renderStalling(){
 // Weeks in the selected period, as a FRACTION. Rounding up (Math.ceil) divided a 30-day
 // period by 5 weeks instead of 4.29, understating every per-week figure by ~14% — which
 // pushed muscles below the 10-set line that were actually above it.
+// Exposure in weeks for the selected period — the DIVISOR for per-week averages. It must cover
+// the same window as the sessions it divides: capping it at 26 while summing all-time sessions
+// overstated long histories, and a minimum of 4 understated new ones.
 function weeksForPeriod(sessions){
-  if(progressPeriod) return Math.min(26, Math.max(1, progressPeriod/7));
-  if(!sessions || !sessions.length) return 12;
+  if(progressPeriod) return Math.max(1, progressPeriod/7);
+  if(!sessions || !sessions.length) return 1;
   const earliest = new Date(Math.min(...sessions.map(s => new Date(s.date).getTime())));
-  const wk = (Date.now() - earliest.getTime()) / (7*864e5);
-  return Math.min(26, Math.max(4, wk));
+  return Math.max(1, (Date.now() - earliest.getTime()) / (7*864e5));
+}
+// Number of weekly BUCKETS for a chart — a whole number, always including the current week,
+// and capped so a long history stays legible. Kept separate from the averaging divisor:
+// looping on a fractional week count skipped offset 0 and dropped the current week.
+function chartWeeks(sessions){
+  return Math.min(26, Math.max(1, Math.ceil(weeksForPeriod(sessions))));
 }
 // For display only — "averaged over 4.3 weeks" is noise
 function weeksLabel(w){ return Math.round(w*10)/10; }
@@ -3652,7 +3678,7 @@ function categorizeWorkout(exercises){
   (exercises||[]).forEach(ex => {
     if(!ex) return;
     if(ex.isCardio){ cardio++; return; }
-    const muscles = String(ex.muscle||'').split(',').map(m => m.trim()).filter(Boolean);
+    const muscles = tagList(ex.muscle||'');
     let region = null;
     for(const m of muscles){
       if(WORKOUT_UPPER.includes(m)){ region='upper'; break; }
@@ -3692,7 +3718,7 @@ function effectiveSessionMuscles(s){
     if(ex.isCardio){ set.add('Cardio'); }
     const lib = ex.name ? (db.library||[]).find(l => l.name === ex.name) : null;
     const raw = (lib && lib.muscle) ? lib.muscle : (ex.muscle || '');
-    String(raw).split(',').map(m => m.trim()).filter(Boolean).forEach(m => set.add(m));
+    tagList(raw).forEach(m => set.add(m));
   });
   s._effMuscles = [...set];
   return s._effMuscles;
@@ -3704,7 +3730,7 @@ function sessionMuscles(exercises){
     if(!ex) return;
     let raw = ex.muscle || '';
     if(!raw && ex.isCardio) raw = 'Cardio';
-    String(raw).split(',').map(m => m.trim()).filter(Boolean).forEach(m => set.add(m));
+    tagList(raw).forEach(m => set.add(m));
   });
   return [...set];
 }
@@ -3788,8 +3814,8 @@ function buildProgressContext(){
   }
 
   // Cardio minutes, 4wk vs prior
-  const cardioMin = list => list.reduce((t,s)=>t+(s.exercises||[]).filter(e=>e.isCardio)
-    .reduce((x,e)=>x+(parseFloat(e.reps)||(e.loggedSets&&e.loggedSets.sets&&e.loggedSets.sets[0]?e.loggedSets.sets[0].kg:0)||0),0),0);
+  // Actual logged minutes — this feeds the coach review, so planned values would mislead it
+  const cardioMin = list => list.reduce((t,s)=>t+(s.exercises||[]).reduce((x,e)=>x+cardioMinutes(e),0),0);
   const cardioTxt = Math.round(cardioMin(cur4)) + ' min this 4wk vs ' + Math.round(cardioMin(prev4)) + ' min prior 4wk.';
 
   const t = buildTrainingContext();
@@ -3882,6 +3908,37 @@ function renderProgressReport(rep){
     ageEl.textContent=d<=0?'updated today':d+'d old';
   }
   if(btn) btn.style.display='none';
+}
+
+// Best set ever per exercise + equipment + method. Reports ONE real set — its weight and its
+// reps — never the max weight, max reps and set count stitched together from different sets.
+// Warm-ups and isometric holds are excluded; bodyweight-only work is ranked by reps.
+// Newest record first.
+function computePersonalRecords(sessions){
+  const best = {};
+  (sessions||[]).forEach(s => {
+    if(s.is_draft) return;
+    (safeJSON(s.exercises,[])||[]).forEach(ex => {
+      if(!ex || ex.isCardio || isIsometric(ex)) return;
+      const sets = workingSets(ex).filter(st => st && (st.kg || st.reps));
+      if(!sets.length) return;
+      const top = sets.reduce((a,b) => {
+        const ak = parseFloat(a.kg)||0, bk = parseFloat(b.kg)||0;
+        if(bk !== ak) return bk > ak ? b : a;
+        return (parseFloat(b.reps)||0) > (parseFloat(a.reps)||0) ? b : a;
+      });
+      const kg = parseFloat(top.kg) || null, reps = parseFloat(top.reps) || 0;
+      const eq = ex.equipment || '', mod = ex.modifier || '';
+      const key = ex.name + '|' + eq + '|' + mod;
+      const cur = best[key];
+      const beats = !cur
+        || (kg || 0) > (cur.kg || 0)
+        || ((kg || 0) === (cur.kg || 0) && reps > cur.reps);
+      if(beats) best[key] = {label: ex.name + (eq ? ' \u00b7 ' + eq : '') + (mod ? ' \u00b7 ' + mod : ''),
+        kg, reps, date: s.date};
+    });
+  });
+  return Object.values(best).sort((a,b) => new Date(b.date) - new Date(a.date));
 }
 
 async function renderProgress() {
@@ -4004,7 +4061,7 @@ async function renderProgress() {
       const v = calcVolume([ex]);
       if(!v) return;
       // ex.muscle can be "Quads, Glutes" — credit each, or the composite key never matches
-      String(ex.muscle||'').split(',').map(x=>x.trim()).filter(Boolean).forEach(m => {
+      tagList(ex.muscle||'').forEach(m => {
         muscleVolume[m] = (muscleVolume[m] || 0) + v;
       });
     });
@@ -4114,24 +4171,11 @@ async function renderProgress() {
     '</div>';
 
   // ── PERSONAL RECORDS ──
-  const prMap = {};
-  db.sessions.forEach(s => {
-    (s.exercises||[]).forEach(ex => {
-      if(ex.isCardio || !ex.loggedSets?.sets?.length) return;
-      const maxKg = Math.max(...ex.loggedSets.sets.filter(st => st.kg).map(st => st.kg));
-      if(!maxKg) return;
-      const eq = ex.equipment || '';
-      const key = ex.name + (eq ? ' \u00b7 ' + eq : '');
-      if(!prMap[key] || maxKg > prMap[key].kg) {
-        prMap[key] = { kg: maxKg, date: s.date, sets: ex.loggedSets.sets.length, reps: Math.max(...ex.loggedSets.sets.map(st => st.reps||0)) };
-      }
-    });
-  });
-  const prs = Object.entries(prMap).sort((a,b) => new Date(b[1].date) - new Date(a[1].date)).slice(0, 6);
-  document.getElementById('pr-content').innerHTML = prs.length ? prs.map(([name, pr]) => `
+  const prs = computePersonalRecords(db.sessions).slice(0, 6);
+  document.getElementById('pr-content').innerHTML = prs.length ? prs.map(pr => `
     <div class="pr-entry">
-      <div><div style="font-size:13px;font-weight:500;">${name}</div>
-        <div style="font-size:11px;color:var(--faint);">${pr.kg}kg × ${pr.sets} × ${pr.reps} reps</div></div>
+      <div><div style="font-size:13px;font-weight:500;">${pr.label}</div>
+        <div style="font-size:11px;color:var(--faint);">${pr.kg != null ? pr.kg + 'kg' : 'Bodyweight'} × ${pr.reps} reps</div></div>
       <div style="text-align:right;"><span class="pr-badge">PR</span>
         <div style="font-size:11px;color:var(--faint);margin-top:3px;">${fmt(pr.date)}</div></div>
     </div>`).join('') :
@@ -4246,7 +4290,7 @@ function renderCardioChart(sessions){
   if(progressCharts.cardio){ try { progressCharts.cardio.destroy(); } catch(e){} }
   const tc = 'rgba(0,0,0,0.3)', gc = 'rgba(0,0,0,0.06)';
   const weeks = [];
-  const weeksToShow = weeksForPeriod(sessions);
+  const weeksToShow = chartWeeks(sessions);
   for(let i = weeksToShow - 1; i >= 0; i--){
     const d = new Date(); d.setDate(d.getDate() - i*7);
     const day = d.getDay();
@@ -4326,8 +4370,29 @@ function renderStrengthChart(sessions) {
 
 
 // ── BODY ──────────────────────────────────────────────────────────
+// Plausible ranges — wide enough never to reject a real reading, narrow enough to catch a
+// typo or a stray minus sign before it skews the charts. HTML min/max attributes alone don't
+// stop a value being submitted from a button handler.
+const BODY_LIMITS = {
+  'body-weight':['Body weight',20,400], 'body-fat':['Body fat %',2,70],
+  'meas-chest':['Chest',30,250], 'meas-waist':['Waist',30,250], 'meas-hips':['Hips',30,250],
+  'meas-bicep':['Bicep',10,100], 'meas-thigh':['Thigh',20,150], 'meas-shoulder':['Shoulders',50,250],
+  'meas-calf':['Calf',15,100], 'meas-neck':['Neck',20,80]
+};
+function bodyFieldError(){
+  for(const id of Object.keys(BODY_LIMITS)){
+    const raw = (document.getElementById(id)||{}).value;
+    if(raw === '' || raw == null) continue;
+    const v = parseFloat(raw), [label,lo,hi] = BODY_LIMITS[id];
+    if(!isFinite(v) || v < lo || v > hi) return label + ' must be between ' + lo + ' and ' + hi + '.';
+  }
+  return null;
+}
+
 async function logBody(){
   const weight=parseFloat(document.getElementById('body-weight').value);if(!weight)return;
+  const bodyErrMsg = bodyFieldError();
+  if(bodyErrMsg){ toast(bodyErrMsg,'error'); return; }
   const entry={user_id:currentUser.id,date:document.getElementById('body-date').value||localDateKey(new Date()),weight,fat:parseFloat(document.getElementById('body-fat').value)||null,chest:parseFloat(document.getElementById('meas-chest').value)||null,waist:parseFloat(document.getElementById('meas-waist').value)||null,hips:parseFloat(document.getElementById('meas-hips').value)||null,bicep:parseFloat(document.getElementById('meas-bicep').value)||null,thigh:parseFloat(document.getElementById('meas-thigh').value)||null,shoulder:parseFloat(document.getElementById('meas-shoulder').value)||null,calf:parseFloat(document.getElementById('meas-calf').value)||null,neck:parseFloat(document.getElementById('meas-neck').value)||null};
   const {data:bodyData,error:bodyErr}=await sb.from('body_log').insert(entry).select().single();
   if(bodyErr){dbErr('Body log',bodyErr);return;}if(bodyData){db.body.push(bodyData);db.body.sort((a,b)=>new Date(a.date)-new Date(b.date));toast('Measurements saved.','ok');}
@@ -4522,7 +4587,7 @@ async function builderSave(){
   const title = document.getElementById('builder-title').value.trim() || 'Custom workout';
   if(!builderExercises.length){ toast('Add at least one exercise first.','error'); return; }
   // Flatten muscle tags to unique list
-  const muscles = [...new Set(builderExercises.flatMap(e=>e.muscle.split(',').map(m=>m.trim())))];
+  const muscles = [...new Set(builderExercises.flatMap(e=>tagList(e.muscle)))];
   const workout = {
     sessionTitle: title,
     exercises: JSON.parse(JSON.stringify(builderExercises)),
@@ -4772,7 +4837,10 @@ function reconcileProgrammeProgress(){
     const prev = prog.current_day || 0;
     prog.current_day = st.todayIdx;
     if(typeof prog._selectedDay === 'undefined' || prog._selectedDay === prev) prog._selectedDay = st.todayIdx;
-    sb.from('programmes').update({current_day: st.todayIdx}).eq('id', prog.id);
+    // Must be consumed (then/await) or the client never sends it. Display doesn't depend on
+    // this write — "today" is re-derived from history on every render — so failure only logs.
+    sb.from('programmes').update({current_day: st.todayIdx}).eq('id', prog.id)
+      .then(r => { if(r && r.error) console.warn('programme pointer sync failed', r.error); });
   }
 }
 
@@ -4818,7 +4886,7 @@ function programmeMatrixHtml(prog, days){
       if(ex.isCardio) return row.muscles.includes('Cardio');
       const lib = (db.library||[]).find(l => l.name === ex.name);
       const raw = (lib && lib.muscle) ? lib.muscle : (ex.muscle||'');
-      const tags = String(raw).split(',').map(m=>m.trim()).filter(Boolean);
+      const tags = tagList(raw);
       if(!tags.length) return false;
       // Assign each exercise to exactly ONE row, chosen by its PRIMARY (first) muscle tag.
       // Matching on "first row that contains any tag" instead would file a Romanian Deadlift
@@ -4848,7 +4916,7 @@ function programmeMatrixHtml(prog, days){
     if(!ex || ex.isCardio) return;
     const lib = (db.library||[]).find(l => l.name === ex.name);
     const raw = (lib && lib.muscle) ? lib.muscle : (ex.muscle||'');
-    const tags = String(raw).split(',').map(m=>m.trim()).filter(Boolean);
+    const tags = tagList(raw);
     const primary = tags.find(t => PM_ROWS.some(r => r.muscles.includes(t)));
     if(!primary && tags.length && !NON_MUSCLE_TAGS.includes(tags[0])) extraTags.add(tags[0]);
   }));
@@ -4894,7 +4962,7 @@ function programmeMatrixHtml(prog, days){
     if(!ex || ex.isCardio) return;
     const lib = (db.library||[]).find(l => l.name === ex.name);
     const raw = (lib && lib.muscle) ? lib.muscle : (ex.muscle||'');
-    String(raw).split(',').map(m=>m.trim()).filter(Boolean).forEach(m => {
+    tagList(raw).forEach(m => {
       setsPerMuscle[m] = (setsPerMuscle[m]||0) + (ex.sets||3);
     });
   }));
@@ -4931,13 +4999,13 @@ function programmeDayPreview(dayData, opts){
     if(!ex || ex.isCardio) return;
     const lib = (db.library||[]).find(l => l.name === ex.name);
     const raw = (lib && lib.muscle) ? lib.muscle : (ex.muscle||'');
-    String(raw).split(',').map(m=>m.trim()).filter(Boolean)
+    tagList(raw)
       .filter(m => trackedMuscles().includes(m) && !MUSCLE_UMBRELLAS[m])
       .forEach(m => { freq[m] = (freq[m]||0) + 1; });
   });
   let muscles = Object.keys(freq).sort((a,b) => freq[b]-freq[a]).slice(0, maxMuscles);
   if(!muscles.length && dayData.muscles){
-    muscles = [...new Set(dayData.muscles.flatMap(m => String(m).split(',').map(x=>x.trim())).filter(Boolean))]
+    muscles = [...new Set(dayData.muscles.flatMap(m => tagList(m)).filter(Boolean))]
       .slice(0, maxMuscles);
   }
   return {
@@ -5101,13 +5169,10 @@ function startProgrammeDayByIndex(progId, dayIndex) {
   if(!saved) saved = db.savedWorkouts.find(w => (w.sessionTitle || w.title) === day.workoutTitle);
   if(!saved) { toast('Saved workout not found: ' + (day.workoutTitle || '(unnamed)'), 'error'); return; }
   loadSavedWorkout(db.savedWorkouts.indexOf(saved));
-  // Stamp the session so adherence can tell it was this programme + day.
+  // Stamp the session so adherence can tell it was this programme + day. The programme moves
+  // on when this session is SAVED (it's then the latest completed day), not when it's started —
+  // advancing here moved the programme even if the workout was discarded.
   if(db.activeSession) { db.activeSession.programme_id = String(prog.id); db.activeSession.programme_day = dayIndex; }
-  // Advance programme to the day after the one we just started
-  const next = (dayIndex + 1) % days.length;
-  prog.current_day = next;
-  prog._selectedDay = next;
-  sb.from('programmes').update({current_day: next}).eq('id', prog.id);
 }
 
 async function skipToDay(progId, dayIndex) {
@@ -5836,8 +5901,8 @@ function sessionRecap(s){
   const exercises = safeJSON(s.exercises, []);
   const vol = calcVolume(exercises);
   const setCount = exercises.reduce((n,ex)=>n+workingSets(ex).length,0);
-  const cardioMins = exercises.filter(e=>e.isCardio)
-    .reduce((t,e)=>t+(parseFloat(e.reps)||(e.loggedSets?.sets?.[0]?.kg)||0),0);
+  // Actual logged minutes. The planned "30 min" target is not what happened.
+  const cardioMins = exercises.reduce((t,e)=>t+cardioMinutes(e),0);
   const insights = sessionInsights(s);
 
   const stat = (v,l) => '<div class="recap-stat"><div class="recap-stat-v">' + v + '</div><div class="recap-stat-l">' + l + '</div></div>';
@@ -6117,7 +6182,7 @@ async function renderJustTrain() {
   // the list empty whenever the library hadn't loaded yet.
   if(musclePick){
     const muscles = new Set([...trackedMuscles(), ...MUSCLES_C]);
-    activeLibrary().forEach(e => String(e.muscle||'').split(',').map(m=>m.trim()).filter(Boolean).forEach(m=>muscles.add(m)));
+    activeLibrary().forEach(e => tagList(e.muscle||'').forEach(m=>muscles.add(m)));
     const prev = musclePick.value || '__all';
     musclePick.innerHTML = '<option value="__all">All exercises</option>'
       + '<option value="__recent">Recently used</option>'
@@ -6149,7 +6214,7 @@ function jtPopulateExercisePick(){
   } else {
     const selLower = sel.toLowerCase();
     list = activeLibrary()
-      .filter(e => String(e.muscle||'').split(',').map(m=>m.trim()).includes(sel))
+      .filter(e => tagList(e.muscle||'').includes(sel))
       .sort((a,b)=>a.name.localeCompare(b.name));
     // Nothing tagged exactly? Fall back to a looser match (e.g. "Legs" vs "Quads, Glutes")
     if(!list.length){
@@ -6620,7 +6685,7 @@ async function jtParseVoice(){
       const mins = pe.minutes != null ? pe.minutes
         : (sets.length && sets[0].reps != null ? sets[0].reps : (sets.length && sets[0].kg != null ? sets[0].kg : null));
       jtExercises.push({
-        name: lib.name, muscle: lib.muscle, sets: isCardio ? 1 : Math.max(sets.length, 3),
+        name: lib.name, muscle: lib.muscle, sets: isCardio ? 1 : Math.max(sets.length, 1),
         isCardio, equipment: isCardio ? '' : equipment, modifier,
         group: (!isCardio && /^[A-E]$/.test(String(pe.group||'').toUpperCase())) ? String(pe.group).toUpperCase() : '',
         reps: isCardio ? ((mins != null ? mins : 30) + ' min') : '10 reps',
@@ -6794,7 +6859,7 @@ async function jtResolveUnmatched(ui){
     : (uSets.length && uSets[0].reps != null ? uSets[0].reps : null);
   jtCaptureInputs();
   jtExercises.push({
-    name: lib.name, muscle: lib.muscle, sets: isCardio ? 1 : Math.max(uSets.length, 3),
+    name: lib.name, muscle: lib.muscle, sets: isCardio ? 1 : Math.max(uSets.length, 1),
     isCardio, equipment: isCardio ? '' : (EQUIPMENT.includes(u.equipment) ? u.equipment : (lastEquipmentFor(lib.name)||'')),
     modifier: MODIFIERS.includes(u.modifier) ? u.modifier : '',
     reps: isCardio ? ((uMins != null ? uMins : 30) + ' min') : '10 reps',
@@ -7166,11 +7231,10 @@ function exportHistoryCSV() {
       // on every row, which makes per-muscle volume impossible to compute downstream.
       // Current library tags win; the tags stored on the logged exercise are the fallback.
       const libEx = ex.name ? (db.library||[]).find(l => l.name === ex.name) : null;
-      const exTags = String((libEx && libEx.muscle) ? libEx.muscle : (ex.muscle || ''))
-        .split(',').map(m => m.trim()).filter(Boolean);
-      // Convention: the first tag is the primary mover
-      const primaryMus = (exTags[0] || '').replace(/,/g, ';');
-      const secondaryMus = exTags.slice(1).join('; ').replace(/,/g, ';');
+      // parseMuscleTags knows the primary: the first tag, or every "*"-starred tag
+      const pt = parseMuscleTags((libEx && libEx.muscle) ? libEx.muscle : (ex.muscle || ''));
+      const primaryMus = pt.primary.join('; ');
+      const secondaryMus = pt.secondary.join('; ');
 
       // An exercise that was planned but never logged: kept as one row marked "skipped"
       // rather than silently dropped, so planned-vs-done stays visible in the export.
