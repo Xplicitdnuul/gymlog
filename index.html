@@ -989,8 +989,10 @@ html.mobile-layout .hs-chart { height:300px; }
 const SUPA_URL = 'https://hpyosiqjvsjtaeijsjnu.supabase.co';
 const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
-const APP_VERSION = '1.6.2';
-const BUILD_STAMP = '2026-06-08c';
+// Bumped with every shipped batch, so the build you're running is visible under
+// Goals & profile → App version (Safari can keep serving a cached copy).
+const APP_VERSION = '1.7.3';
+const BUILD_STAMP = '2026-10-26 batch 3';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -1479,6 +1481,9 @@ async function loadUserDataInner() {
     if(draftAge>7){
       await sb.from('sessions').delete().eq('id',d.id);
     } else {
+    // Never replace a session that's in progress on this screen: the server draft can be up
+    // to a second behind what was typed, so restoring it mid-workout would undo recent edits.
+    if(db.activeSession && activeSessionHasWork()) { /* keep the live session */ } else
     db.activeSession={
       sessionTitle:d.title||'Session',
       muscles:safeJSON(d.muscles,[]),
