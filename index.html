@@ -991,8 +991,8 @@ const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
 // Bumped with every shipped batch, so the build you're running is visible under
 // Goals & profile → App version (Safari can keep serving a cached copy).
-const APP_VERSION = '1.7.3';
-const BUILD_STAMP = '2026-10-26 batch 3';
+const APP_VERSION = '1.7.5';
+const BUILD_STAMP = '2026-10-26 batch 5';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -1669,6 +1669,17 @@ function lastSetupFor(name){
   return null;
 }
 
+// The method used the last time this exercise was performed with this equipment, or null.
+function lastModifierWith(name, equipment){
+  for(let i=db.sessions.length-1;i>=0;i--){
+    const s=db.sessions[i];
+    if(!s.exercises || s.is_draft) continue;
+    const ex=s.exercises.find(e=>e && e.name===name && (e.equipment||'')===(equipment||'') && workingSets(e).length);
+    if(ex) return ex.modifier||'';
+  }
+  return null;
+}
+
 function lastEquipmentFor(name){
   for(let i=db.sessions.length-1;i>=0;i--){
     const s=db.sessions[i];
@@ -1809,7 +1820,10 @@ function weeklyStreak(sessions){
   if(!sessions || !sessions.length) return 0;
   const weekStart = d => { const x=new Date(d); const day=x.getDay(); const mon=new Date(x); mon.setDate(x.getDate()-(day===0?6:day-1)); mon.setHours(0,0,0,0); return mon.getTime(); };
   const weeks = new Set(sessions.map(s => weekStart(s.date)));
-  const WEEK = 7*864e5;
+  // Step back by CALENDAR week, not a fixed 168 hours: weeks are keyed by local midnight
+  // Monday, and across a daylight-saving change Monday minus 168h lands at 23:00 or 01:00,
+  // matches no key, and broke the streak (36 consecutive weeks reported as 30).
+  const prevWeek = t => { const d = new Date(t); d.setDate(d.getDate() - 7); return weekStart(d); };
   // A week the user was off sick/injured for most of it shouldn't break the streak —
   // it pauses instead: skipped over without incrementing the count.
   const isExcusedWeek = start => {
@@ -1817,11 +1831,11 @@ function weeklyStreak(sessions){
     return daysOffBetween(new Date(start), end) >= 4;
   };
   let cursor = weekStart(new Date());
-  if(!weeks.has(cursor)) cursor -= WEEK; // haven't trained yet this week — no penalty
+  if(!weeks.has(cursor)) cursor = prevWeek(cursor); // haven't trained yet this week — no penalty
   let n = 0;
   while(true){
-    if(weeks.has(cursor)){ n++; cursor -= WEEK; continue; }
-    if(isExcusedWeek(cursor)){ cursor -= WEEK; continue; } // paused, not broken
+    if(weeks.has(cursor)){ n++; cursor = prevWeek(cursor); continue; }
+    if(isExcusedWeek(cursor)){ cursor = prevWeek(cursor); continue; } // paused, not broken
     break;
   }
   return n;
@@ -2459,12 +2473,18 @@ function loadSavedWorkout(i){
   if(!confirmReplaceActiveSession()) return;
   const exercises = JSON.parse(JSON.stringify(safeJSON(w.exercises,[])));
   const muscles = safeJSON(w.muscles,[]);
-  // Start each exercise on the setup you last actually used, so prefill comes from your most
-  // recent session of the exercise. The template's stored setup is only the fallback.
+  // The built workout is the authority for its setup. Equipment named in the template is kept;
+  // history only fills what the template leaves blank. A blank method ("Standard") can't be told
+  // apart from "never set" — most templates predate the field — so it's filled with the method
+  // last used WITH THAT EQUIPMENT, which keeps habits like unilateral pulldowns.
   exercises.forEach(ex => {
     if(!ex || ex.isCardio) return;
-    const last = lastSetupFor(ex.name);
-    if(last){ ex.equipment = last.equipment; ex.modifier = last.modifier; }
+    if(ex.equipment){
+      if(!ex.modifier){ const m = lastModifierWith(ex.name, ex.equipment); if(m) ex.modifier = m; }
+    } else {
+      const last = lastSetupFor(ex.name);
+      if(last){ ex.equipment = last.equipment; if(!ex.modifier) ex.modifier = last.modifier; }
+    }
   });
   db.activeSession = {
     sessionTitle: w.sessionTitle || w.title || 'Custom workout',
@@ -2593,6 +2613,35 @@ function buildTrainingContext(){
 }
 
 let _lastGenAuto = false;
+// ── AI PLAN: TIME BUDGET + VALIDATION ─────────────────────────────
+// Same model as the planner's on-screen estimate: per set ~2 min of work plus rest.
+function minutesPerExercise(sets){ sets = sets || 3; return sets*2 + sets*((db.rest && db.rest.hyp) || 90)/60; }
+function exercisesForBudget(liftMin){ return Math.max(2, Math.floor((parseFloat(liftMin)||60) / minutesPerExercise(3))); }
+
+// The model's answer is parsed JSON, not trusted data. Every exercise must resolve to the
+// user's own library (it once returned "Moon Lunge" with sets -7); counts are clamped to sane
+// ranges; anything unusable is dropped and reported rather than silently kept.
+function validateGeneratedSession(raw){
+  const dropped = [];
+  const lib = activeLibrary();
+  const exs = (Array.isArray(raw && raw.exercises) ? raw.exercises : []).slice(0, 12).map(e => {
+    if(!e || typeof e.name !== 'string') { dropped.push('(unnamed)'); return null; }
+    const hit = lib.find(l => l.name.toLowerCase() === e.name.trim().toLowerCase()) || matchLibraryExercise(e.name);
+    if(!hit) { dropped.push(e.name); return null; }
+    const isCardio = String(hit.muscle||'').toLowerCase().includes('cardio') || e.isCardio === true;
+    const sets = Math.round(Number(e.sets));
+    const reps = (typeof e.reps === 'string' || typeof e.reps === 'number') && /\d/.test(String(e.reps)) ? String(e.reps).slice(0, 24) : (isCardio ? '20 min' : '10 reps');
+    return {name: hit.name, muscle: hit.muscle, sets: isCardio ? 1 : (sets >= 1 && sets <= 8 ? sets : 3), reps,
+      isRepeat: e.isRepeat === true, isCardio, tip: typeof e.tip === 'string' ? e.tip.slice(0, 300) : ''};
+  }).filter(Boolean);
+  const unique = exs.filter((e,i) => exs.findIndex(x => x.name === e.name) === i);
+  return {
+    session: {sessionTitle: (typeof raw.sessionTitle === 'string' && raw.sessionTitle.trim() ? raw.sessionTitle.trim().slice(0,60) : 'Workout'),
+      exercises: unique, coachNote: typeof raw.coachNote === 'string' ? raw.coachNote.slice(0, 800) : ''},
+    dropped
+  };
+}
+
 async function generateSession(auto) {
   _lastGenAuto = !!auto;
   // auto === true: no muscle selection — let the AI choose from history, goals and recency
@@ -2614,13 +2663,19 @@ async function generateSession(auto) {
     ? 'TARGET: You choose. Pick the muscles that most need work, based primarily on DAYS SINCE TRAINED\n'
       + '(anything 5+ days is stale, 7+ is a priority), balanced against the user goals and what the recent\n'
       + 'sessions already covered. Build one coherent session (a sensible split — e.g. upper, lower, full body,\n'
-      + 'push, pull — not a scattered list). Aim for 4-6 exercises, default goal=' + defGoal + '.\n'
+      + 'push, pull — not a scattered list). Plan at most ' + exercisesForBudget(db.selectedTime||60) + ' lifting exercises at about 3 sets each. Default goal=' + defGoal + '.\n'
       + 'State in coachNote WHY you chose these muscles, referencing the days-since numbers.\n'
     : 'PER-MUSCLE INSTRUCTIONS (the user chose these):\n'+muscleLines+'\n'
-      + 'CARDIO: '+(cm.length?cm.join(', ')+' - '+db.selectedTimeCardio+' min each':'None')+'\n';
+      + 'CARDIO: '+(cm.length?cm.join(', ')+' - '+db.selectedTimeCardio+' min each':'None')+'\n'
+      + 'If these instructions do not fit the time budget below, keep every chosen muscle but trim sets first, and say so in coachNote.\n';
+
+  // Applies to both modes: the time the user picked is a hard constraint on the lifting part
+  const budgetBlock = 'LIFTING TIME BUDGET: ' + (db.selectedTime||60) + ' minutes, excluding cardio. Each exercise of 3 sets takes '
+    + 'roughly ' + Math.round(minutesPerExercise(3)) + ' min including rest, so about ' + exercisesForBudget(db.selectedTime||60)
+    + ' exercises fit. The session MUST fit this budget.\n';
 
   const prompt='You are a personal trainer AI generating the user\'s next gym session.\n\n'
-    +targetBlock+'\n'
+    +targetBlock+budgetBlock+'\n'
     +'USER GOALS (favour, but do not crowd out other muscles): '+goalTxt+'\n'
     +'TRAINING LOAD: '+ctx.loadTxt+'\n'
     +'TIME OFF / INJURIES LOGGED (gaps here are NOT lack of discipline — do not treat them as\n'
@@ -2661,11 +2716,16 @@ async function generateSession(auto) {
     +'{"sessionTitle":"...","exercises":[{"name":"...","muscle":"...","sets":3,"reps":"10 reps","isRepeat":false,"isCardio":false,"tip":"..."}],"coachNote":"..."}';
   try {
     const res=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:AI_MODEL,max_tokens:2000,messages:[{role:'user',content:prompt}]})});
+    if(res.ok === false){ status.textContent=''; toast('The planner couldn\u2019t be reached (' + res.status + '). Try again.','error'); btn.disabled=false; if(autoBtn) autoBtn.disabled=false; return; }
     const data=await res.json();
-    const txt=data.content.map(b=>b.text||'').join('').replace(/```json|```/g,'').trim();
+    const txt=(data.content||[]).map(b=>b.text||'').join('').replace(/```json|```/g,'').trim();
     let session;
     try {
-      session=JSON.parse(txt);
+      const v = validateGeneratedSession(JSON.parse(txt));
+      session = v.session;
+      if(v.dropped.length) session.coachNote = (session.coachNote ? session.coachNote + ' ' : '')
+        + '(Removed ' + v.dropped.length + ' suggestion' + (v.dropped.length>1?'s':'') + ' not in your library: ' + v.dropped.join(', ') + '.)';
+      if(!session.exercises.length) throw new Error('no usable exercises');
     } catch(parseErr) {
       console.error('Raw AI response:', txt);
       status.textContent='';
@@ -2675,6 +2735,10 @@ async function generateSession(auto) {
     }
     const derived = auto ? sessionMuscles(session.exercises||[]) : db.selectedMuscles;
     db.pendingSession={...session,muscles:derived,date:new Date().toISOString()};
+    // Check the plan against the budget with the same estimate the planner shows
+    const budget = parseFloat(db.selectedTime)||60;
+    const est = session.exercises.filter(e=>!e.isCardio).reduce((t,e)=>t+minutesPerExercise(e.sets),0);
+    if(est > budget*1.2) toast('This plan runs about ' + Math.round(est) + ' min of lifting \u2014 over your ' + budget + ' min. Remove an exercise or two.','error');
     renderPlannerResult(session);status.textContent='';
   } catch(e){status.textContent='Error generating. Try again.';console.error(e);}
   btn.disabled=false; if(autoBtn) autoBtn.disabled=false;
@@ -3566,6 +3630,17 @@ function hardSetsPerMuscle(sessions, weeks){
 // one before it rather than against an all-time best: a lift being rebuilt after a layoff
 // (90→95→100) is progressing, and flagging it as "stalled" against last year's peak would
 // be discouraging at exactly the wrong moment. All-time bests belong in the PR panel.
+// ── ONE IDENTITY FOR "THE SAME LIFT" ──────────────────────────────
+// Name + equipment + method. Comparing across any of these produced fake progress (dumbbell
+// 20 kg -> machine 100 kg read as +400%) or merged unilateral and bilateral into one line.
+// Prefill, PRs and stall detection already used this; strength trends, the strength chart
+// and the coach review now do too.
+const VK_SEP = '|||';
+function variantKey(ex){ return [ex.name||'', ex.equipment||'', ex.modifier||''].join(VK_SEP); }
+function parseVariantKey(k){ const p = String(k).split(VK_SEP); return {name:p[0]||'', equipment:p[1]||'', modifier:p[2]||''}; }
+function variantLabel(v){ return v.name + (v.equipment ? ' \u00b7 ' + v.equipment : '') + (v.modifier ? ' \u00b7 ' + v.modifier : ''); }
+function isVariant(ex, v){ return !!ex && ex.name===v.name && (ex.equipment||'')===v.equipment && (ex.modifier||'')===v.modifier; }
+
 function stallingLifts(){
   const RECENT_DAYS = 42, PRIOR_DAYS = 84; // last 6 weeks vs the 6 before that
   const now = Date.now();
@@ -3608,7 +3683,7 @@ function strengthTrendSummary(sessions){
     const sets = workingSets(ex).filter(st => st.kg && st.reps);
     if(!sets.length) return;
     const e1 = Math.max(...sets.map(st => st.kg * (1 + st.reps/30)));
-    const key = ex.name + (ex.modifier?' ('+ex.modifier+')':'');
+    const key = variantKey(ex);
     (series[key] = series[key] || []).push({d:new Date(s.date).getTime(), e1, inPeriod:inPeriod.has(s.id)});
   }));
   let improved = 0, tracked = 0, totalPct = 0;
@@ -3899,14 +3974,25 @@ function invalidateMuscleCache(){ (db.sessions||[]).forEach(s=>{ delete s._effMu
 function effectiveSessionMuscles(s){
   if(!s) return [];
   if(s._effMuscles) return s._effMuscles;
-  const set = new Set(safeJSON(s.muscles, []));
+  // Only PERFORMED work counts. This used to start from the session's stored list — everything
+  // planned — and add every exercise whether done or not, so a skipped squat marked quads as
+  // trained today. It also meant a tag removed from the library never left old sessions.
+  const set = new Set();
+  let performedAny = false;
   (s.exercises||[]).forEach(ex => {
     if(!ex) return;
-    if(ex.isCardio){ set.add('Cardio'); }
+    if(ex.isCardio){
+      if(cardioMinutes(ex) > 0){ set.add('Cardio'); performedAny = true; }
+      return;
+    }
+    if(!workingSets(ex).some(st => st && (st.kg || st.reps))) return;   // skipped / never logged
+    performedAny = true;
     const lib = ex.name ? (db.library||[]).find(l => l.name === ex.name) : null;
-    const raw = (lib && lib.muscle) ? lib.muscle : (ex.muscle || '');
-    tagList(raw).forEach(m => set.add(m));
+    tagList((lib && lib.muscle) ? lib.muscle : (ex.muscle || '')).forEach(m => set.add(m));
   });
+  // Very old sessions may have performed exercises with no tags anywhere; the session-level
+  // list is the only record of what they trained, so use it as a last resort.
+  if(performedAny && !set.size) safeJSON(s.muscles, []).forEach(m => set.add(m));
   s._effMuscles = [...set];
   return s._effMuscles;
 }
@@ -3980,7 +4066,7 @@ function buildProgressContext(){
     const sets = workingSets(ex).filter(st => st.kg && st.reps);
     if(!sets.length) return;
     const e1 = Math.max(...sets.map(st => st.kg * (1 + st.reps/30)));
-    const key = ex.name + (ex.modifier?' ('+ex.modifier+')':'');
+    const key = variantLabel(parseVariantKey(variantKey(ex)));
     (series[key] = series[key] || []).push({d:new Date(s.date), e1});
   }));
   const trendTxt = Object.keys(series).map(k => {
@@ -4301,13 +4387,12 @@ async function renderProgress() {
   sessions.forEach(s => (s.exercises||[])
     .filter(e => !e.isCardio && e.loggedSets?.sets?.some(st => st.kg))
     .forEach(e => {
-      const eq = e.equipment||'';
-      const key = e.name+'|||'+eq;
+      const key = variantKey(e);
       exCount[key] = (exCount[key]||0) + 1;
       if(!exMap.has(key)){
         const lib = (db.library||[]).find(l => l.name === e.name);
-        exMap.set(key, {key, label: e.name + (eq?' \u00b7 '+eq:''), name: e.name,
-          muscle: (lib && lib.muscle) ? lib.muscle.split(',')[0].trim() : (e.muscle||'Other').split(',')[0].trim()});
+        exMap.set(key, {key, label: variantLabel(parseVariantKey(key)), name: e.name,
+          muscle: parseMuscleTags((lib && lib.muscle) ? lib.muscle : (e.muscle||'Other')).primary[0] || 'Other'});
       }
     }));
   const exItems = [...exMap.values()]
@@ -4514,13 +4599,11 @@ function renderStrengthChart(sessions) {
   const tc = 'rgba(0,0,0,0.3)', gc = 'rgba(0,0,0,0.06)';
   const colors = ['#1A56A0','#2E7D32','#92600A','#7B61C4','#B71C1C','#0F6E56'];
   const datasets = strengthExercises.map((key, ci) => {
-    const sep = key.indexOf('|||');
-    const exName = sep >= 0 ? key.slice(0, sep) : key;
-    const exEquip = sep >= 0 ? key.slice(sep + 3) : '';
-    const dsLabel = exName + (exEquip ? ' · ' + exEquip : '');
+    const v = parseVariantKey(key);
+    const dsLabel = variantLabel(v);
     const pts = [];
     sessions.forEach(s => {
-      const ex = (s.exercises||[]).find(e => e.name === exName && (e.equipment||'')===exEquip && e.loggedSets?.sets?.length);
+      const ex = (s.exercises||[]).find(e => isVariant(e, v) && e.loggedSets?.sets?.length);
       if(!ex) return;
       // Store ISO date for correct sorting, display label separately
       const isoDate = localDateKey(s.date);
@@ -5651,11 +5734,28 @@ async function generateProgramme() {
   try {
     const res = await fetch('/api/chat', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({model:AI_MODEL, max_tokens:2000, messages:[{role:'user', content:lines.join('\n')}]})});
+    if(res.ok === false) throw new Error('planner unavailable (' + res.status + ')');
     const data = await res.json();
-    const txt = data.content.map(b => b.text||'').join('').replace(/```json|```/g,'').trim();
+    const txt = (data.content||[]).map(b => b.text||'').join('').replace(/```json|```/g,'').trim();
     const prog = JSON.parse(txt);
-    document.getElementById('prog-name').value = prog.name || '';
-    progDays = prog.days || [];
+    // Every workout day must point at one of YOUR saved workouts; unknown names are dropped and
+    // reported rather than saved as days that can't be started.
+    const dropped = [];
+    const days = (Array.isArray(prog.days) ? prog.days : []).slice(0, 14).map(d => {
+      if(d && d.type === 'rest') return {type:'rest', workoutTitle:'Rest day', muscles:[]};
+      const t = d && typeof d.workoutTitle === 'string' ? d.workoutTitle.trim().toLowerCase() : '';
+      const w = (db.savedWorkouts||[]).find(w => (w.sessionTitle||w.title||'').trim().toLowerCase() === t);
+      if(!w){ dropped.push((d && d.workoutTitle) || '(unnamed)'); return null; }
+      return {type:'workout', workoutTitle: w.sessionTitle||w.title, workoutId: w.id,
+        muscles: Array.isArray(d.muscles) ? d.muscles.filter(m => typeof m === 'string').slice(0, 12) : []};
+    }).filter(Boolean);
+    if(!days.some(d => d.type === 'workout')) throw new Error('no usable workout days');
+    // A generated programme is NEW: clear any edit in progress, or saving it would overwrite
+    // the programme that happened to be open in the editor.
+    editingProgrammeId = null;
+    document.getElementById('prog-name').value = (typeof prog.name === 'string' ? prog.name.slice(0, 60) : '');
+    progDays = days;
+    if(dropped.length) toast('Removed ' + dropped.length + ' day' + (dropped.length>1?'s':'') + ' naming workouts you don\u2019t have: ' + dropped.join(', '), 'error');
     document.getElementById('programme-builder').style.display = 'block';
     renderProgDayList();
     // Surface the reasoning — the user should be able to judge the structure, not just accept it
@@ -5669,7 +5769,9 @@ async function generateProgramme() {
         r.style.cssText = 'margin:10px 0;';
         if(nameEl && nameEl.parentNode) nameEl.parentNode.insertBefore(r, nameEl.nextSibling);
       }
-      r.innerHTML = '<b>Why this structure:</b> ' + prog.rationale;
+      // AI text is shown as text, never as markup
+      r.innerHTML = '<b>Why this structure:</b> ';
+      r.appendChild(document.createTextNode(String(prog.rationale).slice(0, 1000)));
     }
     document.getElementById('programme-builder').scrollIntoView({behavior:'smooth'});
     status.textContent = '';
@@ -7010,11 +7112,14 @@ function matchLibraryExercise(name){
   hit = lib.find(e => normalizeExName(e.name) === norm);
   if(hit) return hit;
 
-  // Fuzzy: token overlap, weighted so a full containment beats scattered matches
+  // Fuzzy: token overlap, weighted so a full containment beats scattered matches. Only active
+  // exercises are candidates, and it only guesses when one candidate CLEARLY wins: "Press" scored
+  // the same against Leg Press and Bench Press and silently took whichever came first. A near-tie
+  // returns null, which sends the name to the "which exercise did you mean?" resolver.
   const tokens = norm.split(' ').filter(Boolean);
   if(!tokens.length) return null;
-  let best = null, bestScore = 0;
-  lib.forEach(e => {
+  let best = null, bestScore = 0, secondScore = 0;
+  lib.filter(e => !e.archived).forEach(e => {
     const en = normalizeExName(e.name);
     const et = en.split(' ').filter(Boolean);
     if(!et.length) return;
@@ -7022,9 +7127,12 @@ function matchLibraryExercise(name){
     if(!shared) return;
     let score = shared / Math.max(tokens.length, et.length);
     if(en.includes(norm) || norm.includes(en)) score += 0.35;
-    if(score > bestScore){ bestScore = score; best = e; }
+    if(score > bestScore){ secondScore = bestScore; bestScore = score; best = e; }
+    else if(score > secondScore){ secondScore = score; }
   });
-  return bestScore >= 0.6 ? best : null;
+  if(bestScore < 0.6) return null;
+  if(bestScore - secondScore < 0.15) return null;      // ambiguous — ask rather than guess
+  return best;
 }
 
 // Names the AI produced that couldn't be matched to the library, awaiting user mapping.
@@ -7253,8 +7361,11 @@ function renderGoalsPageList() {
     if(g.linked_exercise) {
       db.sessions.forEach(s => {
         (s.exercises||[]).forEach(ex => {
-          if(ex.name === g.linked_exercise && ex.loggedSets?.sets?.length) {
-            const maxKg = Math.max(...ex.loggedSets.sets.filter(st => st.kg).map(st => st.kg));
+          // Working sets only — a warm-up single shouldn't count toward a goal. (Goals store just the
+          // exercise name, so any equipment/method variant of it still counts.)
+          const ws = (ex.name === g.linked_exercise && !isIsometric(ex)) ? workingSets(ex).filter(st => st && st.kg) : [];
+          if(ws.length) {
+            const maxKg = Math.max(...ws.map(st => parseFloat(st.kg)||0));
             if(maxKg && (!autoKg || maxKg > autoKg)) autoKg = maxKg;
           }
         });
