@@ -992,8 +992,8 @@ const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
 // Bumped with every shipped batch, so the build you're running is visible under
 // Goals & profile → App version (Safari can keep serving a cached copy).
-const APP_VERSION = '1.7.6';
-const BUILD_STAMP = '2026-10-26 batch 6';
+const APP_VERSION = '1.7.7';
+const BUILD_STAMP = '2026-10-26 batch 7';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -1468,6 +1468,18 @@ async function loadUserData() {
 
 // A failed read keeps what was already loaded instead of replacing it with an empty list —
 // a temporary outage must not look like deleted history. Failures are reported, not hidden.
+// Supabase returns at most this many rows per request (the project default). A full read that
+// comes back exactly full has very likely been cut off — silently, by the server. At about ten
+// sessions a month that's years away, so rather than paginate every read, say so if it happens.
+// (The full backup on Goals & profile does page through everything.)
+const SERVER_ROW_CAP = 1000;
+function warnIfTruncated(label, res){
+  if(res && !res.error && Array.isArray(res.data) && res.data.length >= SERVER_ROW_CAP){
+    console.warn(label + ' read hit the server row cap');
+    toast('Only the first ' + SERVER_ROW_CAP.toLocaleString('en-GB') + ' ' + label + ' loaded \u2014 some history may be missing here. The full backup on Goals & profile still includes everything.', 'error');
+  }
+}
+
 function keepOrReplace(label, res, mapRows, current){
   if(!res || res.error){
     (db._loadErrors = db._loadErrors || []).push(label);
@@ -1535,6 +1547,7 @@ async function loadUserDataInner(gen) {
   }
 
   db.library = keepOrReplace('exercise library', lib, decodeLibraryRows, db.library);
+  warnIfTruncated('sessions', sess); warnIfTruncated('body log entries', body); warnIfTruncated('exercises', lib);
   db.sessions = keepOrReplace('workout history', sess, rows => rows.filter(s=>!s.is_draft).map(s=>({...s, sessionTitle:s.title||s.sessionTitle||'Session', exercises:safeJSON(s.exercises,[]), muscles:safeJSON(s.muscles,[])})), db.sessions);
   db.body = keepOrReplace('body log', body, rows => rows.map(b=>({...b})), db.body);
   db.goals = keepOrReplace('goals', goals, rows => rows.map(g=>({...g})), db.goals);
@@ -1880,6 +1893,7 @@ async function refreshData(){
     sb.from('sessions').select('*').eq('user_id',uid).order('date'),
     sb.from('body_log').select('*').eq('user_id',uid).order('date'),
   ]);
+  warnIfTruncated('sessions', sess);
   if(sess.data) db.sessions=sess.data.filter(s=>!s.is_draft).map(s=>({...s,sessionTitle:s.title||s.sessionTitle||'Session',exercises:safeJSON(s.exercises,[]),muscles:safeJSON(s.muscles,[])}));
   if(body.data) db.body=body.data;
   } catch(e){ console.error('refreshData error:',e); } finally { _refreshing=false; }
@@ -7646,32 +7660,46 @@ async function exportFullBackup(){
   }
 }
 
+// ── CSV ───────────────────────────────────────────────────────────
+// Proper CSV: a field containing a comma, quote or line break is quoted (quotes doubled), so
+// notes keep their commas and line breaks instead of being rewritten. Text that a spreadsheet
+// would run as a formula (starting with = + - @ or a tab/CR) gets a leading apostrophe, which
+// shows it as plain text. Numbers pass through untouched so they stay numbers.
+function csvCell(v){
+  if(v == null) return '';
+  if(typeof v === 'number') return isFinite(v) ? String(v) : '';
+  let t = String(v);
+  if(/^[=+\-@\t\r]/.test(t)) t = "'" + t;
+  return /[",\r\n]/.test(t) || /^\s|\s$/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
+}
+function csvRow(cells){ return cells.map(csvCell).join(','); }
+
 function exportHistoryCSV() {
   if(!db.sessions.length) { toast('No sessions to export.', 'error'); return; }
 
   const rows = [];
   // Header
-  rows.push(['Date','Session title','Session muscles','Exercise','Primary muscle','Secondary muscles','Equipment','Modifier','Group','Sets','Set','Warm-up','kg','Reps','Status','Exercise note','Session note'].join(','));
+  rows.push(csvRow(['Date','Session title','Session muscles','Exercise','Primary muscle','Secondary muscles','Equipment','Modifier','Group','Sets','Set','Warm-up','kg','Reps','Status','Exercise note','Session note']));
 
   db.sessions.forEach(s => {
     const date = s.date ? localDateKey(s.date) : '';
-    const title = (s.sessionTitle || s.title || '').replace(/,/g, ';');
-    const muscles = safeJSON(s.muscles, []).join('; ').replace(/,/g, ';');
-    const sessionNote = (s.note || '').replace(/,/g, ';').replace(/\n/g, ' ');
+    const title = (s.sessionTitle || s.title || '');
+    const muscles = safeJSON(s.muscles, []).flatMap(m => tagList(m)).join('; ')   /* older sessions store comma-joined entries */;
+    const sessionNote = (s.note || '');
     const exercises = safeJSON(s.exercises, []);
 
     if(!exercises.length) {
-      rows.push([date, title, muscles, '', '', '', '', '', '', '', '', '', '', '', 'no exercises', '', sessionNote].join(','));
+      rows.push(csvRow([date, title, muscles, '', '', '', '', '', '', '', '', '', '', '', 'no exercises', '', sessionNote]));
       return;
     }
 
     exercises.forEach(ex => {
-      const exName = (ex.name || '').replace(/,/g, ';');
-      const exNote = (ex.loggedSets && ex.loggedSets.note ? ex.loggedSets.note : '').replace(/,/g, ';').replace(/\n/g, ' ');
+      const exName = (ex.name || '');
+      const exNote = (ex.loggedSets && ex.loggedSets.note ? ex.loggedSets.note : '');
       const sets = ex.loggedSets && ex.loggedSets.sets ? ex.loggedSets.sets : [];
 
-      const eq = (ex.equipment || '').replace(/,/g, ';');
-      const mod = (ex.modifier || '').replace(/,/g, ';');
+      const eq = (ex.equipment || '');
+      const mod = (ex.modifier || '');
       const grp = ex.group || '';
 
       // Per-exercise muscle tags — the session-level column repeats one concatenated string
@@ -7686,12 +7714,12 @@ function exportHistoryCSV() {
       // An exercise that was planned but never logged: kept as one row marked "skipped"
       // rather than silently dropped, so planned-vs-done stays visible in the export.
       if(!sets.length) {
-        rows.push([date, title, muscles, exName, primaryMus, secondaryMus, eq, mod, grp, ex.sets || '', '', '', '', '', 'skipped', exNote, sessionNote].join(','));
+        rows.push(csvRow([date, title, muscles, exName, primaryMus, secondaryMus, eq, mod, grp, ex.sets || '', '', '', '', '', 'skipped', exNote, sessionNote]));
         return;
       }
 
       sets.forEach((st, si) => {
-        rows.push([
+        rows.push(csvRow([
           date,
           title,
           muscles,
@@ -7709,7 +7737,7 @@ function exportHistoryCSV() {
           'logged',
           exNote,
           sessionNote
-        ].join(','));
+        ]));
       });
     });
   });
@@ -7887,6 +7915,24 @@ function populateMergeSelects(){
 // Fold one library exercise into another, rewriting every stored reference so no history
 // is lost. The modifier is applied to the rewritten entries — without it, one-legged work
 // would merge into the bilateral record and corrupt both PR histories.
+// Merge one exercise into another across ALL history.
+// Reads the server's current rows rather than trusting local copies, rewrites COPIES, and only
+// deletes the source exercise after re-checking the server finds nothing still using its name.
+// The old version renamed local history before each write succeeded: if a write failed, a retry
+// saw "nothing left to rename", skipped those rows and deleted the source — stranding them.
+// Any failure now stops before the delete; running the merge again simply finishes the job.
+function renameInExercises(exs, srcName, dst, modifier){
+  let n = 0;
+  (exs||[]).forEach(ex => {
+    if(ex && ex.name === srcName){
+      ex.name = dst.name; ex.muscle = dst.muscle;
+      if(modifier && !ex.modifier) ex.modifier = modifier;
+      n++;
+    }
+  });
+  return n;
+}
+
 async function mergeExercises(){
   const srcName=document.getElementById('merge-src').value;
   const dstName=document.getElementById('merge-dst').value;
@@ -7900,62 +7946,79 @@ async function mergeExercises(){
   if(!dstLib||!srcLib) return;
 
   if(!confirm('Merge "'+srcName+'" into "'+dstName+'"'+(modifier?' tagged '+modifier:'')+'?\n\n'
-    + 'Every past session and saved workout using "'+srcName+'" will be rewritten, and "'+srcName+'" removed from your library. This cannot be undone.')) return;
+    + 'Every past session, saved workout and goal using "'+srcName+'" will be rewritten, and "'+srcName+'" removed from your library. This cannot be undone.')) return;
 
-  btn.disabled=true; status.textContent='Rewriting history\u2026';
+  const uid=currentUser.id;
+  const say=t=>{ if(status) status.textContent=t; };
+  if(btn) btn.disabled=true;
   let sessionsChanged=0, workoutsChanged=0;
+  const failed=[];
   try {
-    // 1. Rewrite logged sessions
-    for(const s of db.sessions){
-      const exs=safeJSON(s.exercises,[]);
-      let touched=false;
-      exs.forEach(ex=>{
-        if(ex && ex.name===srcName){
-          ex.name=dstLib.name;
-          ex.muscle=dstLib.muscle;
-          if(modifier && !ex.modifier) ex.modifier=modifier;
-          touched=true;
-        }
-      });
-      if(touched){
-        const {error}=await sb.from('sessions').update({exercises:JSON.stringify(exs), muscles:JSON.stringify(sessionMuscles(exs))}).eq('id',s.id);
-        if(error){ dbErr('Merge (session)',error); btn.disabled=false; status.textContent=''; return; }
-        s.exercises=exs;
-        sessionsChanged++;
-        status.textContent='Rewriting history\u2026 '+sessionsChanged+' session'+(sessionsChanged>1?'s':'');
-      }
-    }
-    // 2. Rewrite saved workouts
-    for(const w of (db.savedWorkouts||[])){
-      const exs=safeJSON(w.exercises,[]);
-      let touched=false;
-      exs.forEach(ex=>{
-        if(ex && ex.name===srcName){
-          ex.name=dstLib.name; ex.muscle=dstLib.muscle;
-          if(modifier && !ex.modifier) ex.modifier=modifier;
-          touched=true;
-        }
-      });
-      if(touched){
-        const {error}=await sb.from('saved_workouts').update({exercises:JSON.stringify(exs)}).eq('id',w.id);
-        if(error){ dbErr('Merge (workout)',error); btn.disabled=false; status.textContent=''; return; }
-        w.exercises=exs; workoutsChanged++;
-      }
-    }
-    // 3. Teach the old name as an alias so dictation still resolves it
-    await saveExAlias(srcName, dstLib.name);
-    // 4. Remove the now-redundant library entry
-    const {error:delErr}=await sb.from('library').delete().eq('id',srcLib.id);
-    if(delErr){ dbErr('Merge (library)',delErr); btn.disabled=false; status.textContent=''; return; }
-    db.library=db.library.filter(e=>e.id!==srcLib.id);
-    invalidateMuscleCache();
+    // 1. Current server state — not local copies, which may be stale or partly rewritten
+    say('Reading your history\u2026');
+    const [sessRows, wRows] = await Promise.all([fetchAllRows('sessions','user_id',uid), fetchAllRows('saved_workouts','user_id',uid)]);
+    // The verification below trusts these reads. If the server returns LESS history than this
+    // device already shows, the read is wrong (policy, filter, outage) — and "nothing still uses
+    // the old name" would be false confidence. Stop before changing anything.
+    const localCompleted = (db.sessions||[]).filter(x => !x.is_draft).length;
+    const serverCompleted = sessRows.filter(x => !x.is_draft).length;
+    if(serverCompleted < localCompleted)
+      throw new Error('could only read ' + serverCompleted + ' of your ' + localCompleted + ' sessions');
 
-    status.textContent='';
-    btn.disabled=false;
-    await renderLibrary();
-    toast('Merged \u2014 '+sessionsChanged+' session'+(sessionsChanged===1?'':'s')+' and '+workoutsChanged+' saved workout'+(workoutsChanged===1?'':'s')+' updated.');
+    // 2. Sessions (drafts included), each rewritten as a copy and written back
+    for(const row of sessRows){
+      const exs = JSON.parse(JSON.stringify(safeJSON(row.exercises,[])));
+      if(!renameInExercises(exs, srcName, dstLib, modifier)) continue;
+      const {error}=await sb.from('sessions').update({exercises:JSON.stringify(exs), muscles:JSON.stringify(sessionMuscles(exs))}).eq('id',row.id);
+      if(error){ failed.push('session ' + (row.title||row.id)); continue; }
+      sessionsChanged++; say('Rewriting history\u2026 '+sessionsChanged);
+    }
+    // 3. Saved workouts
+    for(const row of wRows){
+      const exs = JSON.parse(JSON.stringify(safeJSON(row.exercises,[])));
+      if(!renameInExercises(exs, srcName, dstLib, modifier)) continue;
+      const {error}=await sb.from('saved_workouts').update({exercises:JSON.stringify(exs)}).eq('id',row.id);
+      if(error){ failed.push('workout ' + (row.title||row.id)); continue; }
+      workoutsChanged++;
+    }
+    // 4. Goals and aliases that point at the old name
+    const g = await sb.from('goals').update({linked_exercise:dstLib.name}).eq('user_id',uid).eq('linked_exercise',srcName);
+    if(g && g.error) failed.push('goals');
+    const a = await sb.from('exercise_aliases').update({exercise_name:dstLib.name}).eq('user_id',uid).eq('exercise_name',srcName);
+    if(a && a.error) console.warn('alias repoint skipped', a.error);   // optional table; not fatal
+
+    // 5. Verify on the server before deleting anything: nothing may still use the old name
+    if(!failed.length){
+      say('Checking\u2026');
+      const [s2, w2] = await Promise.all([fetchAllRows('sessions','user_id',uid), fetchAllRows('saved_workouts','user_id',uid)]);
+      const uses = rows => rows.filter(r => (safeJSON(r.exercises,[])||[]).some(ex => ex && ex.name===srcName)).length;
+      const left = uses(s2) + uses(w2);
+      if(left) failed.push(left + ' record' + (left>1?'s':'') + ' still using "' + srcName + '"');
+    }
+
+    if(failed.length){
+      // Keep the source exercise; nothing is lost and running the merge again finishes the job
+      toast('Merge incomplete \u2014 ' + failed.length + ' item' + (failed.length>1?'s':'') + ' couldn\u2019t be updated. "' + srcName + '" was kept, so nothing is lost. Run the merge again to finish.', 'error');
+      console.warn('merge failures', failed);
+    } else {
+      await saveExAlias(srcName, dstLib.name);    // dictation still recognises the old name
+      const {error:delErr}=await sb.from('library').delete().eq('id',srcLib.id);
+      // A workout in progress on this device must not bring the old name back when it's saved
+      if(db.activeSession) renameInExercises(db.activeSession.exercises, srcName, dstLib, modifier);
+      if(Array.isArray(jtExercises) && renameInExercises(jtExercises, srcName, dstLib, modifier)) jtPersistDraft();
+      if(delErr){ dbErr('Merge (library)',delErr); }
+      else toast('Merged \u2014 '+sessionsChanged+' session'+(sessionsChanged===1?'':'s')+' and '+workoutsChanged+' saved workout'+(workoutsChanged===1?'':'s')+' updated.');
+    }
   } catch(e){
-    console.error(e); dbErr('Merge', e); btn.disabled=false; status.textContent='';
+    console.error(e);
+    toast('Merge stopped: ' + (e.message||e) + '. "' + srcName + '" was kept, so nothing is lost.', 'error');
+  } finally {
+    // Whatever happened, re-sync from the server so what you see is what's stored
+    say('');
+    if(btn) btn.disabled=false;
+    try { await loadUserData(); } catch(e){}
+    invalidateMuscleCache();
+    try { await renderLibrary(); } catch(e){}
   }
 }
 
