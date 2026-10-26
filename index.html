@@ -888,7 +888,7 @@ html.mobile-layout .hs-chart { height:300px; }
 
       <div id="jt-actions" style="display:none;">
         <div style="display:flex;gap:10px;margin-top:4px;">
-          <button class="btn btn-dark" onclick="jtSaveSession()">Save session</button>
+          <button class="btn btn-dark" data-save-session onclick="jtSaveSession()">Save session</button>
           <button class="btn" onclick="jtDiscardSession()">Discard</button>
         </div>
       </div>
@@ -1377,9 +1377,28 @@ function safeJSON(val, fallback=[]) {
   if(typeof val === 'object') return val;
   try { return JSON.parse(val); } catch(e) { return fallback; }
 }
+// The loading lock is released however the load ends. A thrown error used to leave it set,
+// and every later load was skipped until a full page reload.
 async function loadUserData() {
   if(_loadingData) { console.warn('loadUserData already running, skipping'); return; }
   _loadingData = true;
+  try { return await loadUserDataInner(); }
+  finally { _loadingData = false; }
+}
+
+// A failed read keeps what was already loaded instead of replacing it with an empty list —
+// a temporary outage must not look like deleted history. Failures are reported, not hidden.
+function keepOrReplace(label, res, mapRows, current){
+  if(!res || res.error){
+    (db._loadErrors = db._loadErrors || []).push(label);
+    console.warn('load failed for', label, res && res.error);
+    return current;
+  }
+  return mapRows(res.data || []);
+}
+
+async function loadUserDataInner() {
+  db._loadErrors = [];
   const uid = currentUser.id;
   console.log('loadUserData start, uid:', uid);
   console.log('querying profiles...');
@@ -1432,10 +1451,10 @@ async function loadUserData() {
     toast('Could not load your profile. Please refresh.', 'error');
   }
 
-  db.library = (lib.data||[]).map(e=>({id:e.id,name:e.name,muscle:e.muscle,archived:!!e.archived}));
-  db.sessions = (sess.data||[]).filter(s=>!s.is_draft).map(s=>({...s, sessionTitle:s.title||s.sessionTitle||'Session', exercises:safeJSON(s.exercises,[]), muscles:safeJSON(s.muscles,[])}));
-  db.body = (body.data||[]).map(b=>({...b}));
-  db.goals = (goals.data||[]).map(g=>({...g}));
+  db.library = keepOrReplace('exercise library', lib, rows => rows.map(e=>({id:e.id,name:e.name,muscle:e.muscle,archived:!!e.archived})), db.library);
+  db.sessions = keepOrReplace('workout history', sess, rows => rows.filter(s=>!s.is_draft).map(s=>({...s, sessionTitle:s.title||s.sessionTitle||'Session', exercises:safeJSON(s.exercises,[]), muscles:safeJSON(s.muscles,[])})), db.sessions);
+  db.body = keepOrReplace('body log', body, rows => rows.map(b=>({...b})), db.body);
+  db.goals = keepOrReplace('goals', goals, rows => rows.map(g=>({...g})), db.goals);
   // Restore any in-progress draft session — reuse the row already fetched above rather
   // than issuing an identical second query
   const draftData = draft.data;
@@ -1460,18 +1479,20 @@ async function loadUserData() {
     } // end age check
   }
   const sw = await sb.from('saved_workouts').select('*').eq('user_id',uid).order('saved_at');
-  db.savedWorkouts = (sw.data||[]).map(w=>({
+  db.savedWorkouts = keepOrReplace('saved workouts', sw, rows => rows.map(w=>({
     ...w,
     sessionTitle: w.title||w.sessionTitle||'Workout',
     savedAt: w.saved_at||w.savedAt||new Date().toISOString(),
     muscles: safeJSON(w.muscles,[]),
     exercises: safeJSON(w.exercises,[])
-  }));
+  })), db.savedWorkouts);
   console.log('loadUserData complete - library:', db.library.length, 'sessions:', db.sessions.length, 'profile name:', db.profile.name);
   // Must come after db.savedWorkouts is populated: loadProgrammes backfills each programme
   // day's workoutId by matching titles against it.
   await loadProgrammes();
-  _loadingData = false;
+  if(db._loadErrors.length){
+    toast('Couldn\u2019t load your ' + db._loadErrors.join(', ') + '. Showing what was loaded before \u2014 refresh to try again.', 'error');
+  }
 }
 
 async function saveProfile() {
@@ -1847,10 +1868,7 @@ function startCatchUp(){
   const list = (el && el._list) || recentSkippedExercises();
   const picked = [...document.querySelectorAll('.catchup-cb:checked')].map(c => list[parseInt(c.dataset.i)]).filter(Boolean);
   if(!picked.length){ toast('Tick the exercises you want to catch up.','error'); return; }
-  // Don't silently discard a session that's already in progress
-  const inProgress = db.activeSession && (db.activeSession.exercises||[]).some(e =>
-    e && ((e.draftSets||[]).some(d => d && (d.kg || d.reps)) || (e.loggedSets && e.loggedSets.sets && e.loggedSets.sets.length)));
-  if(inProgress && !confirm('You have a session in progress. Replace it with a catch-up session?')) return;
+  if(!confirmReplaceActiveSession()) return;
   const exercises = picked.map(x => {
     const lib = (db.library||[]).find(l => l.name === x.name);
     const last = lastSetupFor(x.name);
@@ -2380,9 +2398,37 @@ function weCancelEdit() {
 }
 
 
+// ── STARTING A SESSION OVER ANOTHER ───────────────────────────────
+// Every way of starting a workout goes through this. Previously only catch-up asked, so
+// loading a saved workout or a planned session silently replaced one you were halfway through.
+function activeSessionHasWork(){
+  const a = db.activeSession;
+  if(!a) return false;
+  return (a.exercises||[]).some(e => e && (
+    (e.draftSets||[]).some(d => d && (d.kg || d.reps)) ||
+    (e.loggedSets && e.loggedSets.sets && e.loggedSets.sets.length) ||
+    (e.wuDrafts||[]).some(d => d && (d.kg || d.reps))
+  ));
+}
+// True if it's fine to replace the active session (nothing entered, or the user agreed).
+// On agreement the old session's server draft is removed so it can't reappear on next load.
+function confirmReplaceActiveSession(){
+  if(!activeSessionHasWork()) return true;
+  const title = (db.activeSession && db.activeSession.sessionTitle) || 'your current workout';
+  if(!confirm('You have "' + title + '" in progress. Replace it? What you\u2019ve entered will be lost.')) return false;
+  const old = db.activeSession;
+  old._discarded = true;
+  clearTimeout(_draftSaveTimer);
+  _draftWriteChain = _draftWriteChain.then(async () => {
+    if(old.draft_id){ const r = await sb.from('sessions').delete().eq('id', old.draft_id); if(r && r.error) console.warn('old draft cleanup', r.error); }
+  }).catch(e => console.warn('old draft cleanup', e));
+  return true;
+}
+
 function loadSavedWorkout(i){
   const w = db.savedWorkouts[i];
   if(!w){ toast('Workout not found.','error'); return; }
+  if(!confirmReplaceActiveSession()) return;
   const exercises = JSON.parse(JSON.stringify(safeJSON(w.exercises,[])));
   const muscles = safeJSON(w.muscles,[]);
   // Start each exercise on the setup you last actually used, so prefill comes from your most
@@ -2658,7 +2704,7 @@ async function saveForLater(){
   }
 }
 
-function startSession(){if(!db.pendingSession)return;db.activeSession=JSON.parse(JSON.stringify(db.pendingSession));showPage('log');}
+function startSession(){if(!db.pendingSession)return;if(!confirmReplaceActiveSession())return;db.activeSession=JSON.parse(JSON.stringify(db.pendingSession));showPage('log');}
 
 const FORM_CUES = {
   "bench press": "Retract your shoulder blades and keep them pinned to the bench. Bar path should touch lower chest. Drive feet into the floor.",
@@ -2786,7 +2832,8 @@ function renderLog() {
   let html2='<div class="card">';
   html2+='<div style="font-size:16px;font-weight:500;margin-bottom:2px;">'+( s.sessionTitle||'Session')+'</div>';
   html2+='<div style="font-size:13px;color:var(--muted);margin-bottom:12px;">'+(s.muscles?s.muscles.join(', '):'')+'</div>';
-  if(isDraft) html2+='<div class="draft-banner"><span>Autosaved draft — your progress is safe.</span></div>';
+  // Status comes from confirmed writes, not from the draft flag (which was set before saving)
+  html2+='<div id="draft-banner">'+draftBannerHtml(s)+'</div>';
   // Add-on exercises: a scheduled workout is a plan, not a cage — extra work should be
   // loggable in the session rather than forcing a separate Just Train entry.
   const addOpts = '<option value="">+ Add exercise\u2026</option>'
@@ -2938,7 +2985,7 @@ function renderLog() {
 
   html2+='</div>';
   html2+='<div class="card"><div class="card-title">Session notes</div><textarea id="session-note" rows="3" style="font-size:13px;font-style:italic;" placeholder="How did it feel overall?" oninput="autosaveDraft()">'+(s.sessionNote||'')+'</textarea></div>';
-  html2+='<div class="log-actions"><button class="btn btn-dark" onclick="saveSession()">Save session</button><button class="btn" onclick="discardSession()">Discard</button></div>';
+  html2+='<div class="log-actions"><button class="btn btn-dark" data-save-session onclick="saveSession()">Save session</button><button class="btn" onclick="discardSession()">Discard</button></div>';
   el.innerHTML=html2;
   updateNavBadge();
   renderSavedWorkouts();
@@ -3245,102 +3292,165 @@ async function autosaveDraft(){
     ex.savedNote=document.getElementById('ex-'+ei+'-note')?.value||'';
   });
   s.sessionNote=document.getElementById('session-note')?.value||'';
-  s.is_draft=true;
-  // Debounce — save 1s after last keystroke
+  if(s._finalizing || s._discarded) return;
+  // Debounce — save 1s after last keystroke. The write itself goes through a queue so two
+  // writes never overlap: overlapping inserts created two draft rows, and an older update
+  // landing after the final save turned a completed session back into a draft.
   clearTimeout(_draftSaveTimer);
-  _draftSaveTimer=setTimeout(async()=>{
-    // Guard: abort if session was saved or discarded while timer was pending
-    if(!db.activeSession || db.activeSession !== s) return;
-    if(s.draft_id){
-      await sb.from('sessions').update({exercises:JSON.stringify(s.exercises),note:s.sessionNote,is_draft:true}).eq('id',s.draft_id);
-    } else {
-      const {data}=await sb.from('sessions').insert({user_id:currentUser.id,date:s.date||new Date().toISOString(),title:s.sessionTitle,muscles:JSON.stringify(s.muscles||[]),exercises:JSON.stringify(s.exercises||[]),note:s.sessionNote,is_draft:true,...(s.programme_id?{programme_id:String(s.programme_id),programme_day:(s.programme_day!=null?s.programme_day:null)}:{})}).select().single();
-      if(data) s.draft_id=data.id;
-    }
+  _draftSaveTimer=setTimeout(()=>{
+    _draftWriteChain = _draftWriteChain.then(() => writeDraft(s)).catch(e => console.warn('draft write', e));
   }, 1000);
 }
 
+// ── SESSION WRITE COORDINATION ────────────────────────────────────
+let _draftWriteChain = Promise.resolve();
+let _saveInFlight = null;
 
-async function saveSession(){
-  clearTimeout(_draftSaveTimer);
-  const s=db.activeSession;if(!s)return;
-  s.exercises.forEach((ex,ei)=>{
-    const sets=[];
-    // Skipped: inputs are prefilled from last session, so reading them would log a
-    // workout that didn't happen. Store the exercise with no sets instead.
-    if(ex.skipped){
-      ex.loggedSets={sets:[],note:'',kg:null,targetReps:parseInt(ex.reps)||0,skipped:true};
-      delete ex.draftSets;
-      return;
-    }
-    const numSets=ex.sets||3;
-    for(let i=0;i<numSets;i++){
-      const kg=parseFloat(document.getElementById('ex-'+ei+'-kg-'+i)?.value)||null;
-      const reps=parseInt(document.getElementById('ex-'+ei+'-reps-'+i)?.value)||null;
-      if(kg||reps) sets.push({kg,reps});
-    }
-    const wuAll=warmupDrafts(ex);
-    for(let w=wuAll.length-1;w>=0;w--){
-      const wkg=parseFloat(document.getElementById('ex-'+ei+'-wu-kg-'+w)?.value)||null;
-      const wreps=parseInt(document.getElementById('ex-'+ei+'-wu-reps-'+w)?.value)||null;
-      if(wkg||wreps) sets.unshift({kg:wkg,reps:wreps,warmup:true});
-    }
-    const note=document.getElementById('ex-'+ei+'-note')?.value||'';
-    ex.loggedSets={sets,note,kg:sets[0]?.kg,targetReps:parseInt(ex.reps)||0,nextAction:ex.nextAction||''};
-    delete ex.draftSets;
-  });
-  // Append cardio blocks as exercises
-  cardioBlocks.forEach(b => {
-    if(!b.duration) return;
-    s.exercises.push({
-      name: b.type,
-      muscle: 'Cardio',
-      sets: 1,
-      reps: b.duration + ' min',
-      isCardio: true,
-      distanceKm: parseFloat(b.distance) || null,
-      intensity: b.intensity || null,
-      loggedSets: {
-        sets: [{kg: parseFloat(b.duration)||0, reps: parseFloat(b.duration)||0}],
-        note: [b.intensity, b.distance ? b.distance+'km' : '', b.note].filter(Boolean).join(' · '),
-        kg: null,
-        targetReps: 0
-      }
-    });
-    if(!s.muscles.includes('Cardio')) s.muscles.push('Cardio');
-  });
-  // Credit every muscle each logged exercise maps to (expands "Quads, Glutes" etc.)
-  s.muscles = sessionMuscles(s.exercises);
-  s.sessionNote=document.getElementById('session-note')?.value||'';
-  s.is_draft=false;
-  let savedId = null;
-  const progStamp = s.programme_id ? {programme_id:String(s.programme_id), programme_day:(s.programme_day!=null?s.programme_day:null)} : {};
+// One draft write. Runs only from the queue, so it always sees the draft_id an earlier insert
+// returned. The status it records is what the database actually confirmed.
+async function writeDraft(s){
+  if(!s || s._finalizing || s._discarded || db.activeSession !== s || !currentUser) return;
+  setDraftSync(s, 'saving');
+  const payload = {exercises:JSON.stringify(s.exercises), note:s.sessionNote, is_draft:true};
+  let res;
   if(s.draft_id){
-    // Update existing draft row to finalise it
-    const {data:sessData,error:sessErr}=await sb.from('sessions').update({exercises:JSON.stringify(s.exercises),note:s.sessionNote,is_draft:false,...progStamp}).eq('id',s.draft_id).select().single();
-    if(sessErr){dbErr('Save session',sessErr);return;}
-    db.sessions.push({...s,...sessData,exercises:s.exercises,muscles:s.muscles});
-    savedId = sessData && sessData.id;
+    res = await sb.from('sessions').update(payload).eq('id', s.draft_id);
   } else {
-    const {data:sessData,error:sessErr}=await sb.from('sessions').insert({user_id:currentUser.id,date:s.date||new Date().toISOString(),title:s.sessionTitle,muscles:JSON.stringify(s.muscles||[]),exercises:JSON.stringify(s.exercises||[]),note:s.sessionNote,is_draft:false,...progStamp}).select().single();
-    if(sessErr){dbErr('Save session',sessErr);return;}
-    db.sessions.push({...s,...sessData,exercises:s.exercises,muscles:s.muscles});
-    savedId = sessData && sessData.id;
+    res = await sb.from('sessions').insert({user_id:currentUser.id, date:s.date||new Date().toISOString(),
+      title:s.sessionTitle, muscles:JSON.stringify(s.muscles||[]), ...payload,
+      ...(s.programme_id?{programme_id:String(s.programme_id),programme_day:(s.programme_day!=null?s.programme_day:null)}:{})
+    }).select().single();
+    if(res && !res.error && res.data) s.draft_id = res.data.id;
   }
-  db.activeSession=null;db.pendingSession=null;
+  // Finalised or discarded while this was in flight: say nothing, the next step owns the state
+  if(s._finalizing || s._discarded) return;
+  setDraftSync(s, (res && res.error) ? 'failed' : 'saved');
+}
+
+function setDraftSync(s, state){
+  s._sync = state;
+  const el = document.getElementById('draft-banner');
+  if(el && db.activeSession === s) el.innerHTML = draftBannerHtml(s);
+}
+
+// What the Log screen says about your progress — only ever what the database confirmed.
+function draftBannerHtml(s){
+  const st = s._sync || (s.draft_id ? 'saved' : '');
+  if(st === 'saving') return '<div class="draft-banner"><span>Saving draft\u2026</span></div>';
+  if(st === 'saved')  return '<div class="draft-banner"><span>Draft saved \u2014 your progress is safe.</span></div>';
+  if(st === 'failed') return '<div class="draft-banner" style="background:rgba(179,38,30,0.08);border-color:rgba(179,38,30,0.3);color:#B3261E;">'
+    + '<span>Couldn\u2019t save your draft. Your entries are still on this screen \u2014 keep this page open.</span> '
+    + '<button class="btn btn-sm" style="margin-left:8px;" onclick="retryDraftSave()">Retry</button></div>';
+  return '';
+}
+
+function retryDraftSave(){
+  const s = db.activeSession; if(!s) return;
+  _draftWriteChain = _draftWriteChain.then(() => writeDraft(s)).catch(e => console.warn('draft write', e));
+}
+
+
+// Reads what's on screen for one exercise into a fresh loggedSets object. Pure with respect to
+// the session: it never writes back into the exercise it reads.
+function captureLoggedSets(ex, ei){
+  if(ex.skipped) return {sets:[],note:'',kg:null,targetReps:parseInt(ex.reps)||0,skipped:true};
+  const sets=[];
+  const numSets=ex.sets||3;
+  for(let i=0;i<numSets;i++){
+    const kg=parseFloat(document.getElementById('ex-'+ei+'-kg-'+i)?.value)||null;
+    const reps=parseInt(document.getElementById('ex-'+ei+'-reps-'+i)?.value)||null;
+    if(kg||reps) sets.push({kg,reps});
+  }
+  const wuAll=warmupDrafts(ex);
+  for(let w=wuAll.length-1;w>=0;w--){
+    const wkg=parseFloat(document.getElementById('ex-'+ei+'-wu-kg-'+w)?.value)||null;
+    const wreps=parseInt(document.getElementById('ex-'+ei+'-wu-reps-'+w)?.value)||null;
+    if(wkg||wreps) sets.unshift({kg:wkg,reps:wreps,warmup:true});
+  }
+  const note=document.getElementById('ex-'+ei+'-note')?.value||'';
+  return {sets,note,kg:sets[0]?.kg,targetReps:parseInt(ex.reps)||0,nextAction:ex.nextAction||''};
+}
+
+// Cardio blocks as exercise records. Built fresh each time, never appended to live state —
+// appending before the write succeeded is how a retry ended up with two cardio entries.
+function cardioBlocksAsExercises(blocks){
+  return (blocks||[]).filter(b => b && b.duration).map(b => ({
+    name: b.type, muscle: 'Cardio', sets: 1, reps: b.duration + ' min', isCardio: true,
+    distanceKm: parseFloat(b.distance) || null, intensity: b.intensity || null,
+    loggedSets: { sets: [{kg: parseFloat(b.duration)||0, reps: parseFloat(b.duration)||0}],
+      note: [b.intensity, b.distance ? b.distance+'km' : '', b.note].filter(Boolean).join(' \u00b7 '), kg: null, targetReps: 0 }
+  }));
+}
+
+function setSaveButtonsBusy(busy){
+  document.querySelectorAll('[data-save-session]').forEach(b => { b.disabled = busy; b.textContent = busy ? 'Saving\u2026' : 'Save session'; });
+}
+
+// A second call while a save is running returns that same save — a double click can't
+// create two sessions.
+function saveSession(){
+  if(_saveInFlight) return _saveInFlight;
+  _saveInFlight = (async () => {
+    setSaveButtonsBusy(true);
+    try { return await doSaveSession(); }
+    finally { _saveInFlight = null; setSaveButtonsBusy(false); }
+  })();
+  return _saveInFlight;
+}
+
+async function doSaveSession(){
+  clearTimeout(_draftSaveTimer);
+  const s=db.activeSession; if(!s) return;
+  // Stop new draft writes, then let any in-flight one finish first. The final write must be
+  // the last write to this row, and it needs the draft_id an in-flight insert may still return.
+  s._finalizing = true;
+  await _draftWriteChain;
+
+  // Build the record on a COPY. The live session is only replaced after the database confirms,
+  // so a failed save leaves it exactly as it was and a retry sends the same thing again.
+  const exercises = JSON.parse(JSON.stringify(s.exercises)).map((ex, ei) => {
+    ex.loggedSets = captureLoggedSets(s.exercises[ei], ei);
+    delete ex.draftSets;
+    return ex;
+  }).concat(cardioBlocksAsExercises(cardioBlocks));
+  const muscles = sessionMuscles(exercises);
+  const sessionNote = document.getElementById('session-note')?.value||'';
+  const progStamp = s.programme_id ? {programme_id:String(s.programme_id), programme_day:(s.programme_day!=null?s.programme_day:null)} : {};
+  const record = {title:s.sessionTitle, muscles:JSON.stringify(muscles), exercises:JSON.stringify(exercises),
+    note:sessionNote, is_draft:false, ...progStamp};
+
+  const res = s.draft_id
+    ? await sb.from('sessions').update(record).eq('id',s.draft_id).select().single()
+    : await sb.from('sessions').insert({user_id:currentUser.id, date:s.date||new Date().toISOString(), ...record}).select().single();
+
+  if(res.error){
+    s._finalizing = false;            // editing continues; autosave resumes
+    dbErr('Save session', res.error);
+    return;
+  }
+  const saved = res.data || {};
+  db.sessions.push({...saved, sessionTitle:s.sessionTitle, title:s.sessionTitle, date:saved.date||s.date,
+    exercises, muscles, note:sessionNote, is_draft:false, ...progStamp});
+  db.sessions.sort((a,b) => new Date(a.date) - new Date(b.date));
+  db.activeSession=null; db.pendingSession=null;
   resetCardioBlocks();
   updateNavBadge();
   toast('Session saved!','ok');
   // Land on the recap for what was just logged rather than a generic home screen
-  if(savedId){ _pendingExpandId = savedId; showPage('history'); }
+  if(saved.id){ _pendingExpandId = saved.id; showPage('history'); }
   else showPage('overview');
 }
 async function discardSession(){
-  clearTimeout(_draftSaveTimer);
+  // Confirm before touching anything: cancelling used to have already stopped the autosave
   if(!confirm('Discard this session?')) return;
+  clearTimeout(_draftSaveTimer);
   const s=db.activeSession;
-  if(s&&s.draft_id){
-    await sb.from('sessions').delete().eq('id',s.draft_id);
+  if(s){
+    s._discarded = true;
+    // An insert still in flight would otherwise create the draft row AFTER the delete,
+    // and the "discarded" workout would come back on the next load
+    await _draftWriteChain;
+    if(s.draft_id) await sb.from('sessions').delete().eq('id',s.draft_id);
   }
   db.activeSession=null;
   resetCardioBlocks();
@@ -6926,11 +7036,25 @@ function jtRemoveExercise(ei) {
   jtRenderSession();
 }
 
-async function jtSaveSession() {
+let _jtSaveInFlight = null;
+// Single-flight, like the Log screen: a second click returns the save already running.
+function jtSaveSession(){
+  if(_jtSaveInFlight) return _jtSaveInFlight;
+  _jtSaveInFlight = (async () => {
+    setSaveButtonsBusy(true);
+    try { return await jtDoSaveSession(); }
+    finally { _jtSaveInFlight = null; setSaveButtonsBusy(false); }
+  })();
+  return _jtSaveInFlight;
+}
+
+async function jtDoSaveSession() {
   if(!jtExercises.length) { toast('Add at least one exercise.', 'error'); return; }
 
-  // Collect all logged sets
-  jtExercises.forEach((ex, ei) => {
+  // Build the record on a COPY; the live list is only cleared after the database confirms.
+  // Previously loggedSets and cardio were written into jtExercises before the insert, so a
+  // failed save changed what the retry sent.
+  const exercises = JSON.parse(JSON.stringify(jtExercises)).map((ex, ei) => {
     const sets = [];
     if(ex.isCardio) {
       const kg = parseFloat(document.getElementById('jt-' + ei + '-kg-0')?.value) || null;
@@ -6941,7 +7065,7 @@ async function jtSaveSession() {
         const reps = parseInt(document.getElementById('jt-' + ei + '-reps-' + i)?.value) || null;
         if(kg || reps) sets.push({kg, reps});
       }
-      const wuAll = warmupDrafts(ex);
+      const wuAll = warmupDrafts(jtExercises[ei]);
       for(let w = wuAll.length-1; w >= 0; w--){
         const wkg = parseFloat(document.getElementById('jt-' + ei + '-wu-kg-' + w)?.value) || null;
         const wreps = parseInt(document.getElementById('jt-' + ei + '-wu-reps-' + w)?.value) || null;
@@ -6950,33 +7074,23 @@ async function jtSaveSession() {
     }
     const note = document.getElementById('jt-' + ei + '-note')?.value || '';
     ex.loggedSets = { sets, note, kg: sets[0]?.kg, targetReps: parseInt(ex.reps) || 0, nextAction: ex.nextAction || '' };
-  });
+    delete ex.draftSets; delete ex.collapsed;
+    return ex;
+  }).concat(cardioBlocksAsExercises(cardioBlocks));
 
-  // Append cardio blocks
-  cardioBlocks.forEach(b => {
-    if(!b.duration) return;
-    jtExercises.push({
-      name: b.type, muscle: 'Cardio', sets: 1, reps: b.duration + ' min', isCardio: true,
-      distanceKm: parseFloat(b.distance) || null, intensity: b.intensity || null,
-      loggedSets: { sets: [{kg: parseFloat(b.duration)||0, reps: parseFloat(b.duration)||0}],
-        note: [b.intensity, b.distance ? b.distance+'km' : '', b.note].filter(Boolean).join(' · '), kg: null, targetReps: 0 }
-    });
-  });
-  const muscles = sessionMuscles(jtExercises);
+  const muscles = sessionMuscles(exercises);
   const title = 'Freestyle — ' + muscles.filter(m => m !== 'Cardio').slice(0,2).join(', ') || 'Freestyle';
+  const date = new Date().toISOString();
 
   const {data, error} = await sb.from('sessions').insert({
-    user_id: currentUser.id,
-    date: new Date().toISOString(),
-    title,
-    muscles: JSON.stringify(muscles),
-    exercises: JSON.stringify(jtExercises),
-    note: 'Freestyle session',
-    is_draft: false
+    user_id: currentUser.id, date, title,
+    muscles: JSON.stringify(muscles), exercises: JSON.stringify(exercises),
+    note: 'Freestyle session', is_draft: false
   }).select().single();
 
   if(error) { dbErr('Save freestyle session', error); return; }
-  if(data) db.sessions.push({...data, sessionTitle: title, exercises: jtExercises, muscles});
+  db.sessions.push({...(data||{}), date:(data&&data.date)||date, title, sessionTitle: title, exercises, muscles, is_draft:false});
+  db.sessions.sort((a,b) => new Date(a.date) - new Date(b.date));
 
   jtExercises = [];
   jtClearDraft();
