@@ -1379,6 +1379,20 @@ function safeJSON(val, fallback=[]) {
 }
 // The loading lock is released however the load ends. A thrown error used to leave it set,
 // and every later load was skipped until a full page reload.
+// One decoder for library rows, used by every reload. Page-level reloads used to keep only
+// name and muscle, dropping the id (needed for edits) and the archive flag — so archived
+// exercises reappeared in pickers after opening Planner, Builder or Just Train.
+function decodeLibraryRows(rows){
+  return (rows||[]).map(e => ({id:e.id, name:e.name, muscle:e.muscle, archived:!!e.archived}));
+}
+// Replaces the library only on a successful read, and resets everything derived from it.
+function setLibraryFromRead(res){
+  if(!res || res.error || !res.data) return false;
+  db.library = decodeLibraryRows(res.data);
+  if(typeof invalidateMuscleCache === 'function') invalidateMuscleCache();
+  return true;
+}
+
 async function loadUserData() {
   if(_loadingData) { console.warn('loadUserData already running, skipping'); return; }
   _loadingData = true;
@@ -1451,7 +1465,7 @@ async function loadUserDataInner() {
     toast('Could not load your profile. Please refresh.', 'error');
   }
 
-  db.library = keepOrReplace('exercise library', lib, rows => rows.map(e=>({id:e.id,name:e.name,muscle:e.muscle,archived:!!e.archived})), db.library);
+  db.library = keepOrReplace('exercise library', lib, decodeLibraryRows, db.library);
   db.sessions = keepOrReplace('workout history', sess, rows => rows.filter(s=>!s.is_draft).map(s=>({...s, sessionTitle:s.title||s.sessionTitle||'Session', exercises:safeJSON(s.exercises,[]), muscles:safeJSON(s.muscles,[])})), db.sessions);
   db.body = keepOrReplace('body log', body, rows => rows.map(b=>({...b})), db.body);
   db.goals = keepOrReplace('goals', goals, rows => rows.map(g=>({...g})), db.goals);
@@ -2141,8 +2155,7 @@ async function renderOverview() {
 async function renderPlanner() {
   if(!currentUser) return;
   // Re-fetch library to ensure swap dropdowns are populated on mobile
-  const {data:libData} = await sb.from('library').select('*').eq('user_id',currentUser.id).order('name');
-  if(libData) db.library = libData.map(e=>({name:e.name,muscle:e.muscle}));
+  setLibraryFromRead(await sb.from('library').select('*').eq('user_id',currentUser.id).order('name'));
   document.getElementById('planner-date').textContent=new Date().toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long'});
   const goalMuscles=getGoalMuscles();
   document.getElementById('planner-weights').innerHTML=trackedMuscles().map(m=>{
@@ -2216,6 +2229,9 @@ function updateEstimate(){
 
 // ── SAVED WORKOUT EDITOR ──────────────────────────────────────────
 let editingWorkoutId = null;
+// What you've typed into the title, kept across redraws (adding/removing/reordering
+// exercises redraws the editor, which used to reload the saved title over your typing).
+let editingWorkoutTitle = null;
 let editingWorkoutExercises = [];
 
 function renderSavedWorkouts(){
@@ -2242,7 +2258,8 @@ function openWorkoutEditor(i) {
   const w = db.savedWorkouts[i];
   if(!w) return;
   editingWorkoutId = w.id;
-  editingWorkoutExercises = safeJSON(w.exercises, []).map(e => Object.assign({}, e));
+  editingWorkoutExercises = JSON.parse(JSON.stringify(safeJSON(w.exercises, [])));
+  editingWorkoutTitle = null;      // nothing typed yet: show the saved title
   renderWorkoutEditor(w, i);
   document.getElementById('workout-editor-container').scrollIntoView({behavior:'smooth'});
 }
@@ -2302,7 +2319,7 @@ function renderWorkoutEditor(w, idx) {
     // Workout name
     +'<div class="form-group" style="margin-bottom:14px;">'
     +'<label class="form-label">Workout name</label>'
-    +'<input type="text" id="we-title" value="'+(w.sessionTitle||w.title||'').replace(/"/g,'&quot;')+'" placeholder="e.g. Push day A">'
+    +'<input type="text" id="we-title" value="'+(editingWorkoutTitle!=null?editingWorkoutTitle:(w.sessionTitle||w.title||'')).replace(/"/g,'&quot;')+'" placeholder="e.g. Push day A" oninput="editingWorkoutTitle=this.value">'
     +'</div>'
     // Exercises
     +'<div style="font-size:11px;font-weight:500;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:10px;">Exercises</div>'
@@ -2329,12 +2346,14 @@ function weUpdateGroup(ei, val) { editingWorkoutExercises[ei].group = val||''; }
 function weUpdateModifier(ei, val) { editingWorkoutExercises[ei].modifier = val||''; }
 
 function weRemoveExercise(ei) {
+  weCaptureTitle();
   editingWorkoutExercises.splice(ei, 1);
   const w = db.savedWorkouts.find(w => String(w.id) === String(editingWorkoutId));
   if(w) renderWorkoutEditor(w, db.savedWorkouts.indexOf(w));
 }
 
 function weMoveExercise(ei, dir) {
+  weCaptureTitle();
   const j = ei + dir;
   if(j < 0 || j >= editingWorkoutExercises.length) return;
   const arr = editingWorkoutExercises;
@@ -2343,7 +2362,11 @@ function weMoveExercise(ei, dir) {
   if(w) renderWorkoutEditor(w, db.savedWorkouts.indexOf(w));
 }
 
+// Read the title field before any action that redraws the editor (the field is rebuilt).
+function weCaptureTitle(){ const el=document.getElementById('we-title'); if(el) editingWorkoutTitle=el.value; }
+
 function weAddExercise() {
+  weCaptureTitle();
   const first = db.library[0];
   editingWorkoutExercises.push({
     name: first ? first.name : 'New exercise',
@@ -2908,11 +2931,13 @@ function renderLog() {
     for(let i=0;i<numSets;i++){
       const draftSet=ex.draftSets?ex.draftSets[i]:null;
       const lastSet=prev&&prev.sets?prev.sets[i]:null;
-      // Draft takes priority — user's current input beats last session
-      const prefillKg=draftSet&&draftSet.kg?draftSet.kg:(lastSet&&lastSet.kg?adjustedPrefillKg(lastSet.kg,prev,ex.equipment):'');
-      let prefillReps=draftSet&&draftSet.reps?draftSet.reps:(lastSet&&lastSet.reps?lastSet.reps:'');
+      // What's on screen wins, INCLUDING an empty field you cleared ('' is a value; null and
+      // undefined mean never captured). History only fills fields that were never touched.
+      const hasKg = draftSet && draftSet.kg != null, hasReps = draftSet && draftSet.reps != null;
+      const prefillKg = hasKg ? draftSet.kg : (lastSet&&lastSet.kg?adjustedPrefillKg(lastSet.kg,prev,ex.equipment):'');
+      let prefillReps = hasReps ? draftSet.reps : (lastSet&&lastSet.reps?lastSet.reps:'');
       // Isometric holds default to a 2s hold when nothing is logged yet
-      if(prefillReps===''&&isoEx) prefillReps=ISOMETRIC_DEFAULT_SECONDS;
+      if(!hasReps && prefillReps===''&&isoEx) prefillReps=ISOMETRIC_DEFAULT_SECONDS;
       const kgId='ex-'+ei+'-kg-'+i, repsId='ex-'+ei+'-reps-'+i;
       setRows+='<div class="set-row">';
       setRows+='<span class="set-num">Set '+(i+1)+'</span>';
@@ -2987,6 +3012,7 @@ function renderLog() {
   html2+='<div class="card"><div class="card-title">Session notes</div><textarea id="session-note" rows="3" style="font-size:13px;font-style:italic;" placeholder="How did it feel overall?" oninput="autosaveDraft()">'+(s.sessionNote||'')+'</textarea></div>';
   html2+='<div class="log-actions"><button class="btn btn-dark" data-save-session onclick="saveSession()">Save session</button><button class="btn" onclick="discardSession()">Discard</button></div>';
   el.innerHTML=html2;
+  s._renderedUids = s.exercises.map(exUid);     // what was drawn where — capture relies on it
   updateNavBadge();
   renderSavedWorkouts();
 }
@@ -3270,27 +3296,34 @@ function updateNavBadge(){
 }
 
 let _draftSaveTimer=null;
+// ── STABLE EXERCISE IDENTITY ──────────────────────────────────────
+// Inputs on screen are addressed by position (ex-0-kg-0). Reading them back by position is
+// only safe if the list hasn't changed since it was drawn — removing Bench made Row inherit
+// Bench's 60 kg because the old screen was read into the new order. So every exercise gets a
+// stable id, each render records which id sits at which position, and capture uses that
+// record: a stale screen can only ever write into the exercise it actually showed.
+let _uidSeq = 0;
+function exUid(ex){
+  if(!ex) return null;
+  if(!ex._uid) ex._uid = 'e' + (++_uidSeq).toString(36) + Math.random().toString(36).slice(2,7);
+  return ex._uid;
+}
+// The exercise that was drawn at screen position i, or null if it has since been removed.
+function exerciseAtRenderedPos(list, renderedUids, i){
+  if(!renderedUids) return list[i] || null;          // never rendered: positions are current
+  const uid = renderedUids[i];
+  return uid ? (list.find(e => e && e._uid === uid) || null) : null;
+}
+function renderedPosOf(renderedUids, ex){
+  if(!renderedUids) return -1;
+  return renderedUids.indexOf(ex && ex._uid);
+}
+let _jtRenderedUids = null;
+
 async function autosaveDraft(){
   if(!db.activeSession||!currentUser) return;
-  // Collect current inputs into activeSession
   const s=db.activeSession;
-  s.exercises.forEach((ex,ei)=>{
-    const sets=[];
-    const numSets=ex.sets||3;
-    for(let i=0;i<numSets;i++){
-      const kg=parseFloat(document.getElementById('ex-'+ei+'-kg-'+i)?.value)||null;
-      const reps=parseInt(document.getElementById('ex-'+ei+'-reps-'+i)?.value)||null;
-      sets.push({kg,reps});
-    }
-    ex.draftSets=sets;
-    const wuRows=warmupDrafts(ex);
-    for(let w=0;w<wuRows.length;w++){
-      const wk=document.getElementById('ex-'+ei+'-wu-kg-'+w);
-      const wr=document.getElementById('ex-'+ei+'-wu-reps-'+w);
-      if(wk||wr) wuRows[w]={kg:wk?wk.value:'', reps:wr?wr.value:''};
-    }
-    ex.savedNote=document.getElementById('ex-'+ei+'-note')?.value||'';
-  });
+  captureLogInputs(s);
   s.sessionNote=document.getElementById('session-note')?.value||'';
   if(s._finalizing || s._discarded) return;
   // Debounce — save 1s after last keystroke. The write itself goes through a queue so two
@@ -3350,6 +3383,32 @@ function retryDraftSave(){
 }
 
 
+// Reads the Log screen into the session, position by position as it was DRAWN. Values are
+// kept exactly as typed — an empty string means you cleared the field, which is different from
+// never having touched it, so a deliberate clear isn't refilled from history on the next render.
+function captureLogInputs(s){
+  if(!s) return;
+  const n = s._renderedUids ? s._renderedUids.length : s.exercises.length;
+  for(let pos=0; pos<n; pos++){
+    const ex = exerciseAtRenderedPos(s.exercises, s._renderedUids, pos);
+    if(!ex) continue;                                  // removed since it was drawn
+    const sets=[]; let seen=false;
+    for(let i=0;i<(ex.sets||3);i++){
+      const kg=document.getElementById('ex-'+pos+'-kg-'+i), reps=document.getElementById('ex-'+pos+'-reps-'+i);
+      if(kg||reps) seen=true;
+      sets.push({kg: kg ? kg.value : undefined, reps: reps ? reps.value : undefined});
+    }
+    if(seen) ex.draftSets=sets;                        // only overwrite what was actually on screen
+    const wuRows=warmupDrafts(ex);
+    for(let w=0;w<wuRows.length;w++){
+      const wk=document.getElementById('ex-'+pos+'-wu-kg-'+w), wr=document.getElementById('ex-'+pos+'-wu-reps-'+w);
+      if(wk||wr) wuRows[w]={kg:wk?wk.value:'', reps:wr?wr.value:''};
+    }
+    const note=document.getElementById('ex-'+pos+'-note');
+    if(note) ex.savedNote=note.value||'';
+  }
+}
+
 // Reads what's on screen for one exercise into a fresh loggedSets object. Pure with respect to
 // the session: it never writes back into the exercise it reads.
 function captureLoggedSets(ex, ei){
@@ -3369,6 +3428,14 @@ function captureLoggedSets(ex, ei){
   }
   const note=document.getElementById('ex-'+ei+'-note')?.value||'';
   return {sets,note,kg:sets[0]?.kg,targetReps:parseInt(ex.reps)||0,nextAction:ex.nextAction||''};
+}
+
+// For an exercise that isn't on screen (added since the last render): use its captured draft.
+function loggedSetsFromDraft(ex){
+  if(ex.skipped) return {sets:[],note:'',kg:null,targetReps:parseInt(ex.reps)||0,skipped:true};
+  const sets = (ex.draftSets||[]).map(d => ({kg: parseFloat(d && d.kg)||null, reps: parseInt(d && d.reps)||null}))
+    .filter(x => x.kg || x.reps);
+  return {sets, note: ex.savedNote||'', kg: sets[0]?.kg, targetReps: parseInt(ex.reps)||0, nextAction: ex.nextAction||''};
 }
 
 // Cardio blocks as exercise records. Built fresh each time, never appended to live state —
@@ -3408,9 +3475,12 @@ async function doSaveSession(){
 
   // Build the record on a COPY. The live session is only replaced after the database confirms,
   // so a failed save leaves it exactly as it was and a retry sends the same thing again.
-  const exercises = JSON.parse(JSON.stringify(s.exercises)).map((ex, ei) => {
-    ex.loggedSets = captureLoggedSets(s.exercises[ei], ei);
-    delete ex.draftSets;
+  const exercises = s.exercises.map((live, idx) => {
+    const ex = JSON.parse(JSON.stringify(live));
+    // Read from where this exercise was DRAWN, not where it sits in the list now
+    const pos = s._renderedUids ? renderedPosOf(s._renderedUids, live) : idx;
+    ex.loggedSets = pos >= 0 ? captureLoggedSets(live, pos) : loggedSetsFromDraft(live);
+    delete ex.draftSets; delete ex._uid;
     return ex;
   }).concat(cardioBlocksAsExercises(cardioBlocks));
   const muscles = sessionMuscles(exercises);
@@ -4603,8 +4673,7 @@ let builderExercises = [];
 async function renderBuilder(){
   if(!currentUser) return;
   // Always re-fetch library from Supabase
-  const {data} = await sb.from('library').select('*').eq('user_id',currentUser.id).order('name');
-  if(data) db.library = data.map(e=>({name:e.name,muscle:e.muscle}));
+  setLibraryFromRead(await sb.from('library').select('*').eq('user_id',currentUser.id).order('name'));
   // Populate exercise picker from library
   const pick = document.getElementById('builder-ex-pick');
   if(!pick) return;
@@ -6056,12 +6125,26 @@ function historyShowMore() {
 
 
 
+// The history editor works on a COPY of the session's exercises, made when it opens. Changes go
+// into the copy; Save builds from it and replaces the live session only after the database
+// confirms; Cancel discards it. Editing the live object meant Cancel kept your changes and a
+// failed save leaked them into charts and PRs anyway.
+const _heDrafts = {};
+function heDraftFor(id){
+  if(!_heDrafts[id]){
+    const s = db.sessions.find(x => String(x.id) === String(id));
+    _heDrafts[id] = JSON.parse(JSON.stringify(s ? safeJSON(s.exercises, []) : []));
+  }
+  return _heDrafts[id];
+}
+
 function openHistoryEdit(id) {
   const s = db.sessions.find(s => String(s.id) === String(id));
   if(!s) return;
 
   const existing = document.getElementById('hist-edit-' + id);
-  if(existing) { existing.remove(); return; }
+  if(existing) { existing.remove(); delete _heDrafts[id]; return; }
+  _heDrafts[id] = JSON.parse(JSON.stringify(safeJSON(s.exercises, [])));
 
   const container = document.getElementById('hist-' + id);
   if(!container) return;
@@ -6141,13 +6224,10 @@ function openHistoryEdit(id) {
 }
 
 function heUpdateEx(id, ei, name, muscle) {
-  const s = db.sessions.find(s => String(s.id) === String(id));
-  if(!s) return;
-  const exercises = safeJSON(s.exercises, []);
+  const exercises = heDraftFor(id);
   if(exercises[ei]) {
     exercises[ei].name = name;
     if(muscle) exercises[ei].muscle = muscle;
-    s.exercises = exercises;
   }
 }
 
@@ -6171,23 +6251,13 @@ async function deleteHistorySession(id){
 }
 
 function heUpdateModifier(id, ei, val) {
-  const s = db.sessions.find(s => String(s.id) === String(id));
-  if(!s) return;
-  const exercises = safeJSON(s.exercises, []);
-  if(exercises[ei]) {
-    exercises[ei].modifier = val || '';
-    s.exercises = exercises;
-  }
+  const exercises = heDraftFor(id);
+  if(exercises[ei]) exercises[ei].modifier = val || '';
 }
 
 function heUpdateEquipment(id, ei, val) {
-  const s = db.sessions.find(s => String(s.id) === String(id));
-  if(!s) return;
-  const exercises = safeJSON(s.exercises, []);
-  if(exercises[ei]) {
-    exercises[ei].equipment = val;
-    s.exercises = exercises;
-  }
+  const exercises = heDraftFor(id);
+  if(exercises[ei]) exercises[ei].equipment = val;
 }
 
 async function saveHistoryEdit(id) {
@@ -6195,7 +6265,9 @@ async function saveHistoryEdit(id) {
   if(!s) return;
   const title = document.getElementById('he-title-' + id).value.trim() || s.sessionTitle || 'Session';
   const sessionNote = document.getElementById('he-sessionnote-' + id).value || '';
-  const exercises = safeJSON(s.exercises, []);
+  // A fresh copy of the editor's draft — safeJSON hands back the live array when the data is
+  // already parsed, so building on it would change the session before the save succeeded.
+  const exercises = JSON.parse(JSON.stringify(heDraftFor(id)));
 
   exercises.forEach((ex, ei) => {
     const origSets = (ex.loggedSets && ex.loggedSets.sets) ? ex.loggedSets.sets : [];
@@ -6255,6 +6327,7 @@ async function saveHistoryEdit(id) {
   s.sessionTitle = title;
   s.title = title;
   s.exercises = exercises;
+  delete s._effMuscles;          // renamed/re-tagged exercises change which muscles this counts toward
   s.note = sessionNote;
   if(newDate !== s.date){
     s.date = newDate;
@@ -6270,12 +6343,14 @@ async function saveHistoryEdit(id) {
 function cancelHistoryEdit(id) {
   const el = document.getElementById('hist-edit-' + id);
   if(el) el.remove();
+  delete _heDrafts[id];          // Cancel means cancel: the edited copy is thrown away
 }
 
 // ── JUST TRAIN ────────────────────────────────────────────────────
 let jtExercises = []; // {name, muscle, sets, isCardio, loggedSets:[]}
 
 async function renderJustTrain() {
+  if(_jtRenderedUids && jtExercises.length) jtCaptureInputs();
   const musclePick = document.getElementById('jt-muscle-pick');
   const pick = document.getElementById('jt-ex-pick');
   if(!pick) return;
@@ -6284,8 +6359,7 @@ async function renderJustTrain() {
   // presenting an empty picker.
   if(!db.library.length && currentUser){
     try {
-      const {data} = await sb.from('library').select('*').eq('user_id',currentUser.id).order('name');
-      if(data) db.library = data.map(e=>({id:e.id, name:e.name, muscle:e.muscle}));
+      setLibraryFromRead(await sb.from('library').select('*').eq('user_id',currentUser.id).order('name'));
     } catch(e){ console.warn('library reload failed', e); }
   }
 
@@ -6302,8 +6376,9 @@ async function renderJustTrain() {
     musclePick.value = [...musclePick.options].some(o=>o.value===prev) ? prev : '__all';
   }
   jtPopulateExercisePick();
-  if(!jtExercises.length && jtRestoreDraft()) toast('Restored your unsaved Just Train session.');
+  if(!jtExercises.length && !(_cardioOwner === 'jt' && cardioBlocks.length) && jtRestoreDraft()) toast('Restored your unsaved Just Train session.');
   jtRenderSession();
+  if(_cardioOwner === 'jt') jtSyncCardioDisplay();
 }
 
 // Fill the exercise dropdown based on the chosen muscle group (deduped — a movement tagged
@@ -6356,8 +6431,14 @@ function jtAddExercise() {
   jtRenderSession();
 }
 
+// Log and Just Train share one cardio list. This records which mode the current cardio belongs
+// to, so Just Train's local draft saves (and restores) only cardio added in Just Train — never a
+// ride logged on the Log screen.
+let _cardioOwner = null;
+
 function jtAddCardioBlock() {
   addCardioBlock();
+  _cardioOwner = 'jt';
   // Re-render JT cardio area using shared cardioBlocks
   jtSyncCardioDisplay();
 }
@@ -6370,6 +6451,10 @@ function jtSyncCardioDisplay() {
     const actEl = document.getElementById('jt-actions');
     if(actEl) actEl.parentNode.insertBefore(el, actEl);
   }
+  // Save is reachable whenever there's anything to save, cardio included
+  const actBar = document.getElementById('jt-actions');
+  if(actBar) actBar.style.display = (jtExercises.length || cardioBlocks.length) ? 'block' : 'none';
+  jtPersistDraft();
   // Sync content from shared renderCardioBlocks but target jt-cardio-blocks
   if(!cardioBlocks.length) { el.innerHTML = ''; return; }
   const libCardio = db.library
@@ -6410,14 +6495,17 @@ function jtSyncCardioDisplay() {
 // MUST be called before anything that re-renders (add/remove exercise, equipment change),
 // otherwise the rebuild repopulates from last-session history and typed values are lost.
 function jtCaptureInputs(){
-  (jtExercises||[]).forEach((ex,ei)=>{
-    if(!ex) return;
+  const n = _jtRenderedUids ? _jtRenderedUids.length : (jtExercises||[]).length;
+  for(let ei=0; ei<n; ei++){
+    // ei is the position as DRAWN; the exercise is looked up by its stable id
+    const ex = exerciseAtRenderedPos(jtExercises||[], _jtRenderedUids, ei);
+    if(!ex) continue;
     const nt=document.getElementById('jt-'+ei+'-note');
     if(nt) ex.draftNote=nt.value||'';
     if(ex.isCardio){
       const m=document.getElementById('jt-'+ei+'-kg-0');
       if(m) ex.draftMinutes=m.value||'';
-      return;
+      continue;
     }
     const sets=[];
     for(let i=0;i<(ex.sets||3);i++){
@@ -6433,7 +6521,7 @@ function jtCaptureInputs(){
       const wr=document.getElementById('jt-'+ei+'-wu-reps-'+w);
       if(wk||wr) wuRows[w]={kg:wk?wk.value:'', reps:wr?wr.value:''};
     }
-  });
+  }
 }
 
 // ── JUST TRAIN: COLLAPSE + SWAP ───────────────────────────────────
@@ -6533,12 +6621,17 @@ function swapJtExercise(ei, name){
 }
 
 function jtRenderSession() {
-  jtSaveDraft();
+  // Rendering never reads the screen back. It used to capture first, which wrote the OLD
+  // screen into whatever the list had just become (a removal shifted weights onto the next
+  // exercise; a cleared prefill came straight back). Callers capture BEFORE they change state.
+  jtPersistDraft();
   const el = document.getElementById('jt-session-content');
   const actEl = document.getElementById('jt-actions');
   if(!jtExercises.length) {
     el.innerHTML = '';
-    if(actEl) actEl.style.display = 'none';
+    _jtRenderedUids = [];
+    // Keep Save reachable for a cardio-only session
+    if(actEl) actEl.style.display = (_cardioOwner === 'jt' && cardioBlocks.length) ? 'block' : 'none';
     return;
   }
   if(actEl) actEl.style.display = 'block';
@@ -6666,6 +6759,7 @@ function jtRenderSession() {
       + '</div>'
       + (gInfo && gInfo.isEnd ? '</div>' : '');
   }).join('');
+  _jtRenderedUids = jtExercises.map(exUid);
 }
 
 // ── VOICE / FREE-TEXT WORKOUT IMPORT ──────────────────────────────
@@ -6682,11 +6776,16 @@ function jtDraftKey(){ return 'gymlog_jt_draft_' + (currentUser ? currentUser.id
 let _jtDraftTimer = null;
 function jtSaveDraft(){
   if(typeof jtCaptureInputs === 'function') jtCaptureInputs();
+  jtPersistDraft();
+}
+// Writes current state to local storage without reading the screen.
+function jtPersistDraft(){
   clearTimeout(_jtDraftTimer);
   _jtDraftTimer = setTimeout(() => {
     try {
-      if(!jtExercises.length){ localStorage.removeItem(jtDraftKey()); return; }
-      localStorage.setItem(jtDraftKey(), JSON.stringify({ savedAt: new Date().toISOString(), exercises: jtExercises }));
+      const cardio = _cardioOwner === 'jt' ? cardioBlocks : [];
+      if(!jtExercises.length && !cardio.length){ localStorage.removeItem(jtDraftKey()); return; }
+      localStorage.setItem(jtDraftKey(), JSON.stringify({ savedAt: new Date().toISOString(), exercises: jtExercises, cardio }));
     } catch(e){ console.warn('JT draft save failed', e); }
   }, 600);
 }
@@ -6699,10 +6798,14 @@ function jtRestoreDraft(){
     const raw = localStorage.getItem(jtDraftKey());
     if(!raw) return false;
     const d = JSON.parse(raw);
-    if(!d || !Array.isArray(d.exercises) || !d.exercises.length) return false;
+    const exs = Array.isArray(d && d.exercises) ? d.exercises : [];
+    const cardio = Array.isArray(d && d.cardio) ? d.cardio : [];
+    if(!exs.length && !cardio.length) return false;     // a cardio-only draft is a real draft
     // Drop stale drafts so an abandoned session doesn't resurface days later
     if(d.savedAt && (Date.now() - new Date(d.savedAt).getTime()) > 36*3600e3){ jtClearDraft(); return false; }
-    jtExercises = d.exercises;
+    jtExercises = exs;
+    // Restore cardio only into an empty list — never over cardio the Log screen is using
+    if(cardio.length && !cardioBlocks.length){ cardioBlocks = cardio; _cardioOwner = 'jt'; }
     return true;
   } catch(e){ return false; }
 }
@@ -7049,12 +7152,19 @@ function jtSaveSession(){
 }
 
 async function jtDoSaveSession() {
-  if(!jtExercises.length) { toast('Add at least one exercise.', 'error'); return; }
+  // A session is valid with lifting OR cardio — a cardio-only Just Train session used to be
+  // rejected with "Add at least one exercise".
+  const hasCardio = (cardioBlocks||[]).some(b => b && b.duration);
+  if(!jtExercises.length && !hasCardio) { toast('Add an exercise or some cardio first.', 'error'); return; }
 
   // Build the record on a COPY; the live list is only cleared after the database confirms.
   // Previously loggedSets and cardio were written into jtExercises before the insert, so a
   // failed save changed what the retry sent.
-  const exercises = JSON.parse(JSON.stringify(jtExercises)).map((ex, ei) => {
+  const exercises = jtExercises.map((live, idx) => {
+    const ex = JSON.parse(JSON.stringify(live));
+    // Read from where this exercise was DRAWN; one not on screen falls back to its draft
+    const ei = _jtRenderedUids ? renderedPosOf(_jtRenderedUids, live) : idx;
+    if(ei < 0){ ex.loggedSets = loggedSetsFromDraft(live); delete ex.draftSets; delete ex.collapsed; delete ex._uid; return ex; }
     const sets = [];
     if(ex.isCardio) {
       const kg = parseFloat(document.getElementById('jt-' + ei + '-kg-0')?.value) || null;
@@ -7065,7 +7175,7 @@ async function jtDoSaveSession() {
         const reps = parseInt(document.getElementById('jt-' + ei + '-reps-' + i)?.value) || null;
         if(kg || reps) sets.push({kg, reps});
       }
-      const wuAll = warmupDrafts(jtExercises[ei]);
+      const wuAll = warmupDrafts(live);
       for(let w = wuAll.length-1; w >= 0; w--){
         const wkg = parseFloat(document.getElementById('jt-' + ei + '-wu-kg-' + w)?.value) || null;
         const wreps = parseInt(document.getElementById('jt-' + ei + '-wu-reps-' + w)?.value) || null;
@@ -7074,12 +7184,13 @@ async function jtDoSaveSession() {
     }
     const note = document.getElementById('jt-' + ei + '-note')?.value || '';
     ex.loggedSets = { sets, note, kg: sets[0]?.kg, targetReps: parseInt(ex.reps) || 0, nextAction: ex.nextAction || '' };
-    delete ex.draftSets; delete ex.collapsed;
+    delete ex.draftSets; delete ex.collapsed; delete ex._uid;
     return ex;
   }).concat(cardioBlocksAsExercises(cardioBlocks));
 
   const muscles = sessionMuscles(exercises);
-  const title = 'Freestyle — ' + muscles.filter(m => m !== 'Cardio').slice(0,2).join(', ') || 'Freestyle';
+  const liftMuscles = muscles.filter(m => m !== 'Cardio').slice(0,2);
+  const title = liftMuscles.length ? 'Freestyle — ' + liftMuscles.join(', ') : (hasCardio ? 'Cardio' : 'Freestyle');
   const date = new Date().toISOString();
 
   const {data, error} = await sb.from('sessions').insert({
@@ -7455,15 +7566,19 @@ function renderCardioBlocks(allTypesOverride) {
 
 function updateCardioBlock(bi, field, value) {
   if(cardioBlocks[bi]) cardioBlocks[bi][field] = value;
+  if(_cardioOwner === 'jt') jtPersistDraft();
 }
 
 function removeCardioBlock(bi) {
   cardioBlocks.splice(bi, 1);
+  if(!cardioBlocks.length) _cardioOwner = null;
   renderCardioBlocks();
+  if(typeof jtPersistDraft === 'function') jtPersistDraft();
 }
 
 function resetCardioBlocks() {
   cardioBlocks = [];
+  _cardioOwner = null;
   const el = document.getElementById('cardio-blocks');
   if(el) el.innerHTML = '';
 }
@@ -7690,7 +7805,7 @@ async function renderLibrary(){
   document.getElementById('lib-display').innerHTML='<p style="font-size:13px;color:var(--muted);">Loading...</p>';
   const {data,error}=await sb.from('library').select('*').eq('user_id',currentUser.id).order('name');
   if(error){dbErr('Load library',error);return;}
-  db.library=(data||[]).map(e=>({id:e.id,name:e.name,muscle:e.muscle,archived:!!e.archived}));
+  db.library=decodeLibraryRows(data);
   invalidateMuscleCache();
   const nArch=db.library.filter(e=>e.archived).length;
   document.getElementById('lib-count').textContent=db.library.length+(nArch?' ('+nArch+' archived)':'');
