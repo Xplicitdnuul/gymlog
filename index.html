@@ -389,6 +389,7 @@ html.mobile-layout .hs-chart { height:300px; }
       <button class="auth-tab" onclick="switchAuthTab('signup')">Create account</button>
     </div>
     <div class="auth-error" id="auth-error"></div>
+    <div id="auth-notice" style="display:none;font-size:13px;line-height:1.5;padding:10px 12px;border-radius:8px;background:rgba(46,125,50,0.08);color:#2E7D32;margin-bottom:12px;"></div>
     <div id="auth-login">
       <div class="form-group" style="margin-bottom:10px;"><label class="form-label">Email</label><input type="email" id="login-email" placeholder="you@example.com"></div>
       <div class="form-group" style="margin-bottom:16px;"><label class="form-label">Password</label><input type="password" id="login-password" placeholder="••••••••"></div>
@@ -991,8 +992,8 @@ const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
 // Bumped with every shipped batch, so the build you're running is visible under
 // Goals & profile → App version (Safari can keep serving a cached copy).
-const APP_VERSION = '1.7.5';
-const BUILD_STAMP = '2026-10-26 batch 5';
+const APP_VERSION = '1.7.6';
+const BUILD_STAMP = '2026-10-26 batch 6';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -1092,28 +1093,43 @@ function showAuthError(msg) {
   const el=document.getElementById('auth-error'); el.textContent=msg; el.style.display='block';
 }
 function clearAuthError() { document.getElementById('auth-error').style.display='none'; }
+// Remembers which form was showing so it can be put back. The old one-line rule was inverted
+// for the sign-up form and hid BOTH forms afterwards, leaving a blank screen.
+let _authFormShown = 'auth-login';
 function setAuthLoading(v) {
   document.getElementById('auth-loading').style.display=v?'block':'none';
-  ['auth-login','auth-signup'].forEach(id=>{const el=document.getElementById(id);if(el)el.style.display=v?'none':(id==='auth-login'&&!document.getElementById('auth-signup').style.display)?'block':'none';});
+  if(v){
+    const su=document.getElementById('auth-signup');
+    _authFormShown = (su && su.style.display==='block') ? 'auth-signup' : 'auth-login';
+  }
+  ['auth-login','auth-signup'].forEach(id=>{ const el=document.getElementById(id);
+    if(el) el.style.display = v ? 'none' : (id===_authFormShown ? 'block' : 'none'); });
+}
+function showAuthNotice(msg){
+  const el=document.getElementById('auth-notice'); if(!el) return;
+  el.textContent=msg; el.style.display=msg?'block':'none';
 }
 
 async function signIn() {
-  clearAuthError();
+  clearAuthError(); showAuthNotice('');
   const email=document.getElementById('login-email').value.trim();
   const password=document.getElementById('login-password').value;
   if(!email||!password){showAuthError('Please enter your email and password.');return;}
   setAuthLoading(true);
-  const {data,error}=await sb.auth.signInWithPassword({email,password});
-  if(error){
-    setAuthLoading(false);
-    showAuthError(error.message);
-    dbErr('Sign in',error);
-    document.getElementById('auth-login').style.display='block';
-    return;
+  try {
+    const {data,error}=await sb.auth.signInWithPassword({email,password});
+    if(error){
+      showAuthError(error.message);
+      dbErr('Sign in',error);
+      return;
+    }
+    // Explicitly init app after sign in rather than waiting for onAuthStateChange
+    await initApp();
+  } catch(e){
+    showAuthError('Couldn\u2019t reach the server. Check your connection and try again.');
+  } finally {
+    setAuthLoading(false);      // the form always comes back, whatever happened
   }
-  // Explicitly init app after sign in rather than waiting for onAuthStateChange
-  await initApp();
-  setAuthLoading(false);
 }
 
 async function signUp() {
@@ -1132,12 +1148,25 @@ async function signUp() {
     document.getElementById('auth-signup').style.display='block';
     return;
   }
-  if(data.user){
-    const {error:spErr}=await sb.from('profiles').upsert({id:data.user.id,name,level:'intermediate',goal:'hypertrophy',rest:JSON.stringify({strength:180,hyp:90,end:60,trans:120})});
-    if(spErr) console.warn('Profile create:',spErr);
+  // Email confirmation is on: Supabase returns the user but no session. There's nothing to load
+  // yet — say what to do next, and show the sign-in form for after they've confirmed. (The
+  // profile is created on first sign-in; writing it now would be refused without a session.)
+  if(data.user && !data.session){
+    _authFormShown = 'auth-login';
+    setAuthLoading(false);
+    showAuthNotice('Check your email \u2014 we\u2019ve sent a confirmation link to ' + email + '. Open it, then sign in here.');
+    const le=document.getElementById('login-email'); if(le) le.value=email;
+    return;
   }
-  await initApp();
-  setAuthLoading(false);
+  try {
+    if(data.user){
+      const {error:spErr}=await sb.from('profiles').upsert({id:data.user.id,name,level:'intermediate',goal:'hypertrophy',rest:JSON.stringify({strength:180,hyp:90,end:60,trans:120})});
+      if(spErr) console.warn('Profile create:',spErr);
+    }
+    await initApp();
+  } finally {
+    setAuthLoading(false);      // controls come back however this ends
+  }
 }
 
 
@@ -1270,7 +1299,37 @@ function closeSidebar(){
 }
 function freshDb(){ return JSON.parse(JSON.stringify(defaultDb)); }
 
+// ── ACCOUNT ISOLATION ────────────────────────────────────────────
+// Every sign-out bumps the generation. Anything started under an older generation — a load, an
+// AI request — checks it after each await and stops instead of writing into the next user's
+// session. Before this, user A's slow load could finish after B signed in and install A's
+// workouts and profile under B.
+let _authGen = 0;
+class StaleLoad extends Error {}
+function assertCurrent(gen){ if(gen !== _authGen) throw new StaleLoad('signed out during load'); }
+
+// Every container the app fills with user content. Cleared on sign-out so nothing drawn for one
+// account is visible to the next (a previous user's coach review stayed on screen). The test
+// suite re-scans the page markup and fails if a new container isn't listed here.
+const USER_CONTENT_IDS = ['auth-error','auth-notice','overlay','nav-log-badge','overview-greeting','overview-active-prog','overview-quickstart','overview-metrics','overview-signals','overview-skipped','overview-last-session','overview-muscles','overview-goals','recent-sessions','planner-date','planner-weights','planner-cardio','muscle-settings-list','planner-estimate','gen-status','planner-result','log-content','saved-workouts-list','progress-metrics','cal-grid','cal-legend','muscle-heatmap','progress-goals','hardsets-content','stalling-content','volume-content','strength-ex-filter','cardio-stats','compare-content','pr-content','ai-report-age','ai-report-status','ai-report-content','timeoff-list','body-history','builder-ex-list','active-programme-section','programme-list','prog-gen-status','prog-day-list','suggestion-panel','sug-status','merge-status','lib-review','lib-display','jt-voice-status','jt-session-content','history-content','goals-page-list','goals-list','backup-status'];
+
+function clearUserScreens(){
+  USER_CONTENT_IDS.forEach(id => { const el = document.getElementById(id); if(el) el.innerHTML = ''; });
+  // Half-typed form values belong to the previous user too
+  document.querySelectorAll('.page input:not([type=checkbox]):not([type=button]), .page textarea').forEach(el => { el.value = ''; });
+}
+
+// ── TEXT INTO HTML ────────────────────────────────────────────────
+// Anything typed by a user or written by the AI is TEXT. Building HTML from it unescaped let
+// markup in a goal, an exercise name or an AI reply run as part of the page.
+function esc(v){
+  return String(v == null ? '' : v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
 function resetUserState(){
+  _authGen++;
+  clearUserScreens();
   currentUser = null;
   db = freshDb();
   _trackedCache = null;
@@ -1395,11 +1454,16 @@ function setLibraryFromRead(res){
   return true;
 }
 
+let _loadingGen = null;
 async function loadUserData() {
-  if(_loadingData) { console.warn('loadUserData already running, skipping'); return; }
-  _loadingData = true;
-  try { return await loadUserDataInner(); }
-  finally { _loadingData = false; }
+  const gen = _authGen;
+  // The lock belongs to a generation: a previous user's load still in flight must not block
+  // the new user's load, and its finishing must not release the new user's lock.
+  if(_loadingData && _loadingGen === gen) { console.warn('loadUserData already running, skipping'); return; }
+  _loadingData = true; _loadingGen = gen;
+  try { return await loadUserDataInner(gen); }
+  catch(e){ if(e instanceof StaleLoad) return; throw e; }
+  finally { if(_loadingGen === gen){ _loadingData = false; _loadingGen = null; } }
 }
 
 // A failed read keeps what was already loaded instead of replacing it with an empty list —
@@ -1413,7 +1477,8 @@ function keepOrReplace(label, res, mapRows, current){
   return mapRows(res.data || []);
 }
 
-async function loadUserDataInner() {
+async function loadUserDataInner(gen) {
+  if(gen === undefined) gen = _authGen;
   db._loadErrors = [];
   const uid = currentUser.id;
   console.log('loadUserData start, uid:', uid);
@@ -1442,11 +1507,13 @@ async function loadUserDataInner() {
     sb.from('goals').select('*').eq('user_id',uid).order('created_at'),
     sb.from('sessions').select('*').eq('user_id',uid).eq('is_draft',true).order('created_at',{ascending:false}).limit(1)
   ]);
+  assertCurrent(gen);   // a sign-out during the main reads: stop before writing anything
   // Non-fatal extras — never block the UI on a table whose migration may not have run
   await Promise.all([
     fetchExAliases().catch(e => { console.warn('aliases unavailable', e); db.aliases = db.aliases || {}; }),
     loadTimeOff().catch(e => { console.warn('time_off unavailable', e); db.timeOff = db.timeOff || []; })
   ]);
+  assertCurrent(gen);
   console.log('core queries done in', Math.round(performance.now()-t0), 'ms');
   invalidateMuscleCache(); // derived muscle list belongs to the user now loading
   console.log('loadUserData results - prof:', prof.error||prof.data?.name, 'lib:', lib.data?.length, 'sess:', sess.data?.length, 'lib error:', lib.error, 'sess error:', sess.error);
@@ -1498,6 +1565,7 @@ async function loadUserDataInner() {
     } // end age check
   }
   const sw = await sb.from('saved_workouts').select('*').eq('user_id',uid).order('saved_at');
+  assertCurrent(gen);
   db.savedWorkouts = keepOrReplace('saved workouts', sw, rows => rows.map(w=>({
     ...w,
     sessionTitle: w.title||w.sessionTitle||'Workout',
@@ -1509,6 +1577,7 @@ async function loadUserDataInner() {
   // Must come after db.savedWorkouts is populated: loadProgrammes backfills each programme
   // day's workoutId by matching titles against it.
   await loadProgrammes();
+  assertCurrent(gen);
   if(db._loadErrors.length){
     toast('Couldn\u2019t load your ' + db._loadErrors.join(', ') + '. Showing what was loaded before \u2014 refresh to try again.', 'error');
   }
@@ -1709,7 +1778,9 @@ const TIMEOFF_LABEL = {illness:'Illness', injury:'Injury', travel:'Travel', rest
 
 async function loadTimeOff(){
   if(!currentUser) return [];
+  const gen = _authGen;
   const {data,error} = await sb.from('time_off').select('*').eq('user_id',currentUser.id).order('start_date',{ascending:false});
+  if(gen !== _authGen) return [];
   if(error){ console.warn('time_off unavailable', error); db.timeOff = db.timeOff||[]; return db.timeOff; }
   db.timeOff = data||[];
   return db.timeOff;
@@ -1884,7 +1955,7 @@ function renderSkippedCard(){
     + list.map((x,i) =>
         '<label style="display:flex;align-items:center;gap:9px;padding:6px 0;border-top:0.5px solid var(--border);cursor:pointer;">'
         + '<input type="checkbox" class="catchup-cb" data-i="' + i + '" style="width:16px;height:16px;flex-shrink:0;">'
-        + '<span style="flex:1;min-width:0;font-size:13px;">' + x.name
+        + '<span style="flex:1;min-width:0;font-size:13px;">' + esc(x.name)
           + (x.modifier ? ' <span class="pm-mod">' + (x.modifier==='Unilateral'?'uni':x.modifier==='Isometric hold'?'iso':x.modifier.slice(0,4).toLowerCase()) + '</span>' : '')
         + '</span>'
         + '<span style="font-size:11px;color:var(--faint);white-space:nowrap;">' + dayName(x.date) + ' \u00b7 ' + x.from + '</span>'
@@ -1992,7 +2063,7 @@ async function renderOverview() {
     progEl.innerHTML = '<div style="border:2px solid var(--color-border-info);border-radius:var(--border-radius-lg);padding:1rem 1.25rem;margin-bottom:14px;">'
       + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">'
       + '<div><div style="font-size:11px;font-weight:500;color:var(--color-text-info);text-transform:uppercase;letter-spacing:0.07em;">Active programme</div>'
-      + '<div style="font-size:14px;font-weight:500;margin-top:2px;">' + prog.name + '</div></div>'
+      + '<div style="font-size:14px;font-weight:500;margin-top:2px;">'+esc(prog.name)+'</div></div>'
       + '<div style="text-align:right;"><div style="font-size:11px;color:var(--muted);">Day ' + (currentDay+1) + ' of ' + days.length + '</div>'
       + '<div style="font-size:13px;font-weight:500;margin-top:2px;">' + (selectedDayData ? (selectedDayData.workoutTitle || 'Rest day') : '') + '</div></div>'
       + '</div>'
@@ -2060,7 +2131,7 @@ async function renderOverview() {
   const trend30 = strengthTrendSummary(sessionsThisMonth30);
   const tile = (label, value, sub, colour) =>
     '<div class="card" style="padding:12px 14px;">'
-    + '<div style="font-size:11px;color:var(--muted);margin-bottom:6px;">' + label + '</div>'
+    + '<div style="font-size:11px;color:var(--muted);margin-bottom:6px;">'+esc(label)+'</div>'
     + '<div style="font-size:22px;font-weight:300;letter-spacing:-0.5px;' + (colour?'color:'+colour+';':'') + '">' + value + '</div>'
     + '<div style="font-size:11px;color:var(--faint);margin-top:4px;">' + sub + '</div>'
     + '</div>';
@@ -2095,7 +2166,7 @@ async function renderOverview() {
     const bits = [];
     try {
       const stalls = stallingLifts();
-      if(stalls.length) bits.push('<b>' + stalls[0].name + '</b> hasn\'t moved in 6 weeks'
+      if(stalls.length) bits.push('<b>'+esc(stalls[0].name)+'</b> hasn\'t moved in 6 weeks'
         + (stalls.length>1 ? ' (+' + (stalls.length-1) + ' more)' : ''));
     } catch(e){}
     try {
@@ -2140,11 +2211,11 @@ async function renderOverview() {
     ? db.goals.map(g =>
         '<div style="margin-bottom:10px;">'
         + '<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;">'
-        + '<span style="font-weight:500;">' + g.text + '</span>'
+        + '<span style="font-weight:500;">'+esc(g.text)+'</span>'
         + '<span style="font-weight:500;color:' + ((g.pct||0)>=80?'#2E7D32':(g.pct||0)>=50?'#BA7517':'#1A56A0') + ';">' + (g.pct||0) + '%</span>'
         + '</div>'
         + '<div class="prog-bar" style="height:6px;"><div class="prog-fill" style="width:' + (g.pct||0) + '%;background:' + ((g.pct||0)>=80?'#2E7D32':(g.pct||0)>=50?'#BA7517':'#1A56A0') + ';"></div></div>'
-        + '<div style="font-size:11px;color:var(--faint);margin-top:2px;">' + (g.current_best||'No baseline') + '</div>'
+        + '<div style="font-size:11px;color:var(--faint);margin-top:2px;">'+esc((g.current_best||'No baseline'))+'</div>'
         + '</div>'
       ).join('')
     : '<p style="font-size:13px;color:var(--muted);">No goals set. Add them in Settings.</p>';
@@ -2261,7 +2332,7 @@ function renderSavedWorkouts(){
   }
   el.innerHTML = db.savedWorkouts.map((w,i) =>
     '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:0.5px solid var(--border);">'
-    +'<div><div style="font-size:13px;font-weight:500;">'+(w.sessionTitle||w.title||'Workout')+'</div>'
+    +'<div><div style="font-size:13px;font-weight:500;">'+esc((w.sessionTitle||w.title||'Workout'))+'</div>'
     +'<div style="font-size:11px;color:var(--muted);">'+(w.muscles?w.muscles.join(', '):'')
     +' &middot; '+(w.exercises?w.exercises.length:0)+' exercises'
     +(w.savedAt?' &middot; saved '+fmt(w.savedAt):'')+'</div></div>'
@@ -2289,7 +2360,7 @@ function renderWorkoutEditor(w, idx) {
 
   // Build library options grouped by muscle
   const libOptions = activeLibrary().map(e =>
-    '<option value="'+e.name.replace(/"/g,'&quot;')+'" data-muscle="'+e.muscle.replace(/"/g,'&quot;')+'">'+e.name+' ('+e.muscle+')</option>'
+    '<option value="'+e.name.replace(/"/g,'&quot;')+'" data-muscle="'+e.muscle.replace(/"/g,'&quot;')+'">'+esc(e.name)+' ('+e.muscle+')</option>'
   ).join('');
 
   const exRows = editingWorkoutExercises.map((ex, ei) => {
@@ -2299,7 +2370,7 @@ function renderWorkoutEditor(w, idx) {
       +'<div style="display:grid;grid-template-columns:1fr auto;gap:8px;margin-bottom:8px;">'
       +'<div class="form-group"><label class="form-label">Exercise</label>'
       +'<select data-ei="'+ei+'" onchange="weUpdateExercise(parseInt(this.dataset.ei),this.value,this.options[this.selectedIndex].dataset.muscle)">'
-      +'<option value="'+ex.name.replace(/"/g,'&quot;')+'">'+ex.name+'</option>'
+      +'<option value="'+ex.name.replace(/"/g,'&quot;')+'">'+esc(ex.name)+'</option>'
       +libOptions
       +'</select></div>'
       +'<div style="display:flex;align-items:flex-end;gap:4px;padding-bottom:6px;">'
@@ -2750,23 +2821,23 @@ function renderPlannerResult(s) {
     const swapHtml=swapOptions.length
       ?'<select onchange="swapExercise('+i+',this.value)" style="font-size:11px;padding:3px 6px;border:0.5px solid var(--border-md);border-radius:var(--radius-sm);background:var(--bg);color:var(--muted);margin-top:5px;width:auto;">'
         +'<option value="">Swap exercise...</option>'
-        +swapOptions.map(o=>'<option value="'+o.name+'">'+o.name+'</option>').join('')
+        +swapOptions.map(o=>'<option value="'+esc(o.name)+'">'+esc(o.name)+'</option>').join('')
         +'</select>'
       :'';
     return '<div style="padding:10px 0;border-bottom:0.5px solid var(--border);" id="ex-result-'+i+'">'
       +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">'
-      +'<span style="font-size:14px;font-weight:500;">'+ex.name+'</span>'
+      +'<span style="font-size:14px;font-weight:500;">'+esc(ex.name)+'</span>'
       +'<span class="'+(ex.isCardio?'tag-cardio':ex.isRepeat?'tag-repeat':'tag-new')+'">'+(ex.isCardio?'cardio':ex.isRepeat?'repeated':'fresh pick')+'</span>'
       +'</div>'
       +'<div style="font-size:12px;color:var(--muted);">'+ex.muscle+' &middot; '+(ex.isCardio?ex.reps:ex.sets+' &times; '+ex.reps)+'</div>'
-      +'<div style="font-size:12px;color:var(--faint);font-style:italic;margin-top:3px;">'+ex.tip+'</div>'
+      +'<div style="font-size:12px;color:var(--faint);font-style:italic;margin-top:3px;">'+esc(ex.tip)+'</div>'
       +swapHtml
       +'</div>';
   }).join('');
   document.getElementById('planner-result').innerHTML='<div class="card">'
-    +'<div style="font-size:16px;font-weight:500;margin-bottom:4px;">'+s.sessionTitle+'</div>'
+    +'<div style="font-size:16px;font-weight:500;margin-bottom:4px;">'+esc(s.sessionTitle)+'</div>'
     +'<div style="font-size:13px;color:var(--muted);margin-bottom:14px;">'+s.exercises.length+' exercises &middot; '+db.selectedMuscles.join(', ')+'</div>'
-    +(s.coachNote?'<div class="banner banner-blue" style="margin-bottom:14px;">'+s.coachNote+'</div>':'')
+    +(s.coachNote?'<div class="banner banner-blue" style="margin-bottom:14px;">'+esc(s.coachNote)+'</div>':'')
     +exRows
     +'<div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;">'
     +'<button class="btn btn-dark" onclick="startSession()">Start &amp; log this session</button>'
@@ -2930,7 +3001,7 @@ function renderLog() {
   // loggable in the session rather than forcing a separate Just Train entry.
   const addOpts = '<option value="">+ Add exercise\u2026</option>'
     + activeLibrary().slice().sort((a,b)=>a.name.localeCompare(b.name))
-        .map(l=>'<option value="'+l.name.replace(/"/g,'&quot;')+'">'+l.name+'</option>').join('');
+        .map(l=>'<option value="'+l.name.replace(/"/g,'&quot;')+'">'+esc(l.name)+'</option>').join('');
   html2+='<div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center;">'
     +'<select class="set-inp" style="flex:1;min-width:140px;width:auto;font-size:12px;padding:5px 8px;color:var(--muted);" onchange="addLogExercise(this.value);this.value=\'\';">'+addOpts+'</select>'
     +'<button class="btn btn-sm" style="border-color:#9FE1CB;color:#0F6E56;background:#E1F5EE;" onclick="addCardioBlock()">+ Add cardio</button>'
@@ -3027,14 +3098,14 @@ function renderLog() {
 
     // Form cue
     const cueHtml=cue
-      ?'<button class="cue-toggle" onclick="toggleCue(\'cue-'+ei+'\')">▸ Form cue</button><div class="cue-body" id="cue-'+ei+'">'+cue+'</div>'
+      ?'<button class="cue-toggle" onclick="toggleCue(\'cue-'+ei+'\')">▸ Form cue</button><div class="cue-body" id="cue-'+ei+'">'+esc(cue)+'</div>'
       :'';
 
-    if(groupInfo[ei] && groupInfo[ei].isStart) html2+='<div class="ss-group"><div class="ss-label">'+groupInfo[ei].label+'</div>';
+    if(groupInfo[ei] && groupInfo[ei].isStart) html2+='<div class="ss-group"><div class="ss-label">'+esc(groupInfo[ei].label)+'</div>';
     const exExpanded = (ex.collapsed===undefined) ? expandSet.has(ei) : !ex.collapsed;
     html2+='<div class="ex-block"'+(ex.skipped?' style="opacity:0.45;"':'')+'>';
     html2+='<div class="ex-head" onclick="toggleExBlock('+ei+')">';
-    html2+='<span style="font-size:14px;font-weight:500;">'+ex.name+'</span>';
+    html2+='<span style="font-size:14px;font-weight:500;">'+esc(ex.name)+'</span>';
     html2+='<span style="display:flex;align-items:center;gap:8px;">'
       +(ex.isExtra?'<span class="tag-repeat" style="background:rgba(46,125,50,0.12);color:#2E7D32;">added</span>':'')
       +'<span class="'+(ex.isCardio?'tag-cardio':ex.isRepeat?'tag-repeat':'tag-new')+'">'+(ex.isCardio?'cardio':ex.isRepeat?'repeated':'fresh pick')+'</span>'
@@ -3078,7 +3149,7 @@ function renderLog() {
   });
 
   html2+='</div>';
-  html2+='<div class="card"><div class="card-title">Session notes</div><textarea id="session-note" rows="3" style="font-size:13px;font-style:italic;" placeholder="How did it feel overall?" oninput="autosaveDraft()">'+(s.sessionNote||'')+'</textarea></div>';
+  html2+='<div class="card"><div class="card-title">Session notes</div><textarea id="session-note" rows="3" style="font-size:13px;font-style:italic;" placeholder="How did it feel overall?" oninput="autosaveDraft()">'+esc((s.sessionNote||''))+'</textarea></div>';
   html2+='<div class="log-actions"><button class="btn btn-dark" data-save-session onclick="saveSession()">Save session</button><button class="btn" onclick="discardSession()">Discard</button></div>';
   el.innerHTML=html2;
   s._renderedUids = s.exercises.map(exUid);     // what was drawn where — capture relies on it
@@ -3839,7 +3910,7 @@ function renderStalling(){
   }
   el.innerHTML = list.map(x =>
     '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:0.5px solid var(--border);">'
-    + '<div style="flex:1;min-width:0;"><div style="font-size:13px;font-weight:500;">' + x.name + '</div>'
+    + '<div style="flex:1;min-width:0;"><div style="font-size:13px;font-weight:500;">'+esc(x.name)+'</div>'
     + '<div style="font-size:11px;color:var(--muted);">last 6wk best ' + x.recent + 'kg vs ' + x.prior + 'kg before \u00b7 ' + x.sessions + ' sessions</div></div>'
     + '<div style="font-size:12px;font-weight:600;color:' + (x.declining?'#B3261E':'#92600A') + ';white-space:nowrap;">' + (x.declining ? x.pct + '%' : 'flat') + '</div>'
     + '</div>').join('');
@@ -4097,7 +4168,16 @@ function buildProgressContext(){
     goals: db.goals.map(g=>g.text).join(', ') || 'None set'};
 }
 
+// What a report was written from: completed sessions and the latest one. A later workout,
+// edit or deletion changes this, so the report can say it's out of date.
+function reportBasis(){
+  const done=(db.sessions||[]).filter(s=>!s.is_draft);
+  const latest=done.reduce((m,s)=>Math.max(m,new Date(s.date).getTime()||0),0);
+  return {count:done.length, latest};
+}
+
 async function generateProgressReport(force){
+  const gen=_authGen;
   const btn=document.getElementById('ai-report-btn');
   const status=document.getElementById('ai-report-status');
   const out=document.getElementById('ai-report-content');
@@ -4148,10 +4228,15 @@ async function generateProgressReport(force){
   try {
     const res=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({model:AI_MODEL,max_tokens:1500,messages:[{role:'user',content:prompt}]})});
+    if(res.ok === false) throw new Error('coach unavailable (' + res.status + ')');
     const data=await res.json();
-    const txt=data.content.map(b=>b.text||'').join('').replace(/```json|```/g,'').trim();
-    const rep=JSON.parse(txt);
-    rep.generatedAt=new Date().toISOString();
+    if(gen !== _authGen){ if(btn) btn.disabled=false; return; }   // signed out while waiting: not this user's report
+    const txt=(data.content||[]).map(b=>b.text||'').join('').replace(/```json|```/g,'').trim();
+    const raw=JSON.parse(txt);
+    const strs=a=>Array.isArray(a)?a.filter(x=>typeof x==='string').slice(0,8).map(x=>x.slice(0,500)):[];
+    const rep={headline: typeof raw.headline==='string'?raw.headline.slice(0,300):'',
+      working:strs(raw.working), drifting:strs(raw.drifting), next:strs(raw.next),
+      generatedAt:new Date().toISOString(), basedOn: reportBasis()};
     try { localStorage.setItem(progressReportKey(), JSON.stringify(rep)); } catch(e){}
     renderProgressReport(rep);
     status.textContent='';
@@ -4167,9 +4252,21 @@ function renderProgressReport(rep){
   const ageEl=document.getElementById('ai-report-age');
   const btn=document.getElementById('ai-report-btn');
   if(!out||!rep) return;
-  const list=(arr,color)=> (arr||[]).map(x=>'<li style="margin-bottom:6px;">'+x+'</li>').join('');
+  // AI text is shown as text
+  const list=(arr,color)=> (arr||[]).map(x=>'<li style="margin-bottom:6px;">'+esc(x)+'</li>').join('');
+  // Out of date if it's past the refresh window, or if workouts changed since it was written
+  const ageDays = rep.generatedAt ? (Date.now()-new Date(rep.generatedAt).getTime())/864e5 : 0;
+  const nowBasis = reportBasis(), was = rep.basedOn;
+  const newer = was ? Math.max(0, nowBasis.count - was.count) : 0;
+  const changed = was && (nowBasis.count !== was.count || nowBasis.latest !== was.latest);
+  const stale = ageDays >= REPORT_MAX_AGE_DAYS || changed;
+  const staleMsg = !stale ? '' : '<div class="banner banner-amber" style="margin-bottom:10px;">This review is out of date \u2014 '
+    + (changed ? (newer ? newer + ' workout' + (newer>1?'s':'') + ' logged since it was written' : 'your history has changed since it was written')
+               : 'written ' + Math.floor(ageDays) + ' days ago')
+    + '. <a href="#" onclick="event.preventDefault();generateProgressReport(true);">Generate a new one</a></div>';
   out.innerHTML=
-    (rep.headline?'<div class="banner banner-blue" style="margin-bottom:12px;font-weight:500;">'+rep.headline+'</div>':'')
+    staleMsg
+    +(rep.headline?'<div class="banner banner-blue" style="margin-bottom:12px;font-weight:500;">'+esc(rep.headline)+'</div>':'')
     +((rep.working||[]).length?'<div style="font-size:12px;font-weight:600;color:#2E7D32;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">Working</div><ul style="font-size:13px;padding-left:18px;margin-bottom:12px;">'+list(rep.working)+'</ul>':'')
     +((rep.drifting||[]).length?'<div style="font-size:12px;font-weight:600;color:#92600A;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">Worth attention</div><ul style="font-size:13px;padding-left:18px;margin-bottom:12px;">'+list(rep.drifting)+'</ul>':'')
     +((rep.next||[]).length?'<div style="font-size:12px;font-weight:600;color:#185FA5;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">Do next</div><ul style="font-size:13px;padding-left:18px;margin-bottom:8px;">'+list(rep.next)+'</ul>':'')
@@ -4178,7 +4275,7 @@ function renderProgressReport(rep){
     +' \u00b7 <a href="#" onclick="event.preventDefault();generateProgressReport(true);" style="color:var(--muted);">generate a new one</a></div>';
   if(ageEl && rep.generatedAt){
     const d=Math.floor((Date.now()-new Date(rep.generatedAt).getTime())/864e5);
-    ageEl.textContent=d<=0?'updated today':d+'d old';
+    ageEl.textContent=(stale?'out of date \u00b7 ':'')+(d<=0?'updated today':d+'d old');
   }
   if(btn) btn.style.display='none';
 }
@@ -4216,11 +4313,16 @@ function computePersonalRecords(sessions){
 
 async function renderProgress() {
   await refreshData();
-  // Show an existing cached review immediately — this never triggers an API call
-  try {
-    const c=JSON.parse(localStorage.getItem(progressReportKey())||'null');
-    if(c && c.generatedAt) renderProgressReport(c);
-  } catch(e){}
+  // Show this user's cached review if there is one (never triggers an API call). With none,
+  // clear the panel — leaving it untouched is how a previous user's review stayed visible.
+  let cachedRep=null;
+  try { cachedRep=JSON.parse(localStorage.getItem(progressReportKey())||'null'); } catch(e){}
+  if(cachedRep && cachedRep.generatedAt) renderProgressReport(cachedRep);
+  else {
+    const out=document.getElementById('ai-report-content'); if(out) out.innerHTML='';
+    const age=document.getElementById('ai-report-age'); if(age) age.textContent='';
+    const b=document.getElementById('ai-report-btn'); if(b) b.style.display='';
+  }
   const sessions = getFilteredSessions();
   const prev = getPrevPeriodSessions();
 
@@ -4371,11 +4473,11 @@ async function renderProgress() {
     goalEl.innerHTML = db.goals.map(g => `
       <div class="goal-prog-row">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
-          <span style="font-size:13px;font-weight:500;">${g.text}</span>
+          <span style="font-size:13px;font-weight:500;">${esc(g.text)}</span>
           <span style="font-size:12px;font-weight:500;color:${(g.pct||0) >= 80 ? '#2E7D32' : (g.pct||0) >= 50 ? '#92600A' : '#1A56A0'}">${g.pct||0}%</span>
         </div>
         <div class="prog-bar" style="height:6px;"><div class="prog-fill" style="width:${g.pct||0}%;background:${(g.pct||0) >= 80 ? '#2E7D32' : (g.pct||0) >= 50 ? '#92600A' : '#1A56A0'};"></div></div>
-        <div style="font-size:11px;color:var(--faint);margin-top:3px;">${g.current_best || 'No baseline set'}</div>
+        <div style="font-size:11px;color:var(--faint);margin-top:3px;">${esc(g.current_best || 'No baseline set')}</div>
       </div>`).join('');
   }
 
@@ -4430,7 +4532,7 @@ async function renderProgress() {
   const maxVal = Math.max(...cmpItems.map(i => Math.max(i.cur, i.prv)), 1);
   cmpEl.innerHTML = cmpItems.map(i => `
     <div class="cmp-row">
-      <div class="cmp-label">${i.label}</div>
+      <div class="cmp-label">${esc(i.label)}</div>
       <div class="cmp-bars">
         <div class="cmp-bar" style="width:${Math.round(i.cur/maxVal*100)}%;background:#1A56A0;"></div>
         <div class="cmp-bar" style="width:${Math.round(i.prv/maxVal*100)}%;background:#B5D4F4;"></div>
@@ -4446,7 +4548,7 @@ async function renderProgress() {
   const prs = computePersonalRecords(db.sessions).slice(0, 6);
   document.getElementById('pr-content').innerHTML = prs.length ? prs.map(pr => `
     <div class="pr-entry">
-      <div><div style="font-size:13px;font-weight:500;">${pr.label}</div>
+      <div><div style="font-size:13px;font-weight:500;">${esc(pr.label)}</div>
         <div style="font-size:11px;color:var(--faint);">${pr.kg != null ? pr.kg + 'kg' : 'Bodyweight'} × ${pr.reps} reps</div></div>
       <div style="text-align:right;"><span class="pr-badge">PR</span>
         <div style="font-size:11px;color:var(--faint);margin-top:3px;">${fmt(pr.date)}</div></div>
@@ -4481,9 +4583,7 @@ function renderStrengthPicker(){
     .map(k => _strengthExItems.find(x => x.key === k))
     .filter(Boolean);
   chips.innerHTML = chosen.length
-    ? chosen.map(x => '<span class="filter-pill sel" style="display:inline-flex;align-items:center;gap:6px;">'
-        + x.label
-        + '<span data-key="' + x.key.replace(/"/g,'&quot;') + '" onclick="removeStrengthEx(this.dataset.key)" style="cursor:pointer;font-size:14px;line-height:1;opacity:0.7;">\u00d7</span>'
+    ? chosen.map(x => '<span class="filter-pill sel" style="display:inline-flex;align-items:center;gap:6px;">'+esc(x.label)+'<span data-key="' + x.key.replace(/"/g,'&quot;') + '" onclick="removeStrengthEx(this.dataset.key)" style="cursor:pointer;font-size:14px;line-height:1;opacity:0.7;">\u00d7</span>'
         + '</span>').join('')
     : '<span style="font-size:12px;color:var(--muted);">Pick an exercise above to plot it.</span>';
 }
@@ -4539,7 +4639,7 @@ function renderVolumeChart(sessions){
       + '<div style="width:64px;text-align:right;font-size:11px;flex-shrink:0;"><b>' + fmtKg(r.perWk) + '</b> <span style="color:var(--faint);">kg/wk</span></div>'
       + '</div>';
   }).join('')
-  + '<div style="font-size:10px;color:var(--faint);margin-top:8px;">Average per week over ' + weeks + ' week' + (weeks===1?'':'s') + '. Warm-ups and isometric holds excluded.</div>';
+  + '<div style="font-size:10px;color:var(--faint);margin-top:8px;">Average per week over ' + weeksLabel(weeks) + ' weeks. Warm-ups and isometric holds excluded.</div>';
 }
 
 // Minutes for a cardio exercise — duration is stored as the set's kg (falls back to reps).
@@ -4732,7 +4832,7 @@ function renderTimeOffList(){
       +'<div style="font-size:13px;font-weight:500;color:'+colour+';">'+TIMEOFF_LABEL[t.kind||'illness']
       +(t.body_part?' \u00b7 '+t.body_part:'')+(t.severity?' <span style="color:var(--faint);font-weight:400;">('+t.severity+')</span>':'')+'</div>'
       +'<div style="font-size:11px;color:var(--muted);">'+t.start_date+' \u2192 '+(t.end_date||'ongoing')+' \u00b7 '+days+' day'+(days===1?'':'s')+'</div>'
-      +(t.note?'<div style="font-size:12px;color:var(--muted);font-style:italic;margin-top:2px;">'+t.note+'</div>':'')
+      +(t.note?'<div style="font-size:12px;color:var(--muted);font-style:italic;margin-top:2px;">'+esc(t.note)+'</div>':'')
       +'</div>'
       +'<div style="display:flex;gap:6px;flex-shrink:0;">'
       +(!t.end_date?'<button class="btn btn-sm" data-id="'+t.id+'" onclick="endTimeOff(this.dataset.id)">End today</button>':'')
@@ -4773,8 +4873,8 @@ async function renderBuilder(){
   });
   pick.innerHTML = '<option value="">Select from library...</option>'
     + Object.keys(grouped).sort().map(muscle=>
-        '<optgroup label="'+muscle+'">'
-        + grouped[muscle].map(ex=>'<option value="'+ex.name+'" data-muscle="'+ex.muscle+'">'+ex.name+'</option>').join('')
+        '<optgroup label="'+esc(muscle)+'">'
+        + grouped[muscle].map(ex=>'<option value="'+esc(ex.name)+'" data-muscle="'+esc(ex.muscle)+'">'+esc(ex.name)+'</option>').join('')
         +'</optgroup>'
       ).join('');
   renderBuilderList();
@@ -4805,7 +4905,7 @@ function renderBuilderList(){
   el.innerHTML = builderExercises.map((ex,i)=>
     '<div style="display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:0.5px solid var(--border);">'
     +'<div>'
-    +'<div style="font-size:13px;font-weight:500;">'+ex.name+(ex.group?'<span class="ss-badge">SS '+ex.group+'</span>':'')+'</div>'
+    +'<div style="font-size:13px;font-weight:500;">'+esc(ex.name)+(ex.group?'<span class="ss-badge">SS '+ex.group+'</span>':'')+'</div>'
     +'<div style="font-size:11px;color:var(--muted);">'+ex.muscle+' &middot; '+ex.sets+' sets &times; '+ex.reps+'</div>'
     +(ex.isCardio?'':'<select data-i="'+i+'" onchange="builderUpdateEquipment(parseInt(this.dataset.i),this.value)" style="margin-top:5px;width:auto;min-width:140px;font-size:11px;padding:4px 7px;border:0.5px solid var(--border-md);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);font-family:var(--font);">'+equipmentOptions(ex.equipment)+'</select>')
     +(ex.isCardio?'':'<select data-i="'+i+'" title="How the exercise is performed" onchange="builderUpdateModifier(parseInt(this.dataset.i),this.value)" style="margin-top:5px;margin-left:6px;width:auto;min-width:130px;font-size:11px;padding:4px 7px;border:0.5px solid var(--border-md);border-radius:var(--radius-sm);background:var(--surface);color:'+(ex.modifier?'#92600A':'var(--muted)')+';font-family:var(--font);">'+modifierOptions(ex.modifier)+'</select>')
@@ -4889,7 +4989,9 @@ let editingProgrammeId = null;
 
 async function loadProgrammes() {
   try {
+    const gen = _authGen;
     const {data} = await sb.from('programmes').select('*').eq('user_id', currentUser.id).order('created_at');
+    if(gen !== _authGen) return;
     programmes = data || [];
     // Active programme now lives in the DB (is_active). Fall back to / migrate the old per-device flag.
     const activeRow = programmes.find(p => p.is_active);
@@ -5172,7 +5274,7 @@ function programmeMatrixHtml(prog, days){
       : ex.modifier === 'Isometric hold' ? 'iso'
       : ex.modifier ? ex.modifier.slice(0,4).toLowerCase() : '';
     const sets = ex.isCardio ? (ex.reps || '') : ((ex.sets||3) + '\u00d7' + String(ex.reps||'').replace(/\s*reps?/i,''));
-    return '<div class="pm-ex' + (ex.group ? ' pm-ss' : '') + '">' + ex.name
+    return '<div class="pm-ex' + (ex.group ? ' pm-ss' : '') + '">' + esc(ex.name)
       + (mod ? '<span class="pm-mod">' + mod + '</span>' : '')
       + (sets ? '<span class="pm-sets">' + sets + '</span>' : '')
       + '</div>';
@@ -5198,7 +5300,7 @@ function programmeMatrixHtml(prog, days){
     + '<span style="font-size:11px;color:var(--faint);">' + cols.length + ' training day' + (cols.length===1?'':'s') + ' \u00b7 rest days omitted</span>'
     + '</div><div class="pm-wrap"><table class="pm"><thead><tr><th></th>'
     + cols.map(c => '<th class="pm-day' + (c.isNext?' pm-col-today':'') + '">'
-        + '<span class="pm-daynum">Day ' + c.dayNum + '</span>' + c.title
+        + '<span class="pm-daynum">Day ' + c.dayNum + '</span>' + esc(c.title)
         + (c.isNext ? '<span class="pm-today-tag">NEXT</span>' : '') + '</th>').join('')
     + '</tr></thead><tbody>';
 
@@ -5388,7 +5490,7 @@ function renderActiveProgramme() {
     + '</div>'
     + (!isScheduledDay ? '<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:20px;background:#FAEEDA;color:#633806;">out of order</span>' : '')
     + '</div>'
-    + '<div style="font-size:15px;font-weight:500;margin-bottom:8px;">' + (selectedDayData.workoutTitle || 'Rest day') + '</div>'
+    + '<div style="font-size:15px;font-weight:500;margin-bottom:8px;">'+esc((selectedDayData.workoutTitle || 'Rest day'))+'</div>'
     + (muscleTagsHtml ? '<div style="margin-bottom:6px;">' + muscleTagsHtml + '</div>' : '')
     + liftsHtml
     + (isRestDay
@@ -5402,7 +5504,7 @@ function renderActiveProgramme() {
 
   el.innerHTML = '<div class="active-prog-banner">'
     + '<div style="font-size:11px;font-weight:500;color:var(--color-text-info);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:8px;">Active programme</div>'
-    + '<div style="font-size:17px;font-weight:500;margin-bottom:3px;">' + prog.name + '</div>'
+    + '<div style="font-size:17px;font-weight:500;margin-bottom:3px;">'+esc(prog.name)+'</div>'
     + '<div style="font-size:13px;color:var(--color-text-secondary);margin-bottom:14px;">Day ' + (currentDay+1) + ' of ' + days.length + ' · loops automatically</div>'
     + '<div class="day-strip">' + dotHtml + '</div>'
     + previewHtml
@@ -5468,7 +5570,7 @@ function renderProgrammeList() {
     const muscles = [...new Set(days.filter(d => d.muscles).flatMap(d => d.muscles))].slice(0,4).join(', ');
     const isActive = String(p.id) === String(activeProgrammeId);
     return '<div class="prog-row">'
-      + '<div><div style="font-size:13px;font-weight:500;">' + p.name + '</div>'
+      + '<div><div style="font-size:13px;font-weight:500;">'+esc(p.name)+'</div>'
       + '<div style="font-size:12px;color:var(--color-text-secondary);margin-top:2px;">' + days.length + ' days \u00b7 ' + (muscles || 'no muscles set') + '</div></div>'
       + '<div style="display:flex;align-items:center;gap:8px;">'
       + (isActive ? '<span class="tag tag-green">Active</span>' : '<button class="btn btn-sm" data-pid="' + p.id + '" onclick="activateProgramme(this.dataset.pid)">Activate</button>')
@@ -5839,7 +5941,7 @@ function renderSuggestionPanel() {
       : '<button class="btn btn-sm" style="background:#2E7D32;color:white;border-color:#2E7D32;" data-name="' + s.name.replace(/"/g,'&quot;') + '" data-muscle="' + s.muscle.replace(/"/g,'&quot;') + '" onclick="addSuggestion(this.dataset.name,this.dataset.muscle)">+ Add</button>';
     return '<div class="sug-row' + (isAdded ? ' sug-added' : '') + '">'
       + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;">'
-      + '<div style="display:flex;align-items:center;gap:8px;"><span style="font-size:14px;font-weight:500;">' + s.name + '</span><span class="tag tag-blue">' + s.muscle + '</span></div>'
+      + '<div style="display:flex;align-items:center;gap:8px;"><span style="font-size:14px;font-weight:500;">'+esc(s.name)+'</span><span class="tag tag-blue">'+esc(s.muscle)+'</span></div>'
       + addBtn + '</div>'
       + '<div style="font-size:12px;color:var(--color-text-secondary);margin-bottom:4px;line-height:1.5;">' + s.reason + '</div>'
       + '<div style="font-size:11px;color:var(--color-text-tertiary);">Based on: <span style="color:var(--color-text-secondary);font-weight:500;">' + s.basedOn + '</span></div>'
@@ -5961,14 +6063,14 @@ function renderHistoryList() {
         }
 
         const noteHtml = ex.loggedSets?.note
-          ? '<div style="font-size:11px;color:var(--color-text-tertiary);font-style:italic;margin-top:4px;">' + ex.loggedSets.note + '</div>'
+          ? '<div style="font-size:11px;color:var(--color-text-tertiary);font-style:italic;margin-top:4px;">'+esc(ex.loggedSets.note)+'</div>'
           : '';
 
         return '<div style="padding:9px 0;border-bottom:0.5px solid var(--color-border-tertiary);">'
           + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;">'
-          + '<span style="font-size:13px;font-weight:500;">' + ex.name + (ex.equipment ? ' <span style="color:var(--color-text-tertiary);font-weight:400;">· ' + ex.equipment + '</span>' : '')
+          + '<span style="font-size:13px;font-weight:500;">' + esc(ex.name) + (ex.equipment ? ' <span style="color:var(--color-text-tertiary);font-weight:400;">· ' + ex.equipment + '</span>' : '')
           + (ex.group ? '<span class="ss-badge">SS ' + ex.group + '</span>' : '')
-          + (ex.modifier ? '<span class="ss-badge" style="color:#92600A;background:rgba(146,96,10,0.1);">' + ex.modifier + '</span>' : '')
+          + (ex.modifier ? '<span class="ss-badge" style="color:#92600A;background:rgba(146,96,10,0.1);">'+esc(ex.modifier)+'</span>' : '')
           + '</span>'
           + (isPR ? '<span class="tag-pr">PR</span>' : '')
           + '</div>'
@@ -6155,7 +6257,7 @@ function sessionMatrix(exercises, sDate){
 
     const shortName = ex.name.length > 25 ? ex.name.slice(0,25).trim() + '\u2026' : ex.name;
     html += '<tr><td class="rm-name" title="' + ex.name.replace(/"/g,'&quot;') + '">'
-      + '<div class="rm-nm">' + shortName + '</div>'
+      + '<div class="rm-nm">'+esc(shortName)+'</div>'
       + (ex.modifier ? '<span class="rm-mod">' + (ex.modifier==='Unilateral'?'uni':ex.modifier==='Isometric hold'?'iso':ex.modifier.slice(0,4).toLowerCase()) + '</span>' : '')
       + delta
       + '</td>';
@@ -6211,7 +6313,7 @@ function sessionRecap(s){
     + sessionMatrix(exercises, s.date)
     + (insights.length
         ? '<div class="recap-insights">' + insights.map(i =>
-            '<div class="recap-chip recap-' + i.type + '">' + i.text + '</div>').join('') + '</div>'
+            '<div class="recap-chip recap-' + i.type + '">'+esc(i.text)+'</div>').join('') + '</div>'
         : '')
     + '</div>';
 }
@@ -6258,7 +6360,7 @@ function openHistoryEdit(id) {
 
   const exercises = safeJSON(s.exercises, []);
   const libOptions = db.library.map(e =>
-    '<option value="' + e.name.replace(/"/g,'&quot;') + '" data-muscle="' + e.muscle.replace(/"/g,'&quot;') + '">' + e.name + '</option>'
+    '<option value="' + e.name.replace(/"/g,'&quot;') + '" data-muscle="' + e.muscle.replace(/"/g,'&quot;') + '">'+esc(e.name)+'</option>'
   ).join('');
 
   const exRows = exercises.map((ex, ei) => {
@@ -6292,7 +6394,7 @@ function openHistoryEdit(id) {
     return '<div style="padding:10px;background:var(--color-background-secondary);border-radius:var(--border-radius-md);margin-bottom:8px;">'
       + '<div class="form-group" style="margin-bottom:6px;"><label class="form-label">Exercise</label>'
       + '<select data-heid="' + id + '" data-ei="' + ei + '" onchange="heUpdateEx(this.dataset.heid,parseInt(this.dataset.ei),this.value,this.options[this.selectedIndex].dataset.muscle)">'
-      + '<option value="' + ex.name.replace(/"/g,'&quot;') + '" selected>' + ex.name + '</option>'
+      + '<option value="' + ex.name.replace(/"/g,'&quot;') + '" selected>'+esc(ex.name)+'</option>'
       + libOptions
       + '</select></div>'
       + (isCardio ? '' : '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:6px;">'
@@ -6319,7 +6421,7 @@ function openHistoryEdit(id) {
     + '</div>'
     + exRows
     + '<div class="form-group" style="margin-bottom:12px;"><label class="form-label">Session note</label>'
-    + '<textarea id="he-sessionnote-' + id + '" rows="2" style="font-size:13px;font-family:var(--font-sans);">' + (s.note||'') + '</textarea></div>'
+    + '<textarea id="he-sessionnote-' + id + '" rows="2" style="font-size:13px;font-family:var(--font-sans);">'+esc((s.note||''))+'</textarea></div>'
     + '<div style="display:flex;gap:8px;">'
     + '<button class="btn btn-dark btn-sm" data-sid="' + id + '" onclick="saveHistoryEdit(this.dataset.sid)">Save changes</button>'
     + '<button class="btn btn-sm" data-sid="' + id + '" onclick="cancelHistoryEdit(this.dataset.sid)">Cancel</button>'
@@ -6519,7 +6621,7 @@ function jtPopulateExercisePick(){
   }
   const seenNames = new Set();
   const opts = list.filter(e => { if(seenNames.has(e.name)) return false; seenNames.add(e.name); return true; })
-    .map(e => '<option value="' + e.name.replace(/"/g,'&quot;') + '" data-muscle="' + e.muscle.replace(/"/g,'&quot;') + '">' + e.name + '</option>').join('');
+    .map(e => '<option value="' + e.name.replace(/"/g,'&quot;') + '" data-muscle="' + e.muscle.replace(/"/g,'&quot;') + '">'+esc(e.name)+'</option>').join('');
   pick.innerHTML = '<option value="">' + (list.length ? 'Select an exercise\u2026' : 'No exercises for this group') + '</option>' + opts;
 }
 
@@ -6656,7 +6758,7 @@ function manualVerdictBanner(prev, ex){
 
 function nextActionHtml(prefix, ei, cur){
   const b = (val, txt, title) => '<button type="button" class="na-btn' + (cur===val ? ' na-sel na-'+val : '')
-    + '" title="' + title + '" onclick="setNextAction(\'' + prefix + '\',' + ei + ',\'' + val + '\')">' + txt + '</button>';
+    + '" title="'+esc(title)+'" onclick="setNextAction(\'' + prefix + '\',' + ei + ',\'' + val + '\')">' + txt + '</button>';
   return '<div class="na-row"><span class="na-lbl">Next time:</span>'
     + b('up', '\u2191 Heavier', 'Felt easy \u2014 prefill one step heavier next time')
     + b('hold', '= Same', 'Right weight \u2014 keep it next time')
@@ -6822,15 +6924,15 @@ function jtRenderSession() {
     }
 
     const cueHtml = cue
-      ? '<button class="cue-toggle" onclick="toggleCue(\'jt-cue-' + ei + '\')">▸ Form cue</button><div class="cue-body" id="jt-cue-' + ei + '">' + cue + '</div>'
+      ? '<button class="cue-toggle" onclick="toggleCue(\'jt-cue-' + ei + '\')">▸ Form cue</button><div class="cue-body" id="jt-cue-' + ei + '">'+esc(cue)+'</div>'
       : '';
 
     const gInfo = jtGroupInfo[ei];
-    return (gInfo && gInfo.isStart ? '<div class="ss-group"><div class="ss-label">' + gInfo.label + '</div>' : '')
+    return (gInfo && gInfo.isStart ? '<div class="ss-group"><div class="ss-label">'+esc(gInfo.label)+'</div>' : '')
       + '<div class="card" style="margin-bottom:10px;">'
       // Header is the collapse target. The × stops propagation so removing doesn't also toggle.
       + '<div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;" onclick="jtToggleBlock(' + ei + ')">'
-      + '<span style="font-size:14px;font-weight:500;">' + ex.name + (ex.group?'<span class="ss-badge">SS ' + ex.group + '</span>':'')
+      + '<span style="font-size:14px;font-weight:500;">' + esc(ex.name) + (ex.group?'<span class="ss-badge">SS ' + ex.group + '</span>':'')
         + (ex.nextAction ? '<span class="na-badge na-' + ex.nextAction + '">' + NEXT_ACTION_LABEL[ex.nextAction] + '</span>' : '')
         + (ex.collapsed ? '<span style="font-size:11px;color:var(--faint);font-weight:400;margin-left:6px;">' + jtLoggedSummary(ei) + '</span>' : '')
       + '</span>'
@@ -7059,7 +7161,9 @@ function loadExAliases(){ return db.aliases || {}; }
 
 async function fetchExAliases(){
   if(!currentUser) return {};
+  const gen = _authGen;
   const {data, error} = await sb.from('exercise_aliases').select('alias,exercise_name').eq('user_id', currentUser.id);
+  if(gen !== _authGen) return;            // signed out while waiting: don't write into the next user
   if(error){ console.warn('alias load failed', error); return db.aliases || {}; }
   const map = {};
   (data||[]).forEach(r => { map[r.alias] = r.exercise_name; });
@@ -7150,7 +7254,7 @@ function jtRenderUnmatched(){
   if(!_jtPendingUnmatched.length){ el.innerHTML = ''; return; }
 
   const opts = activeLibrary().slice().sort((a,b)=>a.name.localeCompare(b.name))
-    .map(e => '<option value="' + e.name.replace(/"/g,'&quot;') + '">' + e.name + '</option>').join('');
+    .map(e => '<option value="' + e.name.replace(/"/g,'&quot;') + '">'+esc(e.name)+'</option>').join('');
 
   el.innerHTML = '<div class="banner banner-amber" style="margin-top:10px;">'
     + '<b>Couldn\'t match ' + _jtPendingUnmatched.length + '</b> — pick the right exercise and I\'ll remember it next time.</div>'
@@ -7343,7 +7447,7 @@ function renderGoals() {
   const linkPick = document.getElementById('goals-link-ex');
   if(linkPick) {
     linkPick.innerHTML = '<option value="">None — track manually</option>'
-      + db.library.map(e => '<option value="' + e.name.replace(/"/g,'&quot;') + '">' + e.name + '</option>').join('');
+      + db.library.map(e => '<option value="' + e.name.replace(/"/g,'&quot;') + '">'+esc(e.name)+'</option>').join('');
   }
   renderGoalsPageList();
 }
@@ -7378,7 +7482,7 @@ function renderGoalsPageList() {
     return '<div class="card" style="margin-bottom:10px;">'
       + '<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px;">'
       + '<div style="flex:1;">'
-      + '<div style="font-size:14px;font-weight:500;margin-bottom:2px;">' + g.text + '</div>'
+      + '<div style="font-size:14px;font-weight:500;margin-bottom:2px;">'+esc(g.text)+'</div>'
       + (g.linked_exercise ? '<div style="font-size:11px;color:var(--muted);">Auto-tracking: ' + g.linked_exercise + (autoKg ? ' · best: ' + autoKg + 'kg' : '') + '</div>' : '')
       + '</div>'
       + '<button data-gid="' + g.id + '" onclick="deleteGoalFromPage(this.dataset.gid)" style="background:none;border:none;cursor:pointer;color:var(--faint);font-size:16px;">\u00d7</button>'
@@ -7675,7 +7779,7 @@ function renderCardioBlocks(allTypesOverride) {
       + '<div><div style="font-size:10px;color:#0F6E56;margin-bottom:3px;">Distance (km)</div>'
       + '<input type="number" min="0" step="0.1" value="' + (b.distance||'') + '" placeholder="optional" data-bi="' + bi + '" oninput="updateCardioBlock(parseInt(this.dataset.bi),\'distance\',this.value)" style="width:100%;padding:6px 8px;font-size:13px;border:0.5px solid #9FE1CB;border-radius:var(--border-radius-md);background:white;font-family:var(--font-sans);"></div>'
       + '</div>'
-      + '<input type="text" value="' + (b.note||'') + '" placeholder="Note (e.g. intervals, steady state...)" data-bi="' + bi + '" oninput="updateCardioBlock(parseInt(this.dataset.bi),\'note\',this.value)" style="width:100%;padding:6px 8px;font-size:12px;border:0.5px solid #9FE1CB;border-radius:var(--border-radius-md);background:white;font-family:var(--font-sans);">'
+      + '<input type="text" value="'+esc((b.note||''))+'" placeholder="Note (e.g. intervals, steady state...)" data-bi="' + bi + '" oninput="updateCardioBlock(parseInt(this.dataset.bi),\'note\',this.value)" style="width:100%;padding:6px 8px;font-size:12px;border:0.5px solid #9FE1CB;border-radius:var(--border-radius-md);background:white;font-family:var(--font-sans);">'
       + '</div>';
   }).join('');
 }
@@ -7772,7 +7876,7 @@ function populateMergeSelects(){
   const src=document.getElementById('merge-src'), dst=document.getElementById('merge-dst'), mod=document.getElementById('merge-mod');
   if(!src||!dst) return;
   const opts=db.library.slice().sort((a,b)=>a.name.localeCompare(b.name))
-    .map(e=>'<option value="'+e.name.replace(/"/g,'&quot;')+'">'+e.name+(e.archived?' (archived)':'')+'</option>').join('');
+    .map(e=>'<option value="'+e.name.replace(/"/g,'&quot;')+'">'+esc(e.name)+(e.archived?' (archived)':'')+'</option>').join('');
   const keepSrc=src.value, keepDst=dst.value;
   src.innerHTML='<option value="">Choose exercise\u2026</option>'+opts;
   dst.innerHTML='<option value="">Choose exercise\u2026</option>'+opts;
@@ -7909,7 +8013,7 @@ function renderLibraryReview(useCount,lastUsed){
       const days=lastUsed[e.name]?Math.floor((now-lastUsed[e.name])/864e5):null;
       return '<label style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:0.5px solid var(--border);font-size:13px;cursor:pointer;">'
         +'<input type="checkbox" class="lib-review-cb" data-id="'+e.id+'" style="width:16px;height:16px;flex-shrink:0;">'
-        +'<span style="flex:1;min-width:0;">'+e.name+'</span>'
+        +'<span style="flex:1;min-width:0;">'+esc(e.name)+'</span>'
         +'<span style="font-size:11px;color:var(--faint);white-space:nowrap;">'+(days!=null?days+'d ago':'never used')+'</span>'
         +'</label>';
     }).join('');
@@ -7953,12 +8057,12 @@ async function renderLibrary(){
   let html2='';
   Object.keys(groups).sort().forEach(muscle=>{
     html2+='<div style="margin-bottom:14px;">'
-      +'<div style="font-size:11px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:8px;">'+muscle+'</div>';
+      +'<div style="font-size:11px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:8px;">'+esc(muscle)+'</div>';
     groups[muscle].forEach(e=>{
       const used = libUseCount[e.name] || 0;
       html2+='<div id="lib-row-'+e.id+'" style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:0.5px solid var(--border);'+(e.archived?'opacity:0.45;':'')+'">'
         +'<div style="flex:1;min-width:0;">'
-        +'<div style="font-size:13px;font-weight:500;">'+e.name
+        +'<div style="font-size:13px;font-weight:500;">'+esc(e.name)
           +(e.archived?'<span class="ss-badge" style="color:var(--muted);background:var(--bg);">archived</span>':'')+'</div>'
         +'<div style="font-size:11px;color:var(--muted);">'+e.muscle
           +' · '+(used?('used '+used+'\u00d7'):'never used')+'</div>'
@@ -7978,7 +8082,7 @@ async function renderLibrary(){
       +'<span id="arch-caret">\u25b8</span> Archived (' + archived.length + ')</div>'
       +'<div id="lib-archived" style="display:none;">'
       + archived.map(e=>'<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:0.5px solid var(--border);opacity:0.6;">'
-        +'<div style="flex:1;min-width:0;"><div style="font-size:13px;font-weight:500;">'+e.name+'</div>'
+        +'<div style="flex:1;min-width:0;"><div style="font-size:13px;font-weight:500;">'+esc(e.name)+'</div>'
         +'<div style="font-size:11px;color:var(--muted);">'+e.muscle+' \u00b7 '+((libUseCount[e.name]||0)?('used '+libUseCount[e.name]+'\u00d7'):'never used')+'</div></div>'
         +'<button onclick="toggleArchiveExercise('+e.id+')" style="background:none;border:0.5px solid var(--border-md);border-radius:var(--radius-sm);padding:4px 10px;font-size:12px;color:var(--text);cursor:pointer;">Restore</button>'
         +'</div>').join('')
@@ -8000,9 +8104,9 @@ function editExercise(id){
   const row=document.getElementById('lib-row-'+id); if(!row) return;
   row.innerHTML='<div style="flex:1;display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:4px 0;">'
     +'<div class="form-group"><label class="form-label">Exercise name</label>'
-    +'<input type="text" id="edit-name-'+id+'" value="'+ex.name+'"></div>'
+    +'<input type="text" id="edit-name-'+id+'" value="'+esc(ex.name)+'"></div>'
     +'<div class="form-group"><label class="form-label">Muscle groups (comma-separated)</label>'
-    +'<input type="text" id="edit-muscle-'+id+'" value="'+ex.muscle+'" placeholder="e.g. Chest, Shoulders"></div>'
+    +'<input type="text" id="edit-muscle-'+id+'" value="'+esc(ex.muscle)+'" placeholder="e.g. Chest, Shoulders"></div>'
     +'</div>'
     +'<div style="display:flex;gap:6px;align-items:center;padding-left:8px;">'
     +'<button onclick="saveExercise('+id+')" class="btn btn-dark btn-sm">Save</button>'
@@ -8041,7 +8145,7 @@ function renderSettings(){
   renderGoalsInSettings();updateRestDisplay();forceRefreshInfo();
 }
 function renderGoalsInSettings(){
-  document.getElementById('goals-list').innerHTML=db.goals.length?db.goals.map(g=>`<div class="goal-row"><div><div style="font-size:13px;font-weight:500;">${g.text}</div><div style="font-size:11px;color:var(--muted);">${g.current_best||'No baseline'}</div></div><div style="display:flex;align-items:center;gap:8px;"><div class="prog-bar" style="width:70px;"><div class="prog-fill" style="width:${g.pct||0}%;background:var(--green);"></div></div><span style="font-size:12px;color:var(--green);font-weight:500;">${g.pct||0}%</span><button onclick="deleteGoal(${g.id})" style="background:none;border:none;cursor:pointer;color:var(--faint);font-size:15px;">×</button></div></div>`).join(''):'<p style="color:var(--muted);font-size:13px;">No goals set yet.</p>';
+  document.getElementById('goals-list').innerHTML=db.goals.length?db.goals.map(g=>`<div class="goal-row"><div><div style="font-size:13px;font-weight:500;">${esc(g.text)}</div><div style="font-size:11px;color:var(--muted);">${esc(g.current_best||'No baseline')}</div></div><div style="display:flex;align-items:center;gap:8px;"><div class="prog-bar" style="width:70px;"><div class="prog-fill" style="width:${g.pct||0}%;background:var(--green);"></div></div><span style="font-size:12px;color:var(--green);font-weight:500;">${g.pct||0}%</span><button onclick="deleteGoal(${g.id})" style="background:none;border:none;cursor:pointer;color:var(--faint);font-size:15px;">×</button></div></div>`).join(''):'<p style="color:var(--muted);font-size:13px;">No goals set yet.</p>';
 }
 async function addGoal(){
   const text=document.getElementById('goal-input').value.trim();if(!text)return;
