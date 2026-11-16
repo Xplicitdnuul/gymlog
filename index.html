@@ -375,6 +375,15 @@ html.mobile-layout .hs-chart { height:300px; }
 .nav-group-label { font-size:10px; font-weight:500; color:var(--faint); text-transform:uppercase; letter-spacing:0.08em; padding:2px 0 4px 12px; }
 
 .cardio-block-item{border:0.5px solid #9FE1CB;border-radius:var(--border-radius-lg);padding:1rem 1.25rem;background:#E1F5EE;margin-bottom:10px;}
+
+/* Done: a finished exercise is tinted green with a tick; the control sits in the header */
+.ex-block.ex-done { background: rgba(46,125,50,0.07); border-color: rgba(46,125,50,0.35); }
+.done-check { color: #2E7D32; font-weight: 700; }
+.done-btn { font-size: 11px; cursor: pointer; border: 0.5px solid var(--border-md); border-radius: 4px; padding: 1px 7px; color: var(--muted); white-space: nowrap; }
+.done-btn.on { background: #2E7D32; border-color: #2E7D32; color: #fff; }
+
+/* An exercise with no equipment yet: nudge, don't block */
+select.needs-eq { border-color: #E0A100; box-shadow: 0 0 0 1px rgba(224,161,0,0.35); }
 </style>
 </head>
 <body>
@@ -417,7 +426,6 @@ html.mobile-layout .hs-chart { height:300px; }
     <nav>
       <div class="nav-group-label">Train</div>
       <div class="nav-item" id="nav-log" data-page="log" onclick="showPage('log')"><span class="nav-icon">✦</span> Log workout<span id="nav-log-badge" style="display:none;margin-left:auto;width:8px;height:8px;border-radius:50%;background:#2E7D32;flex-shrink:0;"></span></div>
-      <div class="nav-item" data-page="justtrain" onclick="showPage('justtrain')"><span class="nav-icon">⚡</span> Just Train</div>
       <div class="nav-item" data-page="planner" onclick="showPage('planner')"><span class="nav-icon">⊕</span> Generate Workout</div>
       <div class="nav-group-label" style="margin-top:10px;">Plan</div>
       <div class="nav-item" data-page="builder" onclick="showPage('builder')"><span class="nav-icon">✎</span> Build workout</div>
@@ -527,8 +535,45 @@ html.mobile-layout .hs-chart { height:300px; }
 
     <div id="page-log" class="page">
       <div class="page-title">Log workout</div>
-      <div class="page-sub">Record your sets, reps, and weights</div>
+      <div class="page-sub">Load a workout, or add exercises as you go</div>
       <div id="log-content"></div>
+
+      <!-- One place to add work: picker, cardio and dictation. Adding anything with no workout
+           open starts an empty one, which is what Just Train used to be. -->
+      <div id="log-add-section" class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+          <div class="card-title" style="margin-bottom:0;">Add exercise</div>
+          <button class="btn btn-sm" style="border-color:#9FE1CB;color:#0F6E56;background:#E1F5EE;" onclick="logAddCardio()">+ Add cardio</button>
+        </div>
+        <div class="form-group" style="margin-bottom:8px;">
+          <label class="form-label">Muscle group</label>
+          <select id="log-muscle-pick" onchange="logPopulateExercisePick()"><option value="__all">All exercises</option></select>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:end;margin-bottom:12px;">
+          <div class="form-group" style="margin-bottom:0;">
+            <label class="form-label">Exercise</label>
+            <select id="log-ex-pick"><option value="">Select from library...</option></select>
+          </div>
+          <div class="form-group" style="margin-bottom:0;">
+            <label class="form-label">Sets</label>
+            <select id="log-sets-pick" style="width:80px;">
+              <option value="1">1</option><option value="2">2</option><option value="3" selected>3</option><option value="4">4</option><option value="5">5</option>
+            </select>
+          </div>
+          <button class="btn btn-dark btn-sm" onclick="logAddFromPicker()" style="height:36px;">Add</button>
+        </div>
+        <div style="border-top:0.5px solid var(--border);padding-top:12px;">
+          <div style="font-size:13px;font-weight:500;margin-bottom:4px;">Describe your workout</div>
+          <div style="font-size:11px;color:var(--muted);margin-bottom:8px;">Tap the field, then use the microphone key on your keyboard to dictate. e.g. "Bench press three sets of eight at sixty kilos".</div>
+          <textarea id="log-voice-text" rows="3" placeholder="Speak or type what you did..." style="font-size:16px;font-family:var(--font);width:100%;"></textarea>
+          <div style="display:flex;gap:8px;align-items:center;margin-top:8px;">
+            <button class="btn btn-dark btn-sm" onclick="logParseVoice()" id="log-voice-btn">Convert to exercises</button>
+            <span id="log-voice-status" style="font-size:11px;color:var(--muted);"></span>
+          </div>
+          <div id="log-unmatched"></div>
+        </div>
+      </div>
+      <div id="log-finish"></div>
 
       <div class="card" style="margin-top:14px;">
         <div class="card-title">Saved workouts</div>
@@ -820,6 +865,12 @@ html.mobile-layout .hs-chart { height:300px; }
         </div>
       </div>
       <div class="card">
+        <div class="card-title">Missing equipment</div>
+        <p style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.5;">Past entries logged without equipment. Filling it in lets prefill, PRs and progress compare like with like. Only the equipment is set &mdash; names and everything else stay as logged.</p>
+        <div id="eqfix-list"></div>
+        <div id="eqfix-status" style="font-size:12px;color:var(--muted);margin-top:8px;"></div>
+      </div>
+      <div class="card">
         <div class="card-title">Merge exercises</div>
         <p style="font-size:13px;color:var(--muted);margin-bottom:10px;">Fold a redundant variant into its base movement — e.g. <em>One-legged Leg Press</em> into <em>Leg Press</em> tagged Unilateral. All past sessions and saved workouts are rewritten, so history is preserved.</p>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
@@ -842,57 +893,6 @@ html.mobile-layout .hs-chart { height:300px; }
       </div>
 
       <div class="card"><div class="card-title">Library — <span id="lib-count">0</span> exercises</div><div id="lib-display" class="lib-grid"></div></div>
-    </div>
-
-    <div id="page-justtrain" class="page">
-      <div class="page-title">Just Train</div>
-      <div class="page-sub">Start a freestyle session — add exercises as you go</div>
-
-      <div id="jt-add-section" class="card">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
-          <div class="card-title" style="margin-bottom:0;">Add exercise</div>
-          <button class="btn btn-sm" style="border-color:#9FE1CB;color:#0F6E56;background:#E1F5EE;" onclick="jtAddCardioBlock()">+ Add cardio</button>
-        </div>
-        <div class="card" style="margin-bottom:12px;">
-          <div style="font-size:13px;font-weight:500;margin-bottom:4px;">Describe your workout</div>
-          <div style="font-size:11px;color:var(--muted);margin-bottom:8px;">Tap the field, then use the microphone key on your keyboard to dictate. e.g. "Bench press three sets of eight at sixty kilos, then unilateral dumbbell row 20 kilos twelve reps each side."</div>
-          <textarea id="jt-voice-text" rows="3" placeholder="Speak or type what you did..." style="font-size:16px;font-family:var(--font);width:100%;"></textarea>
-          <div style="display:flex;gap:8px;align-items:center;margin-top:8px;">
-            <button class="btn btn-dark btn-sm" onclick="jtParseVoice()" id="jt-voice-btn">Convert to exercises</button>
-            <span id="jt-voice-status" style="font-size:11px;color:var(--muted);"></span>
-          </div>
-        </div>
-        <div class="form-group" style="margin-bottom:8px;">
-          <label class="form-label">Muscle group</label>
-          <select id="jt-muscle-pick" onchange="jtPopulateExercisePick()"><option value="__all">All exercises</option></select>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:end;">
-          <div class="form-group">
-            <label class="form-label">Exercise</label>
-            <select id="jt-ex-pick"><option value="">Select from library...</option></select>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Sets</label>
-            <select id="jt-sets-pick" style="width:80px;">
-              <option value="1">1</option>
-              <option value="2">2</option>
-              <option value="3" selected>3</option>
-              <option value="4">4</option>
-              <option value="5">5</option>
-            </select>
-          </div>
-          <button class="btn btn-dark btn-sm" onclick="jtAddExercise()" style="height:36px;">Add</button>
-        </div>
-      </div>
-
-      <div id="jt-session-content"></div>
-
-      <div id="jt-actions" style="display:none;">
-        <div style="display:flex;gap:10px;margin-top:4px;">
-          <button class="btn btn-dark" data-save-session onclick="jtSaveSession()">Save session</button>
-          <button class="btn" onclick="jtDiscardSession()">Discard</button>
-        </div>
-      </div>
     </div>
 
     <div id="page-history" class="page">
@@ -992,8 +992,8 @@ const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
 // Bumped with every shipped batch, so the build you're running is visible under
 // Goals & profile → App version (Safari can keep serving a cached copy).
-const APP_VERSION = '1.7.7';
-const BUILD_STAMP = '2026-10-26 batch 7';
+const APP_VERSION = '1.11.0';
+const BUILD_STAMP = '2026-11-15 equipment';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -1230,11 +1230,11 @@ function warmupDrafts(ex){
   }
   return ex.wuDrafts;
 }
-// Build the warm-up rows for one exercise. prefix is 'ex-' (Log) or 'jt-' (Just Train).
+// Build the warm-up rows for one exercise. `prefix` is the Log screen's id prefix ('ex-').
 function warmupRowsHtml(prefix, ei, ex, wStep){
   const rows = warmupDrafts(ex);
-  const save = prefix==='ex-' ? 'autosaveDraft()' : 'jtSaveDraft()';
-  const stepArg = prefix==='ex-' ? '' : ',false';
+  const save = 'autosaveDraft()';
+  const stepArg = '';
   let html = '';
   rows.forEach((w, wi) => {
     const kgId = prefix+ei+'-wu-kg-'+wi, repsId = prefix+ei+'-wu-reps-'+wi;
@@ -1255,20 +1255,17 @@ function warmupRowsHtml(prefix, ei, ex, wStep){
   return html;
 }
 function warmupExerciseAt(prefix, ei){
-  if(prefix==='ex-') return db.activeSession ? db.activeSession.exercises[ei] : null;
-  return (typeof jtExercises!=='undefined') ? jtExercises[ei] : null;
+  return db.activeSession ? db.activeSession.exercises[ei] : null;
 }
 function captureThen(prefix){
-  if(prefix==='ex-'){ if(typeof autosaveDraft==='function') autosaveDraft(); renderLog(); }
-  else { if(typeof jtCaptureInputs==='function') jtCaptureInputs(); if(typeof jtSaveDraft==='function') jtSaveDraft(); jtRenderSession(); }
+  autosaveDraft(); renderLog();
 }
 function addWarmupRow(prefix, ei){
   const ex = warmupExerciseAt(prefix, ei);
   if(!ex) return;
   const rows = warmupDrafts(ex);
   if(rows.length >= MAX_WARMUP_SETS) return;
-  if(prefix==='ex-'){ if(typeof autosaveDraft==='function') autosaveDraft(); }
-  else if(typeof jtCaptureInputs==='function') jtCaptureInputs();
+  autosaveDraft();
   warmupDrafts(ex).push({kg:'', reps:''});
   ex.wuHidden = false;
   captureThen(prefix);
@@ -1276,8 +1273,7 @@ function addWarmupRow(prefix, ei){
 function removeWarmupRow(prefix, ei, wi){
   const ex = warmupExerciseAt(prefix, ei);
   if(!ex) return;
-  if(prefix==='ex-'){ if(typeof autosaveDraft==='function') autosaveDraft(); }
-  else if(typeof jtCaptureInputs==='function') jtCaptureInputs();
+  autosaveDraft();
   const rows = warmupDrafts(ex);
   rows.splice(wi, 1);
   ex.wuHidden = rows.length === 0;
@@ -1311,7 +1307,7 @@ function assertCurrent(gen){ if(gen !== _authGen) throw new StaleLoad('signed ou
 // Every container the app fills with user content. Cleared on sign-out so nothing drawn for one
 // account is visible to the next (a previous user's coach review stayed on screen). The test
 // suite re-scans the page markup and fails if a new container isn't listed here.
-const USER_CONTENT_IDS = ['auth-error','auth-notice','overlay','nav-log-badge','overview-greeting','overview-active-prog','overview-quickstart','overview-metrics','overview-signals','overview-skipped','overview-last-session','overview-muscles','overview-goals','recent-sessions','planner-date','planner-weights','planner-cardio','muscle-settings-list','planner-estimate','gen-status','planner-result','log-content','saved-workouts-list','progress-metrics','cal-grid','cal-legend','muscle-heatmap','progress-goals','hardsets-content','stalling-content','volume-content','strength-ex-filter','cardio-stats','compare-content','pr-content','ai-report-age','ai-report-status','ai-report-content','timeoff-list','body-history','builder-ex-list','active-programme-section','programme-list','prog-gen-status','prog-day-list','suggestion-panel','sug-status','merge-status','lib-review','lib-display','jt-voice-status','jt-session-content','history-content','goals-page-list','goals-list','backup-status'];
+const USER_CONTENT_IDS = ['eqfix-list','eqfix-status','auth-error','auth-notice','overlay','nav-log-badge','overview-greeting','overview-active-prog','overview-quickstart','overview-metrics','overview-signals','overview-skipped','overview-last-session','overview-muscles','overview-goals','recent-sessions','planner-date','planner-weights','planner-cardio','muscle-settings-list','planner-estimate','gen-status','planner-result','log-content','saved-workouts-list','progress-metrics','cal-grid','cal-legend','muscle-heatmap','progress-goals','hardsets-content','stalling-content','volume-content','strength-ex-filter','cardio-stats','compare-content','pr-content','ai-report-age','ai-report-status','ai-report-content','timeoff-list','body-history','builder-ex-list','active-programme-section','programme-list','prog-gen-status','prog-day-list','suggestion-panel','sug-status','merge-status','lib-review','lib-display','history-content','goals-page-list','goals-list','backup-status','log-unmatched','log-voice-status','log-finish'];
 
 function clearUserScreens(){
   USER_CONTENT_IDS.forEach(id => { const el = document.getElementById(id); if(el) el.innerHTML = ''; });
@@ -1334,7 +1330,7 @@ function resetUserState(){
   db = freshDb();
   _trackedCache = null;
   programmes = []; activeProgrammeId = null; progDays = [];
-  jtExercises = []; _jtPendingUnmatched = []; cardioBlocks = [];
+  _pendingUnmatched = []; cardioBlocks = [];
   builderExercises = []; editingWorkoutExercises = [];
   strengthExercises = []; _strengthExItems = [];
   exerciseSuggestions = []; addedSuggestions = new Set();
@@ -1559,13 +1555,18 @@ async function loadUserDataInner(gen) {
     // Clean up drafts older than 7 days automatically
     const draftAge=(Date.now()-new Date(d.created_at||d.date).getTime())/(1000*60*60*24);
     if(draftAge>7){
-      await sb.from('sessions').delete().eq('id',d.id);
+      const rDel = await sb.from('sessions').delete().eq('id',d.id);
+      if(rDel && rDel.error) console.warn('old draft cleanup failed', rDel.error);   // harmless: retried next load
     } else {
     // Never replace a session that's in progress on this screen: the server draft can be up
     // to a second behind what was typed, so restoring it mid-workout would undo recent edits.
     if(db.activeSession && activeSessionHasWork()) { /* keep the live session */ } else
     db.activeSession={
-      sessionTitle:d.title||'Session',
+      // A planned workout always has a title; a draft without one was started empty. Losing
+      // that on reload saved it as "Session" instead of "Freestyle — ...".
+      freestyle: !d.title,
+      startedAt: d.started_at || null,
+      sessionTitle:d.title||'',
       muscles:safeJSON(d.muscles,[]),
       exercises:safeJSON(d.exercises,[]),
       sessionNote:d.note||'',
@@ -1670,7 +1671,6 @@ function setCredit(ex){
   return out;
 }
 
-function parseMuscleTagsAnchor(){}
 
 function trackedMuscles(){
   if(_trackedCache) return _trackedCache;
@@ -1713,7 +1713,22 @@ const MUSCLES_C=['Spinning','Running','Incline walking'];
 // strict extraction with many hard rules is where Haiku measurably fails.
 const AI_MODEL='claude-haiku-4-5-20251001';
 const AI_MODEL_EXTRACTION='claude-sonnet-4-6';
-const EQUIPMENT=['Bodyweight','Barbell','Dumbbell','Kettlebell','Machine','Cable','Smith machine','Resistance band','Suspension/TRX','Other'];
+const EQUIPMENT=['Bodyweight','Barbell','Trap Bar','Dumbbell','Kettlebell','Machine','Cable','Smith machine','Resistance band','Suspension/TRX','Other'];
+
+// Equipment a name gives away. Order matters: "Smith machine" before "machine", trap/hex bar
+// before anything barbell-like.
+const EQUIPMENT_WORDS = [
+  [/\b(trap|hex)[\s-]?bar\b/i, 'Trap Bar'], [/\bsmith\b/i, 'Smith machine'], [/\bbarbell\b/i, 'Barbell'],
+  [/\bdumbbells?\b/i, 'Dumbbell'], [/\bkettlebells?\b/i, 'Kettlebell'], [/\bcable\b/i, 'Cable'],
+  [/\bmachine\b/i, 'Machine'], [/\b(trx|suspension)\b/i, 'Suspension/TRX'], [/\b(resistance )?bands?\b|\bbanded\b/i, 'Resistance band']
+];
+function equipmentFromName(name){
+  for(const [re, eq] of EQUIPMENT_WORDS) if(re.test(name||'')) return eq;
+  return '';
+}
+// Equipment for an exercise entering a session: what you last used, else what the name says.
+// Every way into a session uses this, so nothing starts blank that could be known.
+function defaultEquipmentFor(name){ return lastEquipmentFor(name) || equipmentFromName(name) || ''; }
 // How the exercise was performed. This is part of the history-matching key alongside
 // equipment: a unilateral 20kg press is not comparable to a bilateral 40kg press, so
 // mixing them would create false PRs and a misleading e1RM curve.
@@ -1865,6 +1880,8 @@ function updateProfileUI() {
 // ── NAV ───────────────────────────────────────────────────────────
 function goToPlanner(){showPage("planner");}
 function showPage(id) {
+  // Just Train is now part of the Log screen; old links and buttons land there
+  if(id === 'justtrain') id = 'log';
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   document.getElementById('page-'+id).classList.add('active');
@@ -1874,7 +1891,7 @@ function showPage(id) {
   const navPage = (id === 'goals') ? 'settings' : id;
   const navEl = document.querySelector('.nav-item[data-page="' + navPage + '"]');
   if(navEl) navEl.classList.add('active');
-  const renders={overview:renderOverview,justtrain:renderJustTrain,planner:renderPlanner,log:renderLog,progress:renderProgress,body:renderBody,builder:renderBuilder,programme:renderProgramme,library:renderLibrary,history:renderHistory,settings:renderSettings};
+  const renders={overview:renderOverview,planner:renderPlanner,log:renderLog,progress:renderProgress,body:renderBody,builder:renderBuilder,programme:renderProgramme,library:renderLibrary,history:renderHistory,settings:renderSettings};
   if(document.documentElement.classList.contains('mobile-layout')) closeSidebar();
   // Start every page at the top — otherwise navigating from a long scrolled page (e.g.
   // after saving a workout) drops you into the middle of the new one.
@@ -2106,14 +2123,14 @@ async function renderOverview() {
     if(prog) {
       qsEl.innerHTML = '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px;">'
         + '<span class="qs-label" style="font-size:12px;color:var(--muted);">Doing your own thing today?</span>'
-        + '<button class="btn btn-sm" onclick="showPage(\'justtrain\')">Just Train</button>'
+        + '<button class="btn btn-sm" onclick="showPage(\'log\')">Start empty</button>'
         + '<button class="btn btn-sm" onclick="showPage(\'planner\')">Generate Workout</button>'
         + '</div>';
     } else {
       qsEl.innerHTML = '<div class="card" style="margin-bottom:14px;"><div class="card-title">Start a workout</div>'
         + '<div style="display:flex;gap:8px;flex-wrap:wrap;">'
         + '<button class="btn btn-dark btn-sm" onclick="showPage(\'planner\')">Generate Workout</button>'
-        + '<button class="btn btn-sm" onclick="showPage(\'justtrain\')">Just Train</button>'
+        + '<button class="btn btn-sm" onclick="showPage(\'log\')">Start empty</button>'
         + '<button class="btn btn-sm" onclick="showPage(\'log\')">Saved workouts</button>'
         + '</div></div>';
     }
@@ -2532,10 +2549,11 @@ function activeSessionHasWork(){
   const a = db.activeSession;
   if(!a) return false;
   return (a.exercises||[]).some(e => e && (
+    e.done ||
     (e.draftSets||[]).some(d => d && (d.kg || d.reps)) ||
     (e.loggedSets && e.loggedSets.sets && e.loggedSets.sets.length) ||
     (e.wuDrafts||[]).some(d => d && (d.kg || d.reps))
-  ));
+  )) || (cardioBlocks||[]).some(b => b && b.duration);
 }
 // True if it's fine to replace the active session (nothing entered, or the user agreed).
 // On agreement the old session's server draft is removed so it can't reappear on next load.
@@ -2569,6 +2587,7 @@ function loadSavedWorkout(i){
     } else {
       const last = lastSetupFor(ex.name);
       if(last){ ex.equipment = last.equipment; if(!ex.modifier) ex.modifier = last.modifier; }
+      else ex.equipment = equipmentFromName(ex.name);
     }
   });
   db.activeSession = {
@@ -2829,15 +2848,64 @@ async function generateSession(auto) {
   btn.disabled=false; if(autoBtn) autoBtn.disabled=false;
 }
 
+// ── SMART SWAP ────────────────────────────────────────────────────
+// One swap list for every screen. Substitutes come first: exercises with the same PRIMARY
+// muscle, then the rest of the same body area, then everything else A–Z. Matching on the
+// primary is deliberate — matching any shared tag would rank Overhead Press as a bench
+// substitute just because both list triceps. Within the top two groups, the exercises you've
+// actually done most come first: when the bench is taken, you usually reach for something familiar.
+const SWAP_AREAS = [
+  {label:'Chest',     muscles:['Chest']},
+  {label:'Shoulders', muscles:['Shoulders','Front delts','Side delts','Rear delts','Rotator cuff']},
+  {label:'Back',      muscles:['Back','Lats','Mid-back','Traps','Erectors']},
+  {label:'Biceps',    muscles:['Biceps','Forearms']},
+  {label:'Triceps',   muscles:['Triceps']},
+  {label:'Legs',      muscles:['Legs','Quads','Glutes','Hamstrings','Adductors','Abductors','Calves']},
+  {label:'Core',      muscles:['Core','Obliques']},
+  {label:'Cardio',    muscles:['Cardio']}
+];
+function swapAreaOf(muscle){
+  const a = SWAP_AREAS.find(x => x.muscles.includes(muscle));
+  return a ? a.label : muscle;                    // a muscle outside the map is its own area
+}
+// How many completed sessions each exercise appears in (with real sets).
+function exerciseUseCounts(){
+  const n = {};
+  (db.sessions||[]).forEach(s => { if(s.is_draft) return;
+    (s.exercises||[]).forEach(ex => { if(ex && (ex.isCardio ? cardioMinutes(ex) > 0 : workingSets(ex).length)) n[ex.name] = (n[ex.name]||0) + 1; }); });
+  return n;
+}
+// <option>s for swapping `ex`. `uses` is exerciseUseCounts(), computed once per render.
+function swapOptionsHtml(ex, uses){
+  uses = uses || exerciseUseCounts();
+  const primaries = entry => parseMuscleTags(entry.muscle).primary;
+  const libSelf = (db.library||[]).find(l => l.name === ex.name);
+  const mine = primaries(libSelf || ex);
+  const myAreas = mine.map(swapAreaOf);
+  const same = [], area = [], rest = [];
+  activeLibrary().forEach(l => {
+    if(l.name === ex.name) return;
+    const p = primaries(l);
+    if(mine.length && p.some(m => mine.includes(m))) same.push(l);
+    else if(mine.length && p.some(m => myAreas.includes(swapAreaOf(m)))) area.push(l);
+    else rest.push(l);
+  });
+  const byUse = (a,b) => (uses[b.name]||0) - (uses[a.name]||0) || a.name.localeCompare(b.name);
+  same.sort(byUse); area.sort(byUse); rest.sort((a,b) => a.name.localeCompare(b.name));
+  const opt = l => '<option value="' + esc(l.name) + '">' + esc(l.name) + '</option>';
+  const group = (label, list) => list.length ? '<optgroup label="' + esc(label) + '">' + list.map(opt).join('') + '</optgroup>' : '';
+  return '<option value="">Swap exercise\u2026</option>'
+    + group('Same muscle \u2014 ' + mine.join(', '), same)
+    + group('Same area \u2014 ' + [...new Set(myAreas)].join(', '), area)
+    + group(same.length || area.length ? 'Everything else' : 'All exercises', rest);
+}
+
 function renderPlannerResult(s) {
+  const plannerUses=exerciseUseCounts();
   const exRows=s.exercises.map((ex,i)=>{
-    const swapOptions=activeLibrary().filter(l=>l.muscle===ex.muscle&&l.name!==ex.name);
-    const swapHtml=swapOptions.length
-      ?'<select onchange="swapExercise('+i+',this.value)" style="font-size:11px;padding:3px 6px;border:0.5px solid var(--border-md);border-radius:var(--radius-sm);background:var(--bg);color:var(--muted);margin-top:5px;width:auto;">'
-        +'<option value="">Swap exercise...</option>'
-        +swapOptions.map(o=>'<option value="'+esc(o.name)+'">'+esc(o.name)+'</option>').join('')
-        +'</select>'
-      :'';
+    const swapHtml='<select onchange="swapExercise('+i+',this.value)" style="font-size:11px;padding:3px 6px;border:0.5px solid var(--border-md);border-radius:var(--radius-sm);background:var(--bg);color:var(--muted);margin-top:5px;width:auto;max-width:100%;">'
+        +swapOptionsHtml(ex, plannerUses)
+        +'</select>';
     return '<div style="padding:10px 0;border-bottom:0.5px solid var(--border);" id="ex-result-'+i+'">'
       +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">'
       +'<span style="font-size:14px;font-weight:500;">'+esc(ex.name)+'</span>'
@@ -2881,7 +2949,14 @@ async function saveForLater(){
   }
 }
 
-function startSession(){if(!db.pendingSession)return;if(!confirmReplaceActiveSession())return;db.activeSession=JSON.parse(JSON.stringify(db.pendingSession));showPage('log');}
+function startSession(){
+  if(!db.pendingSession) return;
+  if(!confirmReplaceActiveSession()) return;
+  db.activeSession = JSON.parse(JSON.stringify(db.pendingSession));
+  // Planned sessions come from the AI without equipment; start each on what you'd use
+  db.activeSession.exercises.forEach(ex => { if(ex && !ex.isCardio && !ex.equipment) ex.equipment = defaultEquipmentFor(ex.name); });
+  showPage('log');
+}
 
 const FORM_CUES = {
   "bench press": "Retract your shoulder blades and keep them pinned to the bench. Bar path should touch lower chest. Drive feet into the floor.",
@@ -2981,25 +3056,28 @@ function nearestVariantBanner(v){
     + '. Enter numbers for this setup.</div>';
 }
 
-function getPrevDataOtherEquipment(name, equipment){
-  const eq=equipment||'';
-  for(let i=db.sessions.length-1;i>=0;i--){
-    const s=db.sessions[i];
-    if(!s.exercises) continue;
-    const ex=s.exercises.find(e=>e.name===name&&(e.equipment||'')!==eq&&e.loggedSets&&e.loggedSets.sets&&e.loggedSets.sets.length);
-    if(ex){
-      const sets=ex.loggedSets.sets.filter(st=>!st.warmup);
-      if(sets.length) return {equipment:ex.equipment||'no equipment set', sets};
-    }
-  }
-  return null;
-}
 
 function renderLog() {
   const el=document.getElementById('log-content');
+  const fin=document.getElementById('log-finish');
+  if(!db.activeSession) convertLegacyJtDraft();
+  logPopulateMusclePick();
+  logRenderUnmatched();
   if(!db.activeSession){
     resetCardioBlocks();
-    el.innerHTML='<div class="card"><p style="color:var(--muted);">No active session.</p><div style="margin-top:10px;"><button class="btn btn-dark btn-sm" onclick="goToPlanner()">Plan a session</button></div></div>';
+    if(fin) fin.innerHTML='';
+    // Start: today's programme day (if one is due), a saved workout, a plan — or just add
+    // exercises below, which starts an empty session.
+    let today='';
+    const prog=activeProgrammeId && (programmes||[]).find(p=>String(p.id)===String(activeProgrammeId));
+    if(prog){
+      const st=programmeTodayState(prog), days=safeJSON(prog.days,[]);
+      const idx=st ? (st.isRest ? st.nextTrainIdx : st.todayIdx) : null, d=idx!=null ? days[idx] : null;
+      if(d && d.type!=='rest') today='<button class="btn btn-dark btn-sm" data-prog="'+esc(prog.id)+'" data-day="'+idx+'" onclick="startProgrammeDayByIndex(this.dataset.prog,parseInt(this.dataset.day))">Start '+esc(d.workoutTitle||('Day '+(idx+1)))+(st.isRest?' (rest day)':'')+'</button>';
+    }
+    el.innerHTML='<div class="card"><div style="font-size:15px;font-weight:500;margin-bottom:4px;">Start a workout</div>'
+      +'<p style="font-size:13px;color:var(--muted);margin-bottom:10px;">Start today\u2019s programme day, load a saved workout below, plan one \u2014 or just add exercises, cardio or a description in the card below.</p>'
+      +'<div style="display:flex;gap:8px;flex-wrap:wrap;">'+today+'<button class="btn btn-sm" onclick="goToPlanner()">Plan a session</button></div></div>';
     updateNavBadge();
     renderSavedWorkouts();
     return;
@@ -3007,22 +3085,20 @@ function renderLog() {
   const s=db.activeSession;
   const isDraft=s.is_draft||false;
   let html2='<div class="card">';
-  html2+='<div style="font-size:16px;font-weight:500;margin-bottom:2px;">'+( s.sessionTitle||'Session')+'</div>';
-  html2+='<div style="font-size:13px;color:var(--muted);margin-bottom:12px;">'+(s.muscles?s.muscles.join(', '):'')+'</div>';
+  const shownMuscles = s.freestyle ? sessionMuscles(s.exercises) : (s.muscles||[]);
+  html2+='<div style="font-size:16px;font-weight:500;margin-bottom:2px;">'+esc(s.sessionTitle||(s.freestyle?'Freestyle session':'Session'))+'</div>';
+  html2+='<div style="font-size:13px;color:var(--muted);margin-bottom:'+(s.startedAt?'2':'12')+'px;">'+esc(shownMuscles.join(', '))+'</div>';
+  if(s.startedAt){
+    const mins = Math.max(0, Math.round((Date.now() - new Date(s.startedAt).getTime()) / 60000));
+    html2+='<div style="font-size:12px;color:var(--faint);margin-bottom:12px;">Started '
+      + new Date(s.startedAt).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})
+      + (mins <= MAX_PLAUSIBLE_SESSION_MIN ? ' \u00b7 ' + durationLabel(mins) + ' so far' : '') + '</div>';
+  }
   // Status comes from confirmed writes, not from the draft flag (which was set before saving)
   html2+='<div id="draft-banner">'+draftBannerHtml(s)+'</div>';
-  // Add-on exercises: a scheduled workout is a plan, not a cage — extra work should be
-  // loggable in the session rather than forcing a separate Just Train entry.
-  const addOpts = '<option value="">+ Add exercise\u2026</option>'
-    + activeLibrary().slice().sort((a,b)=>a.name.localeCompare(b.name))
-        .map(l=>'<option value="'+l.name.replace(/"/g,'&quot;')+'">'+esc(l.name)+'</option>').join('');
-  html2+='<div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center;">'
-    +'<select class="set-inp" style="flex:1;min-width:140px;width:auto;font-size:12px;padding:5px 8px;color:var(--muted);" onchange="addLogExercise(this.value);this.value=\'\';">'+addOpts+'</select>'
-    +'<button class="btn btn-sm" style="border-color:#9FE1CB;color:#0F6E56;background:#E1F5EE;" onclick="addCardioBlock()">+ Add cardio</button>'
-    +'</div>';
   html2+='<div id="cardio-blocks"></div>';
 
-  const swapOpts = '<option value="">Swap exercise\u2026</option>' + activeLibrary().slice().sort((a,b)=>a.name.localeCompare(b.name)).map(l=>'<option value="'+l.name.replace(/"/g,'&quot;')+'">'+l.name.replace(/</g,'&lt;')+'</option>').join('');
+  const swapUses = exerciseUseCounts();     // once per render, shared by every exercise's swap list
 
   // Detect runs of consecutive exercises sharing a superset group (light display only — each still logs normally)
   const groupInfo = [];
@@ -3117,28 +3193,33 @@ function renderLog() {
 
     if(groupInfo[ei] && groupInfo[ei].isStart) html2+='<div class="ss-group"><div class="ss-label">'+esc(groupInfo[ei].label)+'</div>';
     const exExpanded = (ex.collapsed===undefined) ? expandSet.has(ei) : !ex.collapsed;
-    html2+='<div class="ex-block"'+(ex.skipped?' style="opacity:0.45;"':'')+'>';
+    html2+='<div class="ex-block'+(ex.done?' ex-done':'')+'"'+(ex.skipped?' style="opacity:0.45;"':'')+'>';
     html2+='<div class="ex-head" onclick="toggleExBlock('+ei+')">';
-    html2+='<span style="font-size:14px;font-weight:500;">'+esc(ex.name)+'</span>';
+    html2+='<span style="font-size:14px;font-weight:500;">'+(ex.done?'<span class="done-check">\u2713</span> ':'')+esc(ex.name)+'</span>';
     html2+='<span style="display:flex;align-items:center;gap:8px;">'
-      +(ex.isExtra?'<span class="tag-repeat" style="background:rgba(46,125,50,0.12);color:#2E7D32;">added</span>':'')
+      +(ex.isExtra&&!s.freestyle?'<span class="tag-repeat" style="background:rgba(46,125,50,0.12);color:#2E7D32;">added</span>':'')
       +'<span class="'+(ex.isCardio?'tag-cardio':ex.isRepeat?'tag-repeat':'tag-new')+'">'+(ex.isCardio?'cardio':ex.isRepeat?'repeated':'fresh pick')+'</span>'
       +(ex.nextAction?'<span class="na-badge na-'+ex.nextAction+'">'+NEXT_ACTION_LABEL[ex.nextAction]+'</span>':'')
       +(ex.skipped?'<span class="tag-repeat" style="background:var(--bg);color:var(--muted);">skipped</span>':'')
       +(!ex.isExtra&&!ex.isCardio?'<span data-ei="'+ei+'" onclick="event.stopPropagation();toggleSkipExercise(parseInt(this.dataset.ei))" style="font-size:11px;color:var(--muted);cursor:pointer;border:0.5px solid var(--border-md);border-radius:4px;padding:1px 6px;">'+(ex.skipped?'Undo':'Skip')+'</span>':'')
       +(ex.isExtra?'<span data-ei="'+ei+'" onclick="event.stopPropagation();removeLogExercise(parseInt(this.dataset.ei))" title="Remove from this session" style="color:var(--faint);font-size:15px;cursor:pointer;line-height:1;">\u00d7</span>':'')
+      +(!ex.skipped?'<span class="done-btn'+(ex.done?' on':'')+'" data-ei="'+ei+'" onclick="event.stopPropagation();toggleExerciseDone(parseInt(this.dataset.ei))" title="'+(ex.done?'Mark not done':'Mark done')+'">'+(ex.done?'\u2713 Done':'Done')+'</span>':'')
       +'<span class="ex-caret" id="excaret-'+ei+'" style="color:var(--faint);font-size:13px;">'+(exExpanded?'\u25be':'\u25b8')+'</span></span>';
     html2+='</div>';
     html2+='<div class="ex-body" id="exbody-'+ei+'"'+(exExpanded?'':' style="display:none;"')+'>';
     html2+='<div style="font-size:12px;color:var(--muted);margin-bottom:8px;">'+(ex.isCardio?ex.muscle+' &middot; '+ex.reps:ex.muscle+' &middot; target '+numSets+' sets &times; '+ex.reps)+'</div>';
     if(!ex.isCardio){
       html2+='<div style="display:flex;gap:8px;margin-bottom:8px;">'
-        +'<select class="set-inp" data-ei="'+ei+'" onchange="setLogEquipment(parseInt(this.dataset.ei),this.value)" style="flex:1;min-width:0;width:auto;font-size:12px;padding:5px 8px;">'+equipmentOptions(ex.equipment)+'</select>'
+        +'<select class="set-inp'+(!ex.isCardio&&!ex.equipment?' needs-eq':'')+'" data-ei="'+ei+'" title="'+(!ex.isCardio&&!ex.equipment?'Set the equipment once and it\u2019s remembered':'')+'" onchange="setLogEquipment(parseInt(this.dataset.ei),this.value)" style="flex:1;min-width:0;width:auto;font-size:12px;padding:5px 8px;">'+equipmentOptions(ex.equipment)+'</select>'
         +'<select class="set-inp" data-ei="'+ei+'" onchange="setLogModifier(parseInt(this.dataset.ei),this.value)" style="flex:1;min-width:0;width:auto;font-size:12px;padding:5px 8px;'+(ex.modifier?'color:#92600A;font-weight:500;':'color:var(--muted);')+'">'+modifierOptions(ex.modifier)+'</select>'
         +'</div>'
         +'<div style="display:flex;gap:8px;margin-bottom:8px;">'
-        +'<select class="set-inp" data-ei="'+ei+'" onchange="swapLogExercise(parseInt(this.dataset.ei),this.value)" style="flex:1;min-width:0;width:auto;font-size:12px;padding:5px 8px;color:var(--muted);">'+swapOpts+'</select>'
+        +'<select class="set-inp" data-ei="'+ei+'" onchange="swapLogExercise(parseInt(this.dataset.ei),this.value)" style="flex:1;min-width:0;width:auto;font-size:12px;padding:5px 8px;color:var(--muted);">'+swapOptionsHtml(ex, swapUses)+'</select>'
         +'<button type="button" class="exh-btn" title="Last 10 logs of this exercise" onclick="toggleExHistory(\'ex-\','+ei+')">\u23f1 History</button>'
+        +'</div>'
+        +'<div style="display:flex;gap:8px;margin-bottom:8px;align-items:center;">'
+        +'<span style="font-size:11px;color:var(--muted);">Superset group</span>'
+        +'<select class="set-inp" data-ei="'+ei+'" title="Give adjacent exercises the same letter to group them" onchange="setLogGroup(parseInt(this.dataset.ei),this.value)" style="width:auto;font-size:12px;padding:4px 8px;color:var(--muted);">'+builderGroupOptions(ex.group)+'</select>'
         +'</div>'
         +'<div id="ex-'+ei+'-hist" class="exh-panel" style="display:none;"></div>';
     }
@@ -3163,9 +3244,14 @@ function renderLog() {
   });
 
   html2+='</div>';
-  html2+='<div class="card"><div class="card-title">Session notes</div><textarea id="session-note" rows="3" style="font-size:13px;font-style:italic;" placeholder="How did it feel overall?" oninput="autosaveDraft()">'+esc((s.sessionNote||''))+'</textarea></div>';
-  html2+='<div class="log-actions"><button class="btn btn-dark" data-save-session onclick="saveSession()">Save session</button><button class="btn" onclick="discardSession()">Discard</button></div>';
+  let finishHtml='';
+  finishHtml+='<div class="card"><div class="card-title">Session notes</div><textarea id="session-note" rows="3" style="font-size:13px;font-style:italic;" placeholder="How did it feel overall?" oninput="autosaveDraft()">'+esc((s.sessionNote||''))+'</textarea></div>';
+  finishHtml+='<div class="log-actions"><button class="btn btn-dark" data-save-session onclick="saveSession()">Save session</button><button class="btn" onclick="discardSession()">Discard</button></div>';
   el.innerHTML=html2;
+  if(fin) fin.innerHTML=finishHtml;
+  // Cardio lives outside the exercise list; redraw it every time (it used to vanish on any redraw)
+  restoreCardioLocal();
+  renderCardioBlocks();
   s._renderedUids = s.exercises.map(exUid);     // what was drawn where — capture relies on it
   updateNavBadge();
   renderSavedWorkouts();
@@ -3243,7 +3329,7 @@ function toggleExHistory(prefix, ei){
   if(!el) return;
   const show = el.style.display === 'none';
   if(show){
-    const ex = prefix === 'jt-' ? jtExercises[ei] : (db.activeSession && db.activeSession.exercises[ei]);
+    const ex = db.activeSession && db.activeSession.exercises[ei];
     el.innerHTML = exerciseHistoryHtml(ex);
   }
   el.style.display = show ? '' : 'none';
@@ -3293,21 +3379,190 @@ function swapLogExercise(ei,name){
 // discard data without asking.
 // Append an exercise to the session in progress. Marked isExtra so it's visually distinct
 // from the planned work and doesn't imply the saved workout changed.
-function addLogExercise(name){
-  if(!name || !db.activeSession) return;
+// ── ONE LOG SCREEN ────────────────────────────────────────────────
+// Just Train used to be a second logging engine (its own render, capture, drafts and save);
+// every fix had to be made twice. It is now simply a session started empty on this screen.
+// Adding an exercise, some cardio or a dictated workout with nothing open starts one.
+function ensureActiveSession(){
+  if(db.activeSession) return db.activeSession;
+  db.activeSession = {sessionTitle:'', freestyle:true, exercises:[], muscles:[], coachNote:'',
+    date:new Date().toISOString(), is_draft:false};
+  updateNavBadge();
+  return db.activeSession;
+}
+
+// Queue a draft write WITHOUT reading the screen — for changes made in code (adding, dictating)
+// just before a redraw. Reading the screen there would pick up the pre-redraw inputs.
+function persistDraftSoon(){
+  const s = db.activeSession;
+  if(!s || !currentUser || s._finalizing || s._discarded) return;
+  markStarted(s);
+  clearTimeout(_draftSaveTimer);
+  _draftSaveTimer = setTimeout(() => {
+    _draftWriteChain = _draftWriteChain.then(() => writeDraft(s)).catch(e => console.warn('draft write', e));
+  }, 1000);
+}
+
+// Title for a session started empty: the muscles trained, or "Cardio" when that's all it was.
+function freestyleTitle(exercises){
+  const lift = sessionMuscles((exercises||[]).filter(e => e && !e.isCardio)).filter(m => m !== 'Cardio').slice(0,2);
+  if(lift.length) return 'Freestyle \u2014 ' + lift.join(', ');
+  return (exercises||[]).some(e => e && e.isCardio) ? 'Cardio' : 'Freestyle';
+}
+
+// Muscle → exercise picker
+function logPopulateMusclePick(){
+  const musclePick = document.getElementById('log-muscle-pick');
+  if(!musclePick) return;
+  const muscles = new Set([...trackedMuscles(), ...MUSCLES_C]);
+  activeLibrary().forEach(e => tagList(e.muscle||'').forEach(m => muscles.add(m)));
+  const prev = musclePick.value || '__all';
+  musclePick.innerHTML = '<option value="__all">All exercises</option><option value="__recent">Recently used</option>'
+    + [...muscles].sort().map(m => '<option value="' + esc(m) + '">' + esc(m) + '</option>').join('');
+  musclePick.value = [...(musclePick.options||[])].some(o => o.value === prev) ? prev : '__all';
+  logPopulateExercisePick();
+}
+function logPopulateExercisePick(){
+  const pick = document.getElementById('log-ex-pick');
+  if(!pick) return;
+  const sel = document.getElementById('log-muscle-pick')?.value || '__all';
+  let list;
+  if(sel === '__recent'){
+    const seen = [];
+    for(let i=db.sessions.length-1; i>=0 && seen.length<20; i--){
+      (db.sessions[i].exercises||[]).forEach(ex => { if(ex && ex.name && !ex.isCardio && !seen.includes(ex.name)) seen.push(ex.name); });
+    }
+    list = seen.map(n => activeLibrary().find(e => e.name === n)).filter(Boolean);
+  } else if(sel === '__all'){
+    list = activeLibrary().slice().sort((a,b) => a.name.localeCompare(b.name));
+  } else {
+    list = activeLibrary().filter(e => tagList(e.muscle||'').includes(sel)).sort((a,b) => a.name.localeCompare(b.name));
+    if(!list.length) list = activeLibrary().filter(e => String(e.muscle||'').toLowerCase().includes(sel.toLowerCase()))
+      .sort((a,b) => a.name.localeCompare(b.name));
+  }
+  const seenNames = new Set();
+  pick.innerHTML = '<option value="">' + (list.length ? 'Select an exercise\u2026' : 'No exercises for this group') + '</option>'
+    + list.filter(e => { if(seenNames.has(e.name)) return false; seenNames.add(e.name); return true; })
+        .map(e => '<option value="' + esc(e.name) + '">' + esc(e.name) + '</option>').join('');
+}
+function logAddFromPicker(){
+  const name = document.getElementById('log-ex-pick')?.value;
+  if(!name){ toast('Choose an exercise first.', 'error'); return; }
+  const sets = parseInt(document.getElementById('log-sets-pick')?.value) || 3;
+  addLogExercise(name, sets);
+  const pick = document.getElementById('log-ex-pick'); if(pick) pick.value = '';
+}
+
+// Append an exercise. With nothing open this starts an empty session. The previous exercise is
+// folded — you've finished it — and the new one opens.
+function addLogExercise(name, sets){
+  if(!name) return;
   const lib = (db.library||[]).find(l => l.name === name);
   if(!lib) return;
+  if(db.activeSession) autosaveDraft();             // keep anything typed before the redraw
+  const s = ensureActiveSession();
   const isCardio = String(lib.muscle||'').toLowerCase().includes('cardio');
-  autosaveDraft();
-  db.activeSession.exercises.push({
-    name: lib.name, muscle: lib.muscle, sets: 3, reps: '10 reps',
-    isCardio, equipment: isCardio ? '' : (lastEquipmentFor(lib.name)||''),
-    modifier: '', group: '', isRepeat: false, isExtra: true,
+  const prev = s.exercises[s.exercises.length - 1];
+  if(prev) prev.collapsed = true;
+  s.exercises.push({
+    name: lib.name, muscle: lib.muscle, sets: isCardio ? 1 : (sets || 3), reps: isCardio ? '30 min' : '10 reps',
+    isCardio, equipment: isCardio ? '' : defaultEquipmentFor(lib.name),
+    modifier: '', group: '', isRepeat: false, isExtra: true, collapsed: false,
     wuHidden: true, wuDrafts: []
   });
-  autosaveDraft();
   renderLog();
-  toast('Added ' + lib.name + ' to this session.');
+  persistDraftSoon();
+  if(!s.freestyle) toast('Added ' + lib.name + ' to this session.');
+}
+
+// Superset letter for one exercise (adjacent exercises with the same letter are grouped).
+function setLogGroup(ei, val){
+  const ex = db.activeSession && db.activeSession.exercises[ei];
+  if(!ex) return;
+  autosaveDraft();
+  ex.group = val || '';
+  renderLog();
+}
+
+// Cardio: a session can be cardio only. Blocks are kept in this browser too, so they survive a
+// reload (the server draft stores exercises only).
+function logCardioKey(){ return 'gymlog_log_cardio_' + (currentUser ? currentUser.id : 'anon'); }
+function persistCardioLocal(){
+  try {
+    const live = (cardioBlocks||[]).filter(Boolean);
+    if(live.length && db.activeSession) localStorage.setItem(logCardioKey(), JSON.stringify({savedAt:new Date().toISOString(), blocks:live}));
+    else localStorage.removeItem(logCardioKey());
+  } catch(e){ console.warn('cardio local save failed', e); }
+}
+function restoreCardioLocal(){
+  if((cardioBlocks||[]).length) return;
+  try {
+    const d = JSON.parse(localStorage.getItem(logCardioKey()) || 'null');
+    if(!d || !Array.isArray(d.blocks) || !d.blocks.length) return;
+    if(d.savedAt && (Date.now() - new Date(d.savedAt).getTime()) > 36*3600e3){ localStorage.removeItem(logCardioKey()); return; }
+    cardioBlocks = d.blocks;
+  } catch(e){}
+}
+function logAddCardio(){
+  if(db.activeSession) autosaveDraft();
+  ensureActiveSession();
+  renderLog();                       // draws the cardio area for a session that may be brand new
+  addCardioBlock();
+  persistDraftSoon();
+}
+
+
+// A Just Train session left unsaved by the previous version of the app is brought across once,
+// on first open, rather than silently lost.
+function legacyJtDraftKey(){ return 'gymlog_jt_draft_' + (currentUser ? currentUser.id : 'anon'); }
+function convertLegacyJtDraft(){
+  if(db.activeSession || !currentUser) return false;
+  let d = null;
+  try { d = JSON.parse(localStorage.getItem(legacyJtDraftKey()) || 'null'); } catch(e){}
+  if(!d) return false;
+  try { localStorage.removeItem(legacyJtDraftKey()); } catch(e){}
+  if(d.savedAt && (Date.now() - new Date(d.savedAt).getTime()) > 36*3600e3) return false;
+  const exs = (Array.isArray(d.exercises) ? d.exercises : []).filter(Boolean).map(ex => {
+    const e = Object.assign({}, ex, {isExtra:true});
+    // Just Train kept dictated cardio minutes separately; the Log screen reads them from set 1
+    if(e.isCardio && e.draftMinutes != null && e.draftMinutes !== '' && !(e.draftSets && e.draftSets.length)) e.draftSets = [{kg:String(e.draftMinutes), reps:''}];
+    delete e.draftMinutes; delete e._uid;
+    return e;
+  });
+  const cardio = Array.isArray(d.cardio) ? d.cardio.filter(Boolean) : [];
+  if(!exs.length && !cardio.length) return false;
+  ensureActiveSession().exercises = exs;
+  if(cardio.length) cardioBlocks = cardio;
+  persistCardioLocal();
+  persistDraftSoon();
+  toast('Brought across your unsaved Just Train session.');
+  return true;
+}
+
+// ── DONE ──────────────────────────────────────────────────────────
+// A visual marker only: it shows what's finished and moves you on, and it is never saved with
+// the workout (it is kept in the draft so it survives a reload). Ticking one member of a
+// superset ticks the whole group. Marking done folds it and opens the next exercise that's
+// neither done nor skipped; tapping again undoes it.
+function toggleExerciseDone(ei){
+  const s = db.activeSession;
+  const ex = s && s.exercises[ei];
+  if(!ex || ex.skipped) return;
+  autosaveDraft();                                   // keep what was typed before the redraw
+  const members = logGroupMembers(ei);
+  const done = !ex.done;
+  members.forEach(m => { const e = s.exercises[m]; if(e && !e.skipped){ e.done = done; e.collapsed = done; } });
+  if(done){
+    const open = k => { const e = s.exercises[k]; return e && !e.done && !e.skipped; };
+    let next = -1;
+    for(let k = Math.max(...members) + 1; k < s.exercises.length && next < 0; k++) if(open(k)) next = k;
+    for(let k = 0; k < s.exercises.length && next < 0; k++) if(open(k) && !members.includes(k)) next = k;
+    if(next >= 0) logGroupMembers(next).forEach(m => { if(s.exercises[m]) s.exercises[m].collapsed = false; });
+  } else {
+    members.forEach(m => { if(s.exercises[m]) s.exercises[m].collapsed = false; });
+  }
+  markStarted(s);
+  renderLog();
 }
 
 // Skip a planned exercise for this session. Kept in the session (so planned-vs-done stays
@@ -3353,25 +3608,6 @@ function removeLogSet(ei){
   renderLog();
 }
 
-function addJtSet(ei){
-  const ex = jtExercises[ei];
-  if(!ex) return;
-  jtCaptureInputs();
-  ex.sets = (ex.sets||3) + 1;
-  jtRenderSession();
-}
-function removeJtSet(ei){
-  const ex = jtExercises[ei];
-  if(!ex || (ex.sets||3) <= 1) return;
-  const last = (ex.sets||3) - 1;
-  const kg = document.getElementById('jt-'+ei+'-kg-'+last)?.value;
-  const reps = document.getElementById('jt-'+ei+'-reps-'+last)?.value;
-  if((kg||reps) && !confirm('That set has values logged. Remove it anyway?')) return;
-  jtCaptureInputs();
-  ex.sets = (ex.sets||3) - 1;
-  if(ex.draftSets) ex.draftSets = ex.draftSets.slice(0, ex.sets);
-  jtRenderSession();
-}
 
 function stepInput(id, delta, autosave){
   const el=document.getElementById(id);
@@ -3382,8 +3618,6 @@ function stepInput(id, delta, autosave){
   if(v<0) v=0;
   el.value=v;
   if(autosave!==false && typeof autosaveDraft==='function') autosaveDraft();
-  // Steppers change values without firing oninput, so JT must be told explicitly
-  else if(String(id).startsWith('jt-') && typeof jtSaveDraft==='function') jtSaveDraft();
 }
 
 // Copy a set's weight & reps into every set below it (within the same exercise).
@@ -3472,12 +3706,12 @@ function renderedPosOf(renderedUids, ex){
   if(!renderedUids) return -1;
   return renderedUids.indexOf(ex && ex._uid);
 }
-let _jtRenderedUids = null;
 
 async function autosaveDraft(){
   if(!db.activeSession||!currentUser) return;
   const s=db.activeSession;
   captureLogInputs(s);
+  markStarted(s);
   s.sessionNote=document.getElementById('session-note')?.value||'';
   if(s._finalizing || s._discarded) return;
   // Debounce — save 1s after last keystroke. The write itself goes through a queue so two
@@ -3495,20 +3729,54 @@ let _saveInFlight = null;
 
 // One draft write. Runs only from the queue, so it always sees the draft_id an earlier insert
 // returned. The status it records is what the database actually confirmed.
+// ── SESSION TIMING ────────────────────────────────────────────────
+// Started = the first time anything is entered or ticked (not when the workout is opened, which
+// may happen before you leave home). Finished = when it's saved. Stored as started_at and
+// finished_at on the session. If the database doesn't have those columns yet, writes retry
+// without them — so deploying before running the migration never breaks saving.
+let _timingColumns = true;
+function markStarted(s){
+  if(s && !s.startedAt && s === db.activeSession && activeSessionHasWork()) s.startedAt = new Date().toISOString();
+}
+function withTiming(payload, s, finished){
+  if(!_timingColumns || !s) return payload;
+  const p = Object.assign({}, payload);
+  if(s.startedAt) p.started_at = s.startedAt;
+  if(finished) p.finished_at = new Date().toISOString();
+  return p;
+}
+function stripTiming(payload){ const p = Object.assign({}, payload); delete p.started_at; delete p.finished_at; return p; }
+function isMissingTimingColumn(err){
+  return !!err && /started_at|finished_at/.test([err.message, err.details, err.hint].join(' '));
+}
+// Minutes between start and finish, or null. Over 5 hours almost always means a workout left
+// open, so it's not shown as if it were real.
+const MAX_PLAUSIBLE_SESSION_MIN = 300;
+function sessionDurationMin(s){
+  if(!s || !s.started_at || !s.finished_at) return null;
+  const m = (new Date(s.finished_at) - new Date(s.started_at)) / 60000;
+  return (m >= 1 && m <= MAX_PLAUSIBLE_SESSION_MIN) ? Math.round(m) : null;
+}
+function durationLabel(min){
+  if(min == null) return '';
+  return min < 60 ? min + ' min' : Math.floor(min/60) + ' h ' + String(min % 60).padStart(2,'0') + ' min';
+}
+
 async function writeDraft(s){
   if(!s || s._finalizing || s._discarded || db.activeSession !== s || !currentUser) return;
   setDraftSync(s, 'saving');
-  const payload = {exercises:JSON.stringify(s.exercises), note:s.sessionNote, is_draft:true};
-  let res;
-  if(s.draft_id){
-    res = await sb.from('sessions').update(payload).eq('id', s.draft_id);
-  } else {
-    res = await sb.from('sessions').insert({user_id:currentUser.id, date:s.date||new Date().toISOString(),
-      title:s.sessionTitle, muscles:JSON.stringify(s.muscles||[]), ...payload,
+  const payload = withTiming({exercises:JSON.stringify(s.exercises), note:s.sessionNote, is_draft:true}, s, false);
+  const send = async (pl) => {
+    if(s.draft_id) return sb.from('sessions').update(pl).eq('id', s.draft_id);
+    const r = await sb.from('sessions').insert({user_id:currentUser.id, date:s.date||new Date().toISOString(),
+      title:s.sessionTitle, muscles:JSON.stringify(s.muscles||[]), ...pl,
       ...(s.programme_id?{programme_id:String(s.programme_id),programme_day:(s.programme_day!=null?s.programme_day:null)}:{})
     }).select().single();
-    if(res && !res.error && res.data) s.draft_id = res.data.id;
-  }
+    if(r && !r.error && r.data) s.draft_id = r.data.id;
+    return r;
+  };
+  let res = await send(payload);
+  if(res && res.error && isMissingTimingColumn(res.error)){ _timingColumns = false; res = await send(stripTiming(payload)); }
   // Finalised or discarded while this was in flight: say nothing, the next step owns the state
   if(s._finalizing || s._discarded) return;
   setDraftSync(s, (res && res.error) ? 'failed' : 'saved');
@@ -3622,6 +3890,7 @@ function saveSession(){
 async function doSaveSession(){
   clearTimeout(_draftSaveTimer);
   const s=db.activeSession; if(!s) return;
+  if(!s.exercises.length && !(cardioBlocks||[]).some(b => b && b.duration)){ toast('Add an exercise or some cardio first.', 'error'); return; }
   // Stop new draft writes, then let any in-flight one finish first. The final write must be
   // the last write to this row, and it needs the draft_id an in-flight insert may still return.
   s._finalizing = true;
@@ -3634,18 +3903,23 @@ async function doSaveSession(){
     // Read from where this exercise was DRAWN, not where it sits in the list now
     const pos = s._renderedUids ? renderedPosOf(s._renderedUids, live) : idx;
     ex.loggedSets = pos >= 0 ? captureLoggedSets(live, pos) : loggedSetsFromDraft(live);
-    delete ex.draftSets; delete ex._uid;
+    delete ex.draftSets; delete ex._uid; delete ex.done;   // Done is a logging aid, not history
     return ex;
   }).concat(cardioBlocksAsExercises(cardioBlocks));
   const muscles = sessionMuscles(exercises);
   const sessionNote = document.getElementById('session-note')?.value||'';
   const progStamp = s.programme_id ? {programme_id:String(s.programme_id), programme_day:(s.programme_day!=null?s.programme_day:null)} : {};
-  const record = {title:s.sessionTitle, muscles:JSON.stringify(muscles), exercises:JSON.stringify(exercises),
-    note:sessionNote, is_draft:false, ...progStamp};
+  const title = s.sessionTitle || (s.freestyle ? freestyleTitle(exercises) : 'Session');
+  markStarted(s);
+  const record = withTiming({title, muscles:JSON.stringify(muscles), exercises:JSON.stringify(exercises),
+    note:sessionNote, is_draft:false, ...progStamp}, s, true);
 
-  const res = s.draft_id
-    ? await sb.from('sessions').update(record).eq('id',s.draft_id).select().single()
-    : await sb.from('sessions').insert({user_id:currentUser.id, date:s.date||new Date().toISOString(), ...record}).select().single();
+  const send = (rec) => s.draft_id
+    ? sb.from('sessions').update(rec).eq('id',s.draft_id).select().single()
+    : sb.from('sessions').insert({user_id:currentUser.id, date:s.date||new Date().toISOString(), ...rec}).select().single();
+  let res = await send(record);
+  // Database not migrated yet: save without the timing rather than fail the workout
+  if(res.error && isMissingTimingColumn(res.error)){ _timingColumns = false; res = await send(stripTiming(record)); }
 
   if(res.error){
     s._finalizing = false;            // editing continues; autosave resumes
@@ -3653,7 +3927,7 @@ async function doSaveSession(){
     return;
   }
   const saved = res.data || {};
-  db.sessions.push({...saved, sessionTitle:s.sessionTitle, title:s.sessionTitle, date:saved.date||s.date,
+  db.sessions.push({...saved, sessionTitle:title, title, date:saved.date||s.date,
     exercises, muscles, note:sessionNote, is_draft:false, ...progStamp});
   db.sessions.sort((a,b) => new Date(a.date) - new Date(b.date));
   db.activeSession=null; db.pendingSession=null;
@@ -3674,7 +3948,11 @@ async function discardSession(){
     // An insert still in flight would otherwise create the draft row AFTER the delete,
     // and the "discarded" workout would come back on the next load
     await _draftWriteChain;
-    if(s.draft_id) await sb.from('sessions').delete().eq('id',s.draft_id);
+    if(s.draft_id){
+      const rDel = await sb.from('sessions').delete().eq('id',s.draft_id);
+      // If the server copy survives, the "discarded" workout reappears on the next load — say so
+      if(rDel && rDel.error) toast('Discarded here, but the saved draft couldn\u2019t be removed \u2014 it may reappear. Discard it again if it does.','error');
+    }
   }
   db.activeSession=null;
   resetCardioBlocks();
@@ -5017,7 +5295,7 @@ async function loadProgrammes() {
         activeProgrammeId = legacy;
         const p = programmes.find(p => String(p.id) === String(legacy));
         if(p) p.is_active = true;
-        try { await sb.from('programmes').update({is_active:true}).eq('id', legacy); } catch(e) {}
+        { const r = await sb.from('programmes').update({is_active:true}).eq('id', legacy); if(r && r.error) console.warn('active-programme backfill failed', r.error); }
       } else {
         activeProgrammeId = null;
       }
@@ -5032,7 +5310,7 @@ async function loadProgrammes() {
           if(m) { d.workoutId = m.id; changed = true; }
         }
       });
-      if(changed) { p.days = days; try { await sb.from('programmes').update({days: JSON.stringify(days)}).eq('id', p.id); } catch(e) {} }
+      if(changed) { p.days = days; const r = await sb.from('programmes').update({days: JSON.stringify(days)}).eq('id', p.id); if(r && r.error) console.warn('workout-link backfill failed (retried next load)', r.error); }
     }
   } catch(e) { programmes = []; }
 }
@@ -5429,9 +5707,10 @@ async function renameWorkoutInProgrammes(workoutId, newTitle){
       }
     });
     if(changed){
-      p.days = JSON.stringify(days);
-      try { await sb.from('programmes').update({days: p.days}).eq('id', p.id); }
-      catch(e){ console.warn('programme rename sync failed', e); }
+      const json = JSON.stringify(days);
+      const r = await sb.from('programmes').update({days: json}).eq('id', p.id);
+      if(r && r.error) console.warn('programme rename sync failed', r.error);   // matching still works via the workout link
+      else p.days = json;
     }
   }
 }
@@ -5560,15 +5839,34 @@ function startProgrammeDayByIndex(progId, dayIndex) {
   if(db.activeSession) { db.activeSession.programme_id = String(prog.id); db.activeSession.programme_day = dayIndex; }
 }
 
+// ── PROGRAMME WRITES ──────────────────────────────────────────────
+// Supabase reports a failed write in its result; it does not throw. These used to change the
+// screen first, write second and ignore the result — so "Programme updated" could appear for a
+// change that was never saved, and a reload silently undid it. Now: write, check, then apply.
+function programmeWriteFailed(res, what){
+  if(res && res.error){
+    console.warn('programme write failed:', what, res.error);
+    toast('Couldn\u2019t ' + what + ' \u2014 nothing was changed. Check your connection and try again.', 'error');
+    return true;
+  }
+  return false;
+}
+// Manually set which day the programme is on (Skip / "Set as current day").
+async function setProgrammeDay(prog, dayIndex){
+  const setAt = new Date().toISOString();
+  const res = await sb.from('programmes').update({current_day: dayIndex, current_day_set_at: setAt}).eq('id', prog.id);
+  if(programmeWriteFailed(res, 'update the programme day')) return false;
+  prog.current_day = dayIndex;
+  prog._selectedDay = dayIndex;
+  prog.current_day_set_at = setAt;
+  refreshActiveProgrammeView();
+  return true;
+}
+
 async function skipToDay(progId, dayIndex) {
   const prog = programmes.find(p => String(p.id) === String(progId));
   if(!prog) return;
-  const days = safeJSON(prog.days, []);
-  prog.current_day = dayIndex;
-  prog._selectedDay = dayIndex;
-  prog.current_day_set_at = new Date().toISOString();
-  await sb.from('programmes').update({current_day: dayIndex, current_day_set_at: prog.current_day_set_at}).eq('id', prog.id);
-  refreshActiveProgrammeView();
+  if(!(await setProgrammeDay(prog, dayIndex))) return;
   toast('Programme updated to day ' + (dayIndex+1) + '.', 'ok');
 }
 
@@ -5595,33 +5893,34 @@ function renderProgrammeList() {
 }
 
 async function activateProgramme(id) {
+  // Others off first, then this one on. If the second write fails the worst case is "no active
+  // programme" — obvious and one tap to fix — rather than two active rows, which is ambiguous.
+  const off = await sb.from('programmes').update({is_active:false}).eq('user_id', currentUser.id).neq('id', id);
+  const on  = (off && off.error) ? off : await sb.from('programmes').update({is_active:true}).eq('id', id);
+  if(programmeWriteFailed(on, 'switch programme')){
+    await loadProgrammes();            // show what's actually stored, not what was hoped for
+    renderActiveProgramme(); renderProgrammeList();
+    return false;
+  }
   activeProgrammeId = id;
   localStorage.setItem('gymlog_active_prog_' + currentUser.id, id);
   programmes.forEach(p => p.is_active = (String(p.id) === String(id)));
   renderActiveProgramme();
   renderProgrammeList();
-  try {
-    await sb.from('programmes').update({is_active:false}).eq('user_id', currentUser.id).neq('id', id);
-    await sb.from('programmes').update({is_active:true}).eq('id', id);
-  } catch(e) {}
+  return true;
 }
 
 async function deactivateProgramme() {
   const id = activeProgrammeId;
+  if(id && programmeWriteFailed(await sb.from('programmes').update({is_active:false}).eq('id', id), 'deactivate the programme')) return false;
   activeProgrammeId = null;
   localStorage.removeItem('gymlog_active_prog_' + currentUser.id);
   programmes.forEach(p => p.is_active = false);
   renderActiveProgramme();
   renderProgrammeList();
-  if(id) { try { await sb.from('programmes').update({is_active:false}).eq('id', id); } catch(e) {} }
+  return true;
 }
 
-function startProgrammeDay() {
-  const prog = programmes.find(p => String(p.id) === String(activeProgrammeId));
-  if(!prog) return;
-  const selectedDay = typeof prog._selectedDay !== 'undefined' ? prog._selectedDay : (prog.current_day || 0);
-  startProgrammeDayByIndex(prog.id, selectedDay);
-}
 
 async function skipProgrammeDay() {
   const prog = programmes.find(p => String(p.id) === String(activeProgrammeId));
@@ -5631,12 +5930,8 @@ async function skipProgrammeDay() {
 
 async function advanceProgrammeDay(prog) {
   const days = safeJSON(prog.days, []);
-  const next = ((prog.current_day || 0) + 1) % days.length;
-  prog.current_day = next;
-  prog._selectedDay = next;
-  prog.current_day_set_at = new Date().toISOString();
-  await sb.from('programmes').update({current_day: next, current_day_set_at: prog.current_day_set_at}).eq('id', prog.id);
-  refreshActiveProgrammeView();
+  if(!days.length) return false;
+  return setProgrammeDay(prog, ((prog.current_day || 0) + 1) % days.length);
 }
 
 function showProgrammeBuilder(prog) {
@@ -5925,10 +6220,11 @@ async function getExerciseSuggestions() {
   try {
     const res = await fetch('/api/chat', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({model:AI_MODEL, max_tokens:2000, messages:[{role:'user', content:lines.join('\n')}]})});
+    if(res.ok === false) throw new Error('suggestions unavailable (' + res.status + ')');
     const data = await res.json();
-    const txt = data.content.map(b => b.text||'').join('').replace(/```json|```/g,'').trim();
+    const txt = (data.content||[]).map(b => b.text||'').join('').replace(/```json|```/g,'').trim();
     const parsed = JSON.parse(txt);
-    exerciseSuggestions = parsed.suggestions || [];
+    exerciseSuggestions = validateSuggestions(parsed.suggestions);
     status.textContent = '';
     renderSuggestionPanel();
     const panel = document.getElementById('suggestion-panel');
@@ -5938,6 +6234,23 @@ async function getExerciseSuggestions() {
   btn.disabled = false;
 }
 
+// The model's suggestions are parsed JSON, not trusted data: every field is forced to bounded
+// text here, so nothing downstream can crash on a missing name or render AI text as markup.
+// Suggestions for exercises already in the library are dropped — the point is new ideas.
+function validateSuggestions(raw){
+  const text = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
+  const seen = new Set();
+  return (Array.isArray(raw) ? raw : []).map(x => {
+    const name = text(x && x.name, 60);
+    if(!name) return null;
+    const key = name.toLowerCase();
+    if(seen.has(key) || (db.library||[]).some(e => e.name.toLowerCase() === key)) return null;
+    seen.add(key);
+    return {name, muscle: tagList(text(x.muscle, 80)).slice(0, 6).join(', ') || 'General',
+      reason: text(x.reason, 300), basedOn: text(x.basedOn, 120)};
+  }).filter(Boolean).slice(0, 30);
+}
+
 function renderSuggestionPanel() {
   const panel = document.getElementById('suggestion-panel');
   const muscles = ['All', ...new Set(exerciseSuggestions.map(s => s.muscle))];
@@ -5945,20 +6258,20 @@ function renderSuggestionPanel() {
 
   const pillsHtml = muscles.map(m => {
     const sel = sugMuscleFilter === m;
-    return '<button class="filter-pill' + (sel ? ' sel' : '') + '" data-m="' + m + '" onclick="setSugFilter(this.dataset.m)">' + m + '</button>';
+    return '<button class="filter-pill' + (sel ? ' sel' : '') + '" data-m="' + esc(m) + '" onclick="setSugFilter(this.dataset.m)">' + esc(m) + '</button>';
   }).join('');
 
   const rowsHtml = filtered.map((s, i) => {
     const isAdded = addedSuggestions.has(s.name);
     const addBtn = isAdded
       ? '<button class="btn btn-sm" disabled style="opacity:0.5;">Added</button>'
-      : '<button class="btn btn-sm" style="background:#2E7D32;color:white;border-color:#2E7D32;" data-name="' + s.name.replace(/"/g,'&quot;') + '" data-muscle="' + s.muscle.replace(/"/g,'&quot;') + '" onclick="addSuggestion(this.dataset.name,this.dataset.muscle)">+ Add</button>';
+      : '<button class="btn btn-sm" style="background:#2E7D32;color:white;border-color:#2E7D32;" data-name="' + esc(s.name) + '" data-muscle="' + esc(s.muscle) + '" onclick="addSuggestion(this.dataset.name,this.dataset.muscle)">+ Add</button>';
     return '<div class="sug-row' + (isAdded ? ' sug-added' : '') + '">'
       + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;">'
       + '<div style="display:flex;align-items:center;gap:8px;"><span style="font-size:14px;font-weight:500;">'+esc(s.name)+'</span><span class="tag tag-blue">'+esc(s.muscle)+'</span></div>'
       + addBtn + '</div>'
-      + '<div style="font-size:12px;color:var(--color-text-secondary);margin-bottom:4px;line-height:1.5;">' + s.reason + '</div>'
-      + '<div style="font-size:11px;color:var(--color-text-tertiary);">Based on: <span style="color:var(--color-text-secondary);font-weight:500;">' + s.basedOn + '</span></div>'
+      + '<div style="font-size:12px;color:var(--color-text-secondary);margin-bottom:4px;line-height:1.5;">' + esc(s.reason) + '</div>'
+      + '<div style="font-size:11px;color:var(--color-text-tertiary);">Based on: <span style="color:var(--color-text-secondary);font-weight:500;">' + esc(s.basedOn) + '</span></div>'
       + '</div>';
   }).join('');
 
@@ -6310,10 +6623,11 @@ function sessionRecap(s){
   const insights = sessionInsights(s);
 
   const stat = (v,l) => '<div class="recap-stat"><div class="recap-stat-v">' + v + '</div><div class="recap-stat-l">' + l + '</div></div>';
+  const durMin = sessionDurationMin(s);     // only sessions logged with timing have one
   return '<div class="recap">'
     + '<div class="recap-head">'
       + '<div class="recap-head-main">'
-        + '<div class="recap-title">' + (s.sessionTitle || categorizeWorkout(exercises)) + '</div>'
+        + '<div class="recap-title">' + esc(s.sessionTitle || categorizeWorkout(exercises)) + '</div>'
         + '<div class="recap-date">' + fmt(s.date) + ' · ' + categorizeWorkout(exercises) + '</div>'
       + '</div>'
       + '<div class="recap-freq"><div class="recap-freq-v">' + rollingFrequency(s.date) + '</div><div class="recap-freq-l">in 30 days</div></div>'
@@ -6323,6 +6637,7 @@ function sessionRecap(s){
       + stat(setCount, 'sets')
       + stat(exercises.filter(e=>!e.isCardio && (e.loggedSets?.sets||[]).length).length, 'exercises')
       + (cardioMins ? stat(Math.round(cardioMins), 'min cardio') : '')
+      + (durMin != null ? (durMin < 60 ? stat(durMin, 'min long') : stat(Math.floor(durMin/60) + ':' + String(durMin%60).padStart(2,'0'), 'hours')) : '')
     + '</div>'
     + sessionMatrix(exercises, s.date)
     + (insights.length
@@ -6569,183 +6884,10 @@ function cancelHistoryEdit(id) {
   delete _heDrafts[id];          // Cancel means cancel: the edited copy is thrown away
 }
 
-// ── JUST TRAIN ────────────────────────────────────────────────────
-let jtExercises = []; // {name, muscle, sets, isCardio, loggedSets:[]}
-
-async function renderJustTrain() {
-  if(_jtRenderedUids && jtExercises.length) jtCaptureInputs();
-  const musclePick = document.getElementById('jt-muscle-pick');
-  const pick = document.getElementById('jt-ex-pick');
-  if(!pick) return;
-
-  // The library drives the exercise list; if it hasn't loaded yet, fetch it rather than
-  // presenting an empty picker.
-  if(!db.library.length && currentUser){
-    try {
-      setLibraryFromRead(await sb.from('library').select('*').eq('user_id',currentUser.id).order('name'));
-    } catch(e){ console.warn('library reload failed', e); }
-  }
-
-  // Muscle dropdown: the standard muscle groups ALWAYS appear, unioned with any extra tags
-  // the library introduces (e.g. "Plyometrics"). Deriving this from db.library alone left
-  // the list empty whenever the library hadn't loaded yet.
-  if(musclePick){
-    const muscles = new Set([...trackedMuscles(), ...MUSCLES_C]);
-    activeLibrary().forEach(e => tagList(e.muscle||'').forEach(m=>muscles.add(m)));
-    const prev = musclePick.value || '__all';
-    musclePick.innerHTML = '<option value="__all">All exercises</option>'
-      + '<option value="__recent">Recently used</option>'
-      + [...muscles].sort().map(m => '<option value="' + m.replace(/"/g,'&quot;') + '">' + m + '</option>').join('');
-    musclePick.value = [...musclePick.options].some(o=>o.value===prev) ? prev : '__all';
-  }
-  jtPopulateExercisePick();
-  if(!jtExercises.length && !(_cardioOwner === 'jt' && cardioBlocks.length) && jtRestoreDraft()) toast('Restored your unsaved Just Train session.');
-  jtRenderSession();
-  if(_cardioOwner === 'jt') jtSyncCardioDisplay();
-}
-
-// Fill the exercise dropdown based on the chosen muscle group (deduped — a movement tagged
-// with several muscles must not appear twice under one filter).
-function jtPopulateExercisePick(){
-  const pick = document.getElementById('jt-ex-pick');
-  if(!pick) return;
-  const sel = document.getElementById('jt-muscle-pick')?.value || '__all';
-  let list;
-  if(sel === '__recent'){
-    const seen = [];
-    for(let i=db.sessions.length-1; i>=0 && seen.length<20; i--){
-      (db.sessions[i].exercises||[]).forEach(ex=>{
-        if(ex && ex.name && !ex.isCardio && !seen.includes(ex.name)) seen.push(ex.name);
-      });
-    }
-    list = seen.map(n => activeLibrary().find(e=>e.name===n)).filter(Boolean);
-  } else if(sel === '__all'){
-    list = activeLibrary().slice().sort((a,b)=>a.name.localeCompare(b.name));
-  } else {
-    const selLower = sel.toLowerCase();
-    list = activeLibrary()
-      .filter(e => tagList(e.muscle||'').includes(sel))
-      .sort((a,b)=>a.name.localeCompare(b.name));
-    // Nothing tagged exactly? Fall back to a looser match (e.g. "Legs" vs "Quads, Glutes")
-    if(!list.length){
-      list = db.library
-        .filter(e => String(e.muscle||'').toLowerCase().includes(selLower))
-        .sort((a,b)=>a.name.localeCompare(b.name));
-    }
-  }
-  const seenNames = new Set();
-  const opts = list.filter(e => { if(seenNames.has(e.name)) return false; seenNames.add(e.name); return true; })
-    .map(e => '<option value="' + e.name.replace(/"/g,'&quot;') + '" data-muscle="' + e.muscle.replace(/"/g,'&quot;') + '">'+esc(e.name)+'</option>').join('');
-  pick.innerHTML = '<option value="">' + (list.length ? 'Select an exercise\u2026' : 'No exercises for this group') + '</option>' + opts;
-}
-
-function jtAddExercise() {
-  const pick = document.getElementById('jt-ex-pick');
-  const name = pick.value;
-  if(!name) { toast('Select an exercise first.', 'error'); return; }
-  const opt = pick.options[pick.selectedIndex];
-  const muscle = opt ? (opt.dataset.muscle || 'General') : 'General';
-  const sets = parseInt(document.getElementById('jt-sets-pick').value) || 3;
-  const isCardio = muscle.toLowerCase().includes('cardio');
-  jtCaptureInputs();
-  if(jtExercises.length) jtExercises[jtExercises.length-1].collapsed = true;
-  jtExercises.push({ name, muscle, sets, isCardio, equipment: isCardio ? '' : (lastEquipmentFor(name)||''), modifier: '', reps: isCardio ? '30 min' : '10 reps' });
-  pick.value = '';
-  jtRenderSession();
-}
-
-// Log and Just Train share one cardio list. This records which mode the current cardio belongs
-// to, so Just Train's local draft saves (and restores) only cardio added in Just Train — never a
-// ride logged on the Log screen.
-let _cardioOwner = null;
-
-function jtAddCardioBlock() {
-  addCardioBlock();
-  _cardioOwner = 'jt';
-  // Re-render JT cardio area using shared cardioBlocks
-  jtSyncCardioDisplay();
-}
-
-function jtSyncCardioDisplay() {
-  let el = document.getElementById('jt-cardio-blocks');
-  if(!el) {
-    el = document.createElement('div');
-    el.id = 'jt-cardio-blocks';
-    const actEl = document.getElementById('jt-actions');
-    if(actEl) actEl.parentNode.insertBefore(el, actEl);
-  }
-  // Save is reachable whenever there's anything to save, cardio included
-  const actBar = document.getElementById('jt-actions');
-  if(actBar) actBar.style.display = (jtExercises.length || cardioBlocks.length) ? 'block' : 'none';
-  jtPersistDraft();
-  // Sync content from shared renderCardioBlocks but target jt-cardio-blocks
-  if(!cardioBlocks.length) { el.innerHTML = ''; return; }
-  const libCardio = db.library
-    .filter(e => MUSCLES_C.some(m => e.muscle.includes(m)) || e.muscle.toLowerCase().includes('cardio'))
-    .map(e => e.name).filter(n => !CARDIO_TYPES.includes(n));
-  const allTypes = [...CARDIO_TYPES, ...libCardio];
-  el.innerHTML = cardioBlocks.map((b, bi) => {
-    const typeOptions = allTypes.map(t =>
-      '<option value="' + t.replace(/"/g,'&quot;') + '"' + (b.type===t?' selected':'') + '>' + t + '</option>'
-    ).join('');
-    return '<div class="cardio-block-item">'
-      + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">'
-      + '<div style="display:flex;align-items:center;gap:8px;">'
-      + '<select style="font-size:13px;font-weight:500;border:none;background:transparent;color:#085041;font-family:var(--font-sans);padding:0;" data-bi="' + bi + '" onchange="updateCardioBlock(parseInt(this.dataset.bi),&quot;type&quot;,this.value);jtSyncCardioDisplay();">' + typeOptions + '</select>'
-      + '<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:20px;background:#9FE1CB;color:#04342C;">cardio</span>'
-      + '</div>'
-      + '<button data-bi="' + bi + '" onclick="removeCardioBlock(parseInt(this.dataset.bi));jtSyncCardioDisplay();" style="background:none;border:none;cursor:pointer;color:#0F6E56;font-size:16px;">×</button>'
-      + '</div>'
-      + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px;">'
-      + '<div><div style="font-size:10px;color:#0F6E56;margin-bottom:3px;">Duration (min)</div>'
-      + '<input type="number" min="1" value="' + (b.duration||'') + '" placeholder="30" data-bi="' + bi + '" oninput="updateCardioBlock(parseInt(this.dataset.bi),&quot;duration&quot;,this.value)" style="width:100%;padding:6px 8px;font-size:13px;border:0.5px solid #9FE1CB;border-radius:var(--border-radius-md);background:white;font-family:var(--font-sans);"></div>'
-      + '<div><div style="font-size:10px;color:#0F6E56;margin-bottom:3px;">Intensity</div>'
-      + '<select data-bi="' + bi + '" onchange="updateCardioBlock(parseInt(this.dataset.bi),&quot;intensity&quot;,this.value)" style="width:100%;padding:6px 8px;font-size:13px;border:0.5px solid #9FE1CB;border-radius:var(--border-radius-md);background:white;font-family:var(--font-sans);">'
-      + ['Low','Moderate','High','Intervals'].map(v => '<option value="' + v + '"' + (b.intensity===v?' selected':'') + '>' + v + '</option>').join('')
-      + '</select></div>'
-      + '<div><div style="font-size:10px;color:#0F6E56;margin-bottom:3px;">Distance (km)</div>'
-      + '<input type="number" min="0" step="0.1" value="' + (b.distance||'') + '" placeholder="optional" data-bi="' + bi + '" oninput="updateCardioBlock(parseInt(this.dataset.bi),&quot;distance&quot;,this.value)" style="width:100%;padding:6px 8px;font-size:13px;border:0.5px solid #9FE1CB;border-radius:var(--border-radius-md);background:white;font-family:var(--font-sans);"></div>'
-      + '</div>'
-      + '<input type="text" value="' + (b.note||'').replace(/"/g,'&quot;') + '" placeholder="Note..." data-bi="' + bi + '" oninput="updateCardioBlock(parseInt(this.dataset.bi),&quot;note&quot;,this.value)" style="width:100%;padding:6px 8px;font-size:12px;border:0.5px solid #9FE1CB;border-radius:var(--border-radius-md);background:white;font-family:var(--font-sans);">'
-      + '</div>';
-  }).join('');
-  const actEl = document.getElementById('jt-actions');
-  if(actEl) actEl.style.display = 'block';
-}
 
 
-// Read every on-screen Just Train input back into jtExercises. JT has no DB draft, so this
-// MUST be called before anything that re-renders (add/remove exercise, equipment change),
-// otherwise the rebuild repopulates from last-session history and typed values are lost.
-function jtCaptureInputs(){
-  const n = _jtRenderedUids ? _jtRenderedUids.length : (jtExercises||[]).length;
-  for(let ei=0; ei<n; ei++){
-    // ei is the position as DRAWN; the exercise is looked up by its stable id
-    const ex = exerciseAtRenderedPos(jtExercises||[], _jtRenderedUids, ei);
-    if(!ex) continue;
-    const nt=document.getElementById('jt-'+ei+'-note');
-    if(nt) ex.draftNote=nt.value||'';
-    if(ex.isCardio){
-      const m=document.getElementById('jt-'+ei+'-kg-0');
-      if(m) ex.draftMinutes=m.value||'';
-      continue;
-    }
-    const sets=[];
-    for(let i=0;i<(ex.sets||3);i++){
-      const kg=document.getElementById('jt-'+ei+'-kg-'+i);
-      const reps=document.getElementById('jt-'+ei+'-reps-'+i);
-      if(!kg&&!reps) continue;
-      sets.push({kg:kg?kg.value:'', reps:reps?reps.value:''});
-    }
-    if(sets.length) ex.draftSets=sets;
-    const wuRows=warmupDrafts(ex);
-    for(let w=0;w<wuRows.length;w++){
-      const wk=document.getElementById('jt-'+ei+'-wu-kg-'+w);
-      const wr=document.getElementById('jt-'+ei+'-wu-reps-'+w);
-      if(wk||wr) wuRows[w]={kg:wk?wk.value:'', reps:wr?wr.value:''};
-    }
-  }
-}
+
+
 
 // ── JUST TRAIN: COLLAPSE + SWAP ───────────────────────────────────
 // Collapse state lives on the exercise (ex.collapsed) so it survives re-renders and the
@@ -6780,12 +6922,11 @@ function nextActionHtml(prefix, ei, cur){
     + '</div>';
 }
 function setNextAction(prefix, ei, val){
-  const ex = prefix === 'jt-' ? jtExercises[ei] : (db.activeSession && db.activeSession.exercises[ei]);
+  const ex = db.activeSession && db.activeSession.exercises[ei];
   if(!ex) return;
-  if(prefix === 'jt-') jtCaptureInputs(); else autosaveDraft();
+  autosaveDraft();
   ex.nextAction = (ex.nextAction === val) ? '' : val;   // tap again to clear
-  if(prefix === 'jt-'){ jtRenderSession(); if(typeof jtSaveDraft==='function') jtSaveDraft(); }
-  else renderLog();
+  renderLog();
 }
 // Prefill adjustment from last session's verdict. Only ever applied to numbers coming from
 // history — never to anything already typed or dictated this session.
@@ -6799,244 +6940,16 @@ function adjustedPrefillKg(kg, prev, equipment){
   return kg;
 }
 
-function jtGroupMembers(ei){
-  const g = (jtExercises[ei] && jtExercises[ei].group) || '';
-  if(!g) return [ei];
-  let a = ei, b = ei;
-  while(a > 0 && (jtExercises[a-1].group||'') === g) a--;
-  while(b < jtExercises.length-1 && (jtExercises[b+1].group||'') === g) b++;
-  const out = []; for(let k=a;k<=b;k++) out.push(k);
-  return out.length > 1 ? out : [ei];
-}
-function jtToggleBlock(ei){
-  if(!jtExercises[ei]) return;
-  jtCaptureInputs();
-  const collapse = !jtExercises[ei].collapsed;
-  jtGroupMembers(ei).forEach(k => { jtExercises[k].collapsed = collapse; });
-  jtRenderSession();
-  if(typeof jtSaveDraft === 'function') jtSaveDraft();
-}
-// One-line summary shown in a collapsed header, so a folded exercise still says what was done
-function jtLoggedSummary(ei){
-  const d = (jtExercises[ei] && jtExercises[ei].draftSets) || [];
-  const done = d.filter(x => x && (x.kg || x.reps));
-  if(!done.length) return 'no sets yet';
-  const top = done.reduce((a,b) => (parseFloat(b.kg)||0) > (parseFloat(a.kg)||0) ? b : a, done[0]);
-  return done.length + ' set' + (done.length>1?'s':'') + ' \u00b7 top ' + (top.kg||'BW') + '\u00d7' + (top.reps||'?');
-}
-// Swap keeps typed and dictated numbers. The usual reason to swap in Just Train is a voice
-// import that matched the wrong exercise — wiping what was just dictated would be wrong.
-// Only untouched history prefill is dropped, since it belonged to the old exercise.
-function swapJtExercise(ei, name){
-  const ex = jtExercises[ei];
-  if(!ex || !name || name === ex.name) return;
-  const lib = (db.library||[]).find(l => l.name === name);
-  if(!lib) return;
-  jtCaptureInputs();
-  clearUntouchedPrefill(ex, ex.equipment, ex.modifier);
-  ex.name = lib.name;
-  ex.muscle = lib.muscle;
-  ex.isCardio = String(lib.muscle||'').toLowerCase().includes('cardio');
-  ex.equipment = ex.isCardio ? '' : (lastEquipmentFor(lib.name) || ex.equipment || '');
-  jtRenderSession();
-  if(typeof jtSaveDraft === 'function') jtSaveDraft();
-  toast('Swapped to ' + lib.name + ' \u2014 your numbers were kept.');
-}
 
-function jtRenderSession() {
-  // Rendering never reads the screen back. It used to capture first, which wrote the OLD
-  // screen into whatever the list had just become (a removal shifted weights onto the next
-  // exercise; a cleared prefill came straight back). Callers capture BEFORE they change state.
-  jtPersistDraft();
-  const el = document.getElementById('jt-session-content');
-  const actEl = document.getElementById('jt-actions');
-  if(!jtExercises.length) {
-    el.innerHTML = '';
-    _jtRenderedUids = [];
-    // Keep Save reachable for a cardio-only session
-    if(actEl) actEl.style.display = (_cardioOwner === 'jt' && cardioBlocks.length) ? 'block' : 'none';
-    return;
-  }
-  if(actEl) actEl.style.display = 'block';
 
-  // Runs of consecutive exercises sharing a superset group (display only — each still
-  // logs its own sets, matching how the Log screen handles supersets).
-  const jtGroupInfo = [];
-  for(let gi=0; gi<jtExercises.length;){
-    const g = jtExercises[gi].group||'';
-    if(!g){ jtGroupInfo[gi]=null; gi++; continue; }
-    let gj=gi; while(gj<jtExercises.length && (jtExercises[gj].group||'')===g) gj++;
-    const len=gj-gi;
-    if(len>=2){
-      const label = len===2?'Superset':len===3?'Tri-set':'Giant set / circuit';
-      for(let k=gi;k<gj;k++) jtGroupInfo[k]={label, isStart:k===gi, isEnd:k===gj-1};
-    } else { jtGroupInfo[gi]=null; }
-    gi=gj;
-  }
 
-  const jtSwapOpts = '<option value="">Swap exercise\u2026</option>' + activeLibrary().slice()
-    .sort((a,b)=>a.name.localeCompare(b.name))
-    .map(l=>'<option value="'+l.name.replace(/"/g,'&quot;')+'">'+l.name.replace(/</g,'&lt;')+'</option>').join('');
-  el.innerHTML = jtExercises.map((ex, ei) => {
-    const prev = getPrevData(ex.name, ex.equipment, ex.modifier);
-    const cue = getFormCue(ex.name);
 
-    // Overload banner
-    let banner = '';
-    if(prev && prev.sets && prev.sets.length) {
-      const tgt = prev.targetReps || 0;
-      const allHit = prev.sets.every(st => st.reps >= tgt);
-      if(prev.nextAction) {
-        banner = manualVerdictBanner(prev, ex);
-      } else if(allHit && prev.sets[0]?.kg) {
-        const nk = Math.round(prev.sets[0].kg * 1.025 * 2) / 2;
-        banner = '<div class="banner banner-green" style="margin-bottom:8px;"><b>Increase weight</b> — last session all sets hit. Try <b>' + nk + ' kg</b>.</div>';
-      } else if(tgt > 0 && prev.sets.some(st => st.reps < tgt)) {
-        banner = '<div class="banner banner-amber" style="margin-bottom:8px;"><b>Hold steady</b> — some sets fell short last time.</div>';
-      }
-    } else {
-      const near = getNearestVariant(ex.name, ex.equipment, ex.modifier);
-      if(near){
-        banner = nearestVariantBanner(near);
-      } else {
-        banner = '<div class="banner banner-gray" style="margin-bottom:8px;">First time — enter your starting numbers.</div>';
-      }
-    }
-
-    // Set rows
-    const isoEx = isIsometric(ex);
-    let setRows = '<div class="set-head"><span class="set-head-sp"></span><span>weight (kg)</span><span>' + (isoEx?'hold (sec)':'reps') + '</span><span class="set-head-sp"></span></div>';
-    if(ex.isCardio) {
-      setRows = '<div class="set-row"><span class="set-num">Time</span><input class="set-inp" type="number" inputmode="numeric" id="jt-' + ei + '-kg-0" placeholder="min" value="' + (ex.draftMinutes || '') + '" style="width:80px;" oninput="jtSaveDraft()"></div>';
-    } else {
-      const wStep = weightStep(ex.equipment);
-      setRows += warmupRowsHtml('jt-', ei, ex, wStep);
-      for(let i = 0; i < ex.sets; i++) {
-        const prev_set = prev && prev.sets ? prev.sets[i] : null;
-        // If we captured this row, its value is authoritative — including a deliberately
-        // cleared field. Only fall back to last session's numbers when nothing was captured.
-        const captured = ex.draftSets && i < ex.draftSets.length ? ex.draftSets[i] : null;
-        const prefillKg = captured ? (captured.kg || '') : (prev_set && prev_set.kg ? adjustedPrefillKg(prev_set.kg, prev, ex.equipment) : '');
-        let prefillReps = captured ? (captured.reps || '') : (prev_set && prev_set.reps ? prev_set.reps : '');
-        if(prefillReps === '' && isoEx) prefillReps = ISOMETRIC_DEFAULT_SECONDS;
-        const kgId = 'jt-' + ei + '-kg-' + i, repsId = 'jt-' + ei + '-reps-' + i;
-        setRows += '<div class="set-row">'
-          + '<span class="set-num">Set ' + (i+1) + '</span>'
-          + '<div class="stepper">'
-            + '<button type="button" class="step-btn minus" onclick="stepInput(\'' + kgId + '\',-' + wStep + ',false)">\u2212</button>'
-            + '<input class="set-inp set-kg" type="number" inputmode="decimal" enterkeyhint="next" id="' + kgId + '" placeholder="kg" value="' + prefillKg + '" step="' + wStep + '" min="0" oninput="jtSaveDraft()">'
-            + '<button type="button" class="step-btn plus" onclick="stepInput(\'' + kgId + '\',' + wStep + ',false)">+</button>'
-            + '</div>'
-          + '<div class="stepper">'
-            + '<button type="button" class="step-btn minus" onclick="stepInput(\'' + repsId + '\',-1,false)">\u2212</button>'
-            + '<input class="set-inp set-reps" type="number" inputmode="numeric" enterkeyhint="next" id="' + repsId + '" placeholder="' + (isoEx?'sec':'reps') + '" value="' + prefillReps + '" min="0" oninput="jtSaveDraft()">'
-            + '<button type="button" class="step-btn plus" onclick="stepInput(\'' + repsId + '\',1,false)">+</button>'
-            + '</div>'
-          + (i < ex.sets-1 ? '<button type="button" class="set-fill" title="Copy this set to the ones below" onclick="jtFillDown(' + ei + ',' + i + ')">\u2913</button>' : '<span style="width:34px;flex-shrink:0;"></span>')
-          + '</div>';
-      }
-    }
-
-    const cueHtml = cue
-      ? '<button class="cue-toggle" onclick="toggleCue(\'jt-cue-' + ei + '\')">▸ Form cue</button><div class="cue-body" id="jt-cue-' + ei + '">'+esc(cue)+'</div>'
-      : '';
-
-    const gInfo = jtGroupInfo[ei];
-    return (gInfo && gInfo.isStart ? '<div class="ss-group"><div class="ss-label">'+esc(gInfo.label)+'</div>' : '')
-      + '<div class="card" style="margin-bottom:10px;">'
-      // Header is the collapse target. The × stops propagation so removing doesn't also toggle.
-      + '<div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;" onclick="jtToggleBlock(' + ei + ')">'
-      + '<span style="font-size:14px;font-weight:500;">' + esc(ex.name) + (ex.group?'<span class="ss-badge">SS ' + ex.group + '</span>':'')
-        + (ex.nextAction ? '<span class="na-badge na-' + ex.nextAction + '">' + NEXT_ACTION_LABEL[ex.nextAction] + '</span>' : '')
-        + (ex.collapsed ? '<span style="font-size:11px;color:var(--faint);font-weight:400;margin-left:6px;">' + jtLoggedSummary(ei) + '</span>' : '')
-      + '</span>'
-      + '<span style="display:flex;align-items:center;gap:10px;">'
-        + '<button data-ei="' + ei + '" onclick="event.stopPropagation();jtRemoveExercise(parseInt(this.dataset.ei))" style="background:none;border:none;cursor:pointer;color:var(--faint);font-size:16px;">\u00d7</button>'
-        + '<span style="color:var(--faint);font-size:13px;">' + (ex.collapsed ? '\u25b8' : '\u25be') + '</span>'
-      + '</span>'
-      + '</div>'
-      + '<div id="jtbody-' + ei + '" style="margin-top:6px;' + (ex.collapsed ? 'display:none;' : '') + '">'
-      + '<div style="font-size:12px;color:var(--muted);margin-bottom:8px;">' + ex.muscle + ' · ' + ex.sets + ' sets</div>'
-      + (ex.isCardio ? '' : '<div style="display:flex;gap:8px;margin-bottom:8px;">'
-          + '<select class="set-inp" data-ei="' + ei + '" onchange="swapJtExercise(parseInt(this.dataset.ei),this.value)" style="flex:1;min-width:0;width:auto;font-size:12px;padding:5px 8px;color:var(--muted);">' + jtSwapOpts + '</select>'
-          + '</div>')
-      + (ex.isCardio ? '' : '<div style="display:flex;gap:8px;margin-bottom:8px;">'
-          + '<select class="set-inp" data-ei="' + ei + '" onchange="setJtEquipment(parseInt(this.dataset.ei),this.value)" style="flex:1;min-width:0;width:auto;font-size:12px;padding:5px 8px;">' + equipmentOptions(ex.equipment) + '</select>'
-          + '<select class="set-inp" data-ei="' + ei + '" onchange="setJtModifier(parseInt(this.dataset.ei),this.value)" style="flex:1;min-width:0;width:auto;font-size:12px;padding:5px 8px;' + (ex.modifier?'color:#92600A;font-weight:500;':'color:var(--muted);') + '">' + modifierOptions(ex.modifier) + '</select>'
-          + '<button type="button" class="exh-btn" title="Last 10 logs of this exercise" onclick="toggleExHistory(\'jt-\',' + ei + ')">\u23f1</button>'
-          + '</div>'
-          + '<div id="jt-' + ei + '-hist" class="exh-panel" style="display:none;"></div>'
-          + '<div style="display:flex;gap:8px;margin-bottom:8px;align-items:center;">'
-          + '<span style="font-size:11px;color:var(--muted);">Superset group</span>'
-          + '<select class="set-inp" data-ei="' + ei + '" title="Give adjacent exercises the same letter to group them" onchange="setJtGroup(parseInt(this.dataset.ei),this.value)" style="width:auto;font-size:12px;padding:4px 8px;color:var(--muted);">' + builderGroupOptions(ex.group) + '</select>'
-          + '</div>')
-      + banner
-      + setRows
-      + (ex.isCardio ? '' : '<div style="margin:2px 0 6px 48px;"><button type="button" class="btn btn-sm" style="font-size:11px;padding:3px 8px;" data-ei="' + ei + '" onclick="addJtSet(parseInt(this.dataset.ei))">+ Add set</button>'
-        + ((ex.sets||3)>1 ? '<button type="button" class="btn btn-sm" style="font-size:11px;padding:3px 8px;margin-left:6px;color:var(--faint);" data-ei="' + ei + '" onclick="removeJtSet(parseInt(this.dataset.ei))" title="Remove the last set">\u2212</button>' : '')
-        + '</div>')
-      + cueHtml
-      + (ex.isCardio ? '' : nextActionHtml('jt-', ei, ex.nextAction))
-      + '<input class="note-inp" type="text" id="jt-' + ei + '-note" value="' + String(ex.draftNote||'').replace(/"/g,'&quot;') + '" placeholder="Note for this exercise..." oninput="jtSaveDraft()">'
-      + '</div>'
-      + '</div>'
-      + (gInfo && gInfo.isEnd ? '</div>' : '');
-  }).join('');
-  _jtRenderedUids = jtExercises.map(exUid);
-}
-
-// ── VOICE / FREE-TEXT WORKOUT IMPORT ──────────────────────────────
-// Turns a dictated description into structured exercises. Uses Sonnet (Haiku is not
-// reliable enough for this extraction) and constrains every name to the user's library —
-// unmatched names are dropped and reported rather than silently invented. Nothing is
-// saved: parsed exercises land in the normal Just Train UI for review and correction.
-// ── JUST TRAIN DRAFT PERSISTENCE ──────────────────────────────────
-// JT holds its session in memory only, so a reload or Safari evicting the tab mid-workout
-// used to lose everything. Draft is stored locally (per user) and restored on load.
-// localStorage rather than the sessions table, so it can't collide with the Log screen's
-// single is_draft row. Device-local by design — a gym session belongs to the phone in hand.
-function jtDraftKey(){ return 'gymlog_jt_draft_' + (currentUser ? currentUser.id : 'anon'); }
-let _jtDraftTimer = null;
-function jtSaveDraft(){
-  if(typeof jtCaptureInputs === 'function') jtCaptureInputs();
-  jtPersistDraft();
-}
-// Writes current state to local storage without reading the screen.
-function jtPersistDraft(){
-  clearTimeout(_jtDraftTimer);
-  _jtDraftTimer = setTimeout(() => {
-    try {
-      const cardio = _cardioOwner === 'jt' ? cardioBlocks : [];
-      if(!jtExercises.length && !cardio.length){ localStorage.removeItem(jtDraftKey()); return; }
-      localStorage.setItem(jtDraftKey(), JSON.stringify({ savedAt: new Date().toISOString(), exercises: jtExercises, cardio }));
-    } catch(e){ console.warn('JT draft save failed', e); }
-  }, 600);
-}
-function jtClearDraft(){
-  clearTimeout(_jtDraftTimer);
-  try { localStorage.removeItem(jtDraftKey()); } catch(e){}
-}
-function jtRestoreDraft(){
-  try {
-    const raw = localStorage.getItem(jtDraftKey());
-    if(!raw) return false;
-    const d = JSON.parse(raw);
-    const exs = Array.isArray(d && d.exercises) ? d.exercises : [];
-    const cardio = Array.isArray(d && d.cardio) ? d.cardio : [];
-    if(!exs.length && !cardio.length) return false;     // a cardio-only draft is a real draft
-    // Drop stale drafts so an abandoned session doesn't resurface days later
-    if(d.savedAt && (Date.now() - new Date(d.savedAt).getTime()) > 36*3600e3){ jtClearDraft(); return false; }
-    jtExercises = exs;
-    // Restore cardio only into an empty list — never over cardio the Log screen is using
-    if(cardio.length && !cardioBlocks.length){ cardioBlocks = cardio; _cardioOwner = 'jt'; }
-    return true;
-  } catch(e){ return false; }
-}
-
-async function jtParseVoice(){
-  const ta = document.getElementById('jt-voice-text');
-  const btn = document.getElementById('jt-voice-btn');
-  const status = document.getElementById('jt-voice-status');
+// Dictation: derived from the Just Train version with only its target changed — results go
+// into the active session (one is started if none is open). The matching logic is unchanged.
+async function logParseVoice(){
+  const ta = document.getElementById('log-voice-text');
+  const btn = document.getElementById('log-voice-btn');
+  const status = document.getElementById('log-voice-status');
   const text = (ta?.value || '').trim();
   if(!text){ toast('Describe your workout first.', 'error'); return; }
 
@@ -7087,6 +7000,7 @@ async function jtParseVoice(){
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ model:AI_MODEL_EXTRACTION, max_tokens:2000, messages:[{role:'user', content:prompt}] })
     });
+    if(res.ok === false) throw new Error('voice import unavailable (' + res.status + ')');
     const data = await res.json();
     const txt = data.content.map(b => b.text || '').join('').replace(/```json|```/g,'').trim();
     let parsed;
@@ -7095,12 +7009,12 @@ async function jtParseVoice(){
 
     const added = [];
     const rejected = [];
-    _jtPendingUnmatched = [];
-    jtCaptureInputs(); // preserve anything already typed before we append
+    _pendingUnmatched = [];
+    if(db.activeSession) autosaveDraft(); // preserve anything already typed before we append
 
     // Names the model itself couldn't place — keep them so the user can map them
     (parsed.unmatched || []).forEach(u => {
-      if(u) _jtPendingUnmatched.push({ spoken: String(u), sets: [], equipment:'', modifier:'' });
+      if(u) _pendingUnmatched.push({ spoken: String(u), sets: [], equipment:'', modifier:'' });
     });
 
     (parsed.exercises || []).forEach(pe => {
@@ -7112,30 +7026,31 @@ async function jtParseVoice(){
         if(pe.name){
           rejected.push(pe.name);
           // Keep the numbers — the user only needs to say which exercise it was
-          _jtPendingUnmatched.push({ spoken: String(pe.name), sets, equipment: pe.equipment||'', modifier, minutes: pe.minutes != null ? pe.minutes : null });
+          _pendingUnmatched.push({ spoken: String(pe.name), sets, equipment: pe.equipment||'', modifier, minutes: pe.minutes != null ? pe.minutes : null });
         }
         return;
       }
-      const equipment = EQUIPMENT.includes(pe.equipment) ? pe.equipment : (lastEquipmentFor(lib.name) || '');
+      const equipment = EQUIPMENT.includes(pe.equipment) ? pe.equipment : defaultEquipmentFor(lib.name);
       const isCardio = String(lib.muscle||'').toLowerCase().includes('cardio');
       // Cardio rows render from draftMinutes, not draftSets — without this the exercise
       // appears but the dictated duration is silently dropped.
       const mins = pe.minutes != null ? pe.minutes
         : (sets.length && sets[0].reps != null ? sets[0].reps : (sets.length && sets[0].kg != null ? sets[0].kg : null));
-      jtExercises.push({
+      ensureActiveSession().exercises.push({
+        isExtra: true,
         name: lib.name, muscle: lib.muscle, sets: isCardio ? 1 : Math.max(sets.length, 1),
         isCardio, equipment: isCardio ? '' : equipment, modifier,
         group: (!isCardio && /^[A-E]$/.test(String(pe.group||'').toUpperCase())) ? String(pe.group).toUpperCase() : '',
         reps: isCardio ? ((mins != null ? mins : 30) + ' min') : '10 reps',
         wuHidden: true, wuDrafts: [], // dictated sets are working sets; no warm-up assumed
-        draftMinutes: isCardio && mins != null ? String(mins) : '',
-        draftSets: isCardio ? [] : sets.map(s => ({ kg: s.kg == null ? '' : String(s.kg), reps: s.reps == null ? '' : String(s.reps) }))
+        draftSets: isCardio ? (mins != null ? [{kg:String(mins), reps:''}] : []) : sets.map(s => ({ kg: s.kg == null ? '' : String(s.kg), reps: s.reps == null ? '' : String(s.reps) }))
       });
       added.push(lib.name);
     });
 
-    jtRenderSession();
-    jtRenderUnmatched();
+    renderLog();
+    persistDraftSoon();
+    logRenderUnmatched();
     status.textContent = '';
     if(added.length) ta.value = '';
 
@@ -7152,6 +7067,75 @@ async function jtParseVoice(){
     toast('Could not reach the AI. Try again.', 'error');
   }
   btn.disabled = false;
+}
+
+function logRenderUnmatched(){
+  let el = document.getElementById('log-unmatched');
+  if(!el){
+    el = document.createElement('div');
+    el.id = 'log-unmatched';
+    const anchor = document.getElementById('log-voice-status');
+    if(anchor && anchor.parentNode) anchor.parentNode.parentNode.appendChild(el);
+    else return;
+  }
+  if(!_pendingUnmatched.length){ el.innerHTML = ''; return; }
+
+  const opts = activeLibrary().slice().sort((a,b)=>a.name.localeCompare(b.name))
+    .map(e => '<option value="' + e.name.replace(/"/g,'&quot;') + '">'+esc(e.name)+'</option>').join('');
+
+  el.innerHTML = '<div class="banner banner-amber" style="margin-top:10px;">'
+    + '<b>Couldn\'t match ' + _pendingUnmatched.length + '</b> — pick the right exercise and I\'ll remember it next time.</div>'
+    + _pendingUnmatched.map((u, ui) => {
+        const setTxt = (u.minutes != null)
+          ? (u.minutes + ' min')
+          : (u.sets && u.sets.length
+              ? u.sets.map(s => (s.kg==null?'':s.kg+'kg\u00d7') + (s.reps==null?'?':s.reps)).join(', ')
+              : 'no numbers heard');
+        return '<div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap;">'
+          + '<div style="flex:1;min-width:120px;"><div style="font-size:13px;font-weight:500;">\u201c' + esc(u.spoken) + '\u201d</div>'
+          + '<div style="font-size:11px;color:var(--muted);">' + setTxt + '</div></div>'
+          + '<select id="log-unm-' + ui + '" class="set-inp" style="flex:1;min-width:140px;width:auto;font-size:12px;padding:5px 8px;">'
+          + '<option value="">Choose exercise\u2026</option>' + opts + '</select>'
+          + '<button class="btn btn-sm" data-ui="' + ui + '" onclick="logResolveUnmatched(parseInt(this.dataset.ui))">Add</button>'
+          + '<button class="btn btn-sm" data-ui="' + ui + '" onclick="logDismissUnmatched(parseInt(this.dataset.ui))" title="Discard">\u00d7</button>'
+          + '</div>';
+      }).join('');
+}
+
+async function logResolveUnmatched(ui){
+  const u = _pendingUnmatched[ui];
+  if(!u) return;
+  const sel = document.getElementById('log-unm-' + ui);
+  const name = sel ? sel.value : '';
+  if(!name){ toast('Pick an exercise first.', 'error'); return; }
+  const lib = (db.library||[]).find(e => e.name === name);
+  if(!lib) return;
+
+  await saveExAlias(u.spoken, lib.name); // learn it, so next time it matches automatically
+  const isCardio = String(lib.muscle||'').toLowerCase().includes('cardio');
+  const uSets = u.sets || [];
+  const uMins = u.minutes != null ? u.minutes
+    : (uSets.length && uSets[0].reps != null ? uSets[0].reps : null);
+  if(db.activeSession) autosaveDraft();
+  ensureActiveSession().exercises.push({
+        isExtra: true,
+    name: lib.name, muscle: lib.muscle, sets: isCardio ? 1 : Math.max(uSets.length, 1),
+    isCardio, equipment: isCardio ? '' : (EQUIPMENT.includes(u.equipment) ? u.equipment : defaultEquipmentFor(lib.name)),
+    modifier: MODIFIERS.includes(u.modifier) ? u.modifier : '',
+    reps: isCardio ? ((uMins != null ? uMins : 30) + ' min') : '10 reps',
+    wuHidden: true, wuDrafts: [],
+    draftSets: isCardio ? (uMins != null ? [{kg:String(uMins), reps:''}] : []) : uSets.map(s => ({ kg: s.kg==null?'':String(s.kg), reps: s.reps==null?'':String(s.reps) }))
+  });
+  _pendingUnmatched.splice(ui, 1);
+  renderLog();
+    persistDraftSoon();
+  logRenderUnmatched();
+  toast('Added ' + lib.name + ' — remembered "' + u.spoken + '".');   // toast is plain text: no escaping
+}
+
+function logDismissUnmatched(ui){
+  _pendingUnmatched.splice(ui, 1);
+  logRenderUnmatched();
 }
 
 // ── EXERCISE NAME MATCHING ────────────────────────────────────────
@@ -7254,206 +7238,18 @@ function matchLibraryExercise(name){
 }
 
 // Names the AI produced that couldn't be matched to the library, awaiting user mapping.
-let _jtPendingUnmatched = [];
+let _pendingUnmatched = [];
 
-function jtRenderUnmatched(){
-  let el = document.getElementById('jt-unmatched');
-  if(!el){
-    el = document.createElement('div');
-    el.id = 'jt-unmatched';
-    const anchor = document.getElementById('jt-voice-status');
-    if(anchor && anchor.parentNode) anchor.parentNode.parentNode.appendChild(el);
-    else return;
-  }
-  if(!_jtPendingUnmatched.length){ el.innerHTML = ''; return; }
 
-  const opts = activeLibrary().slice().sort((a,b)=>a.name.localeCompare(b.name))
-    .map(e => '<option value="' + e.name.replace(/"/g,'&quot;') + '">'+esc(e.name)+'</option>').join('');
 
-  el.innerHTML = '<div class="banner banner-amber" style="margin-top:10px;">'
-    + '<b>Couldn\'t match ' + _jtPendingUnmatched.length + '</b> — pick the right exercise and I\'ll remember it next time.</div>'
-    + _jtPendingUnmatched.map((u, ui) => {
-        const setTxt = (u.minutes != null)
-          ? (u.minutes + ' min')
-          : (u.sets && u.sets.length
-              ? u.sets.map(s => (s.kg==null?'':s.kg+'kg\u00d7') + (s.reps==null?'?':s.reps)).join(', ')
-              : 'no numbers heard');
-        return '<div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap;">'
-          + '<div style="flex:1;min-width:120px;"><div style="font-size:13px;font-weight:500;">\u201c' + u.spoken + '\u201d</div>'
-          + '<div style="font-size:11px;color:var(--muted);">' + setTxt + '</div></div>'
-          + '<select id="jt-unm-' + ui + '" class="set-inp" style="flex:1;min-width:140px;width:auto;font-size:12px;padding:5px 8px;">'
-          + '<option value="">Choose exercise\u2026</option>' + opts + '</select>'
-          + '<button class="btn btn-sm" data-ui="' + ui + '" onclick="jtResolveUnmatched(parseInt(this.dataset.ui))">Add</button>'
-          + '<button class="btn btn-sm" data-ui="' + ui + '" onclick="jtDismissUnmatched(parseInt(this.dataset.ui))" title="Discard">\u00d7</button>'
-          + '</div>';
-      }).join('');
-}
 
-async function jtResolveUnmatched(ui){
-  const u = _jtPendingUnmatched[ui];
-  if(!u) return;
-  const sel = document.getElementById('jt-unm-' + ui);
-  const name = sel ? sel.value : '';
-  if(!name){ toast('Pick an exercise first.', 'error'); return; }
-  const lib = (db.library||[]).find(e => e.name === name);
-  if(!lib) return;
 
-  await saveExAlias(u.spoken, lib.name); // learn it, so next time it matches automatically
-  const isCardio = String(lib.muscle||'').toLowerCase().includes('cardio');
-  const uSets = u.sets || [];
-  const uMins = u.minutes != null ? u.minutes
-    : (uSets.length && uSets[0].reps != null ? uSets[0].reps : null);
-  jtCaptureInputs();
-  jtExercises.push({
-    name: lib.name, muscle: lib.muscle, sets: isCardio ? 1 : Math.max(uSets.length, 1),
-    isCardio, equipment: isCardio ? '' : (EQUIPMENT.includes(u.equipment) ? u.equipment : (lastEquipmentFor(lib.name)||'')),
-    modifier: MODIFIERS.includes(u.modifier) ? u.modifier : '',
-    reps: isCardio ? ((uMins != null ? uMins : 30) + ' min') : '10 reps',
-    wuHidden: true, wuDrafts: [],
-    draftMinutes: isCardio && uMins != null ? String(uMins) : '',
-    draftSets: isCardio ? [] : uSets.map(s => ({ kg: s.kg==null?'':String(s.kg), reps: s.reps==null?'':String(s.reps) }))
-  });
-  _jtPendingUnmatched.splice(ui, 1);
-  jtRenderSession();
-  jtRenderUnmatched();
-  toast('Added ' + lib.name + ' — remembered "' + u.spoken + '".');
-}
 
-function jtDismissUnmatched(ui){
-  _jtPendingUnmatched.splice(ui, 1);
-  jtRenderUnmatched();
-}
 
-function setJtGroup(ei, val) {
-  if(jtExercises[ei]) {
-    jtCaptureInputs();
-    jtExercises[ei].group = val || '';
-    jtRenderSession();
-  }
-}
 
-function setJtModifier(ei, val) {
-  const ex = jtExercises[ei];
-  if(!ex) return;
-  jtCaptureInputs();
-  const oldEq = ex.equipment, oldMod = ex.modifier;
-  ex.modifier = val || '';
-  clearUntouchedPrefill(ex, oldEq, oldMod);
-  jtRenderSession();
-}
 
-function setJtEquipment(ei, val) {
-  const ex = jtExercises[ei];
-  if(!ex) return;
-  jtCaptureInputs();
-  const oldEq = ex.equipment, oldMod = ex.modifier;
-  ex.equipment = val;
-  clearUntouchedPrefill(ex, oldEq, oldMod);
-  jtRenderSession();
-}
 
-// Copy a Just Train set's weight & reps into the sets below it.
-function jtFillDown(ei, fromIndex){
-  const numSets=(jtExercises[ei]&&jtExercises[ei].sets)||3;
-  const kg=document.getElementById('jt-'+ei+'-kg-'+fromIndex)?.value||'';
-  const reps=document.getElementById('jt-'+ei+'-reps-'+fromIndex)?.value||'';
-  for(let i=fromIndex+1;i<numSets;i++){
-    const k=document.getElementById('jt-'+ei+'-kg-'+i); if(k) k.value=kg;
-    const r=document.getElementById('jt-'+ei+'-reps-'+i); if(r) r.value=reps;
-  }
-  jtSaveDraft();
-}
 
-function jtRemoveExercise(ei) {
-  jtCaptureInputs();
-  jtExercises.splice(ei, 1);
-  jtRenderSession();
-}
-
-let _jtSaveInFlight = null;
-// Single-flight, like the Log screen: a second click returns the save already running.
-function jtSaveSession(){
-  if(_jtSaveInFlight) return _jtSaveInFlight;
-  _jtSaveInFlight = (async () => {
-    setSaveButtonsBusy(true);
-    try { return await jtDoSaveSession(); }
-    finally { _jtSaveInFlight = null; setSaveButtonsBusy(false); }
-  })();
-  return _jtSaveInFlight;
-}
-
-async function jtDoSaveSession() {
-  // A session is valid with lifting OR cardio — a cardio-only Just Train session used to be
-  // rejected with "Add at least one exercise".
-  const hasCardio = (cardioBlocks||[]).some(b => b && b.duration);
-  if(!jtExercises.length && !hasCardio) { toast('Add an exercise or some cardio first.', 'error'); return; }
-
-  // Build the record on a COPY; the live list is only cleared after the database confirms.
-  // Previously loggedSets and cardio were written into jtExercises before the insert, so a
-  // failed save changed what the retry sent.
-  const exercises = jtExercises.map((live, idx) => {
-    const ex = JSON.parse(JSON.stringify(live));
-    // Read from where this exercise was DRAWN; one not on screen falls back to its draft
-    const ei = _jtRenderedUids ? renderedPosOf(_jtRenderedUids, live) : idx;
-    if(ei < 0){ ex.loggedSets = loggedSetsFromDraft(live); delete ex.draftSets; delete ex.collapsed; delete ex._uid; return ex; }
-    const sets = [];
-    if(ex.isCardio) {
-      const kg = parseFloat(document.getElementById('jt-' + ei + '-kg-0')?.value) || null;
-      if(kg) sets.push({kg, reps: kg});
-    } else {
-      for(let i = 0; i < ex.sets; i++) {
-        const kg = parseFloat(document.getElementById('jt-' + ei + '-kg-' + i)?.value) || null;
-        const reps = parseInt(document.getElementById('jt-' + ei + '-reps-' + i)?.value) || null;
-        if(kg || reps) sets.push({kg, reps});
-      }
-      const wuAll = warmupDrafts(live);
-      for(let w = wuAll.length-1; w >= 0; w--){
-        const wkg = parseFloat(document.getElementById('jt-' + ei + '-wu-kg-' + w)?.value) || null;
-        const wreps = parseInt(document.getElementById('jt-' + ei + '-wu-reps-' + w)?.value) || null;
-        if(wkg || wreps) sets.unshift({kg:wkg, reps:wreps, warmup:true});
-      }
-    }
-    const note = document.getElementById('jt-' + ei + '-note')?.value || '';
-    ex.loggedSets = { sets, note, kg: sets[0]?.kg, targetReps: parseInt(ex.reps) || 0, nextAction: ex.nextAction || '' };
-    delete ex.draftSets; delete ex.collapsed; delete ex._uid;
-    return ex;
-  }).concat(cardioBlocksAsExercises(cardioBlocks));
-
-  const muscles = sessionMuscles(exercises);
-  const liftMuscles = muscles.filter(m => m !== 'Cardio').slice(0,2);
-  const title = liftMuscles.length ? 'Freestyle — ' + liftMuscles.join(', ') : (hasCardio ? 'Cardio' : 'Freestyle');
-  const date = new Date().toISOString();
-
-  const {data, error} = await sb.from('sessions').insert({
-    user_id: currentUser.id, date, title,
-    muscles: JSON.stringify(muscles), exercises: JSON.stringify(exercises),
-    note: 'Freestyle session', is_draft: false
-  }).select().single();
-
-  if(error) { dbErr('Save freestyle session', error); return; }
-  db.sessions.push({...(data||{}), date:(data&&data.date)||date, title, sessionTitle: title, exercises, muscles, is_draft:false});
-  db.sessions.sort((a,b) => new Date(a.date) - new Date(b.date));
-
-  jtExercises = [];
-  jtClearDraft();
-  resetCardioBlocks();
-  const jtCardioEl = document.getElementById('jt-cardio-blocks');
-  if(jtCardioEl) jtCardioEl.innerHTML = '';
-  toast('Session saved!', 'ok');
-  // Same as the Log screen: land on the recap for what was just logged
-  if(data && data.id){ _pendingExpandId = data.id; showPage('history'); }
-  else showPage('overview');
-}
-
-function jtDiscardSession() {
-  if(!confirm('Discard this session?')) return;
-  jtExercises = [];
-  jtClearDraft();
-  resetCardioBlocks();
-  const jtCardioEl = document.getElementById('jt-cardio-blocks');
-  if(jtCardioEl) jtCardioEl.innerHTML = '';
-  jtRenderSession();
-}
 
 // ── GOALS PAGE ────────────────────────────────────────────────────
 function renderGoals() {
@@ -7679,17 +7475,18 @@ function exportHistoryCSV() {
 
   const rows = [];
   // Header
-  rows.push(csvRow(['Date','Session title','Session muscles','Exercise','Primary muscle','Secondary muscles','Equipment','Modifier','Group','Sets','Set','Warm-up','kg','Reps','Status','Exercise note','Session note']));
+  rows.push(csvRow(['Date','Session title','Session muscles','Exercise','Primary muscle','Secondary muscles','Equipment','Modifier','Group','Sets','Set','Warm-up','kg','Reps','Status','Exercise note','Session note','Duration (min)']));
 
   db.sessions.forEach(s => {
     const date = s.date ? localDateKey(s.date) : '';
     const title = (s.sessionTitle || s.title || '');
     const muscles = safeJSON(s.muscles, []).flatMap(m => tagList(m)).join('; ')   /* older sessions store comma-joined entries */;
     const sessionNote = (s.note || '');
+    const durMin = sessionDurationMin(s), durCell = durMin == null ? '' : durMin;   // blank before timing existed
     const exercises = safeJSON(s.exercises, []);
 
     if(!exercises.length) {
-      rows.push(csvRow([date, title, muscles, '', '', '', '', '', '', '', '', '', '', '', 'no exercises', '', sessionNote]));
+      rows.push(csvRow([date, title, muscles, '', '', '', '', '', '', '', '', '', '', '', 'no exercises', '', sessionNote, durCell]));
       return;
     }
 
@@ -7714,7 +7511,7 @@ function exportHistoryCSV() {
       // An exercise that was planned but never logged: kept as one row marked "skipped"
       // rather than silently dropped, so planned-vs-done stays visible in the export.
       if(!sets.length) {
-        rows.push(csvRow([date, title, muscles, exName, primaryMus, secondaryMus, eq, mod, grp, ex.sets || '', '', '', '', '', 'skipped', exNote, sessionNote]));
+        rows.push(csvRow([date, title, muscles, exName, primaryMus, secondaryMus, eq, mod, grp, ex.sets || '', '', '', '', '', 'skipped', exNote, sessionNote, durCell]));
         return;
       }
 
@@ -7736,7 +7533,8 @@ function exportHistoryCSV() {
           st.reps != null ? st.reps : '',
           'logged',
           exNote,
-          sessionNote
+          sessionNote,
+          durCell
         ]));
       });
     });
@@ -7771,6 +7569,7 @@ function addCardioBlock() {
 
   cardioBlocks.push({ type: allTypes[0], duration: '', intensity: 'Moderate', distance: '', note: '' });
   renderCardioBlocks(allTypes);
+  persistCardioLocal();
 }
 
 function renderCardioBlocks(allTypesOverride) {
@@ -7814,19 +7613,19 @@ function renderCardioBlocks(allTypesOverride) {
 
 function updateCardioBlock(bi, field, value) {
   if(cardioBlocks[bi]) cardioBlocks[bi][field] = value;
-  if(_cardioOwner === 'jt') jtPersistDraft();
+  markStarted(db.activeSession);
+  persistCardioLocal();
 }
 
 function removeCardioBlock(bi) {
   cardioBlocks.splice(bi, 1);
-  if(!cardioBlocks.length) _cardioOwner = null;
   renderCardioBlocks();
-  if(typeof jtPersistDraft === 'function') jtPersistDraft();
+  persistCardioLocal();
 }
 
 function resetCardioBlocks() {
   cardioBlocks = [];
-  _cardioOwner = null;
+  try { localStorage.removeItem(logCardioKey()); } catch(e){}
   const el = document.getElementById('cardio-blocks');
   if(el) el.innerHTML = '';
 }
@@ -8005,7 +7804,6 @@ async function mergeExercises(){
       const {error:delErr}=await sb.from('library').delete().eq('id',srcLib.id);
       // A workout in progress on this device must not bring the old name back when it's saved
       if(db.activeSession) renameInExercises(db.activeSession.exercises, srcName, dstLib, modifier);
-      if(Array.isArray(jtExercises) && renameInExercises(jtExercises, srcName, dstLib, modifier)) jtPersistDraft();
       if(delErr){ dbErr('Merge (library)',delErr); }
       else toast('Merged \u2014 '+sessionsChanged+' session'+(sessionsChanged===1?'':'s')+' and '+workoutsChanged+' saved workout'+(workoutsChanged===1?'':'s')+' updated.');
     }
@@ -8082,6 +7880,100 @@ function renderLibraryReview(useCount,lastUsed){
     }).join('');
 }
 
+// ── MISSING EQUIPMENT ─────────────────────────────────────────────
+// Past entries logged before equipment was recorded. Each exercise name gets a suggestion,
+// in order of how trustworthy it is: how you usually log THAT exercise; the equipment its name
+// states; how you log the current exercise it resembles. You confirm; only the empty equipment
+// field of completed sessions is written — names, sets and everything else are untouched.
+function missingEquipmentRows(){
+  const blank = {}, usual = {};
+  (db.sessions||[]).forEach(s => { if(s.is_draft) return;
+    (s.exercises||[]).forEach(e => {
+      if(!e || e.isCardio || !e.name) return;
+      // "Usual" counts only work actually done: a skipped entry carries the template's
+      // equipment, not what you used
+      if(e.equipment){ if(workingSets(e).length){ const u = usual[e.name] = usual[e.name] || {}; u[e.equipment] = (u[e.equipment]||0) + 1; } }
+      else blank[e.name] = (blank[e.name]||0) + 1;
+    }); });
+  const top = n => { const u = usual[n]; return u ? Object.entries(u).sort((a,b) => b[1]-a[1])[0][0] : ''; };
+  return Object.entries(blank).map(([name, n]) => {
+    let eq = top(name), why = eq ? 'how you usually log it' : '';
+    if(!eq){ eq = equipmentFromName(name); if(eq) why = 'from the name'; }
+    if(!eq){ const like = matchLibraryExercise(name); if(like && like.name !== name){ eq = top(like.name); if(eq) why = 'like ' + like.name; } }
+    return {name, n, eq: EQUIPMENT.includes(eq) ? eq : '', why};
+  }).sort((a,b) => b.n - a.n || a.name.localeCompare(b.name));
+}
+
+function renderMissingEquipment(){
+  const el = document.getElementById('eqfix-list');
+  if(!el) return;
+  const rows = missingEquipmentRows();
+  if(!rows.length){ el.innerHTML = '<p style="font-size:13px;color:var(--muted);">Every logged exercise has its equipment. \u2713</p>'; return; }
+  const withSug = rows.filter(r => r.eq);
+  const total = rows.reduce((t,r) => t + r.n, 0);
+  el.innerHTML = '<div style="font-size:12px;color:var(--muted);margin-bottom:8px;">' + total + ' entries across ' + rows.length + ' exercises.</div>'
+    + (withSug.length ? '<button class="btn btn-dark btn-sm" style="margin-bottom:10px;" onclick="applyAllEquipmentSuggestions()">Apply all ' + withSug.length + ' suggestions</button>' : '')
+    + rows.map((r, i) => '<div style="display:grid;grid-template-columns:1fr auto;gap:6px 8px;align-items:center;padding:7px 0;border-top:0.5px solid var(--border);">'
+      + '<div style="min-width:0;"><div style="font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;">' + esc(r.name) + ' <span style="color:var(--faint);font-weight:400;">\u00d7' + r.n + '</span></div>'
+      + '<div style="font-size:11px;color:var(--faint);">' + (r.why ? 'Suggested ' + esc(r.why) : 'No suggestion \u2014 pick one') + '</div></div>'
+      + '<div style="display:flex;gap:6px;align-items:center;">'
+      + '<select id="eqfix-sel-' + i + '" data-name="' + esc(r.name) + '" style="font-size:12px;padding:4px 6px;width:auto;">' + equipmentOptions(r.eq) + '</select>'
+      + '<button class="btn btn-sm" data-i="' + i + '" onclick="applyEquipmentRow(parseInt(this.dataset.i))">Set</button></div></div>').join('');
+}
+function applyEquipmentRow(i){
+  const sel = document.getElementById('eqfix-sel-' + i);
+  if(!sel) return;
+  if(!sel.value){ toast('Choose the equipment first.', 'error'); return; }
+  fillMissingEquipment({[sel.dataset.name]: sel.value});
+}
+function applyAllEquipmentSuggestions(){
+  const map = {};
+  missingEquipmentRows().forEach(r => { if(r.eq) map[r.name] = r.eq; });
+  fillMissingEquipment(map);
+}
+
+// Writes the chosen equipment into every completed session where that exercise has none.
+// Same rules as merging: read the server's rows (not local copies), refuse if the read looks
+// incomplete, write copies, re-check afterwards, and re-sync whatever happened. Nothing is
+// deleted, so a failure is harmless and running it again finishes the job.
+async function fillMissingEquipment(map){
+  const names = Object.keys(map||{}).filter(n => EQUIPMENT.includes(map[n]));
+  if(!names.length || !currentUser) return;
+  const entries = missingEquipmentRows().filter(r => names.includes(r.name)).reduce((t,r) => t + r.n, 0);
+  if(!confirm('Set equipment on ' + entries + ' past entr' + (entries===1?'y':'ies') + ' across ' + names.length + ' exercise' + (names.length===1?'':'s') + '?\n\nOnly entries with no equipment are changed.')) return;
+  const status = document.getElementById('eqfix-status');
+  const say = t => { if(status) status.textContent = t; };
+  const uid = currentUser.id;
+  let changedRows = 0, failed = 0;
+  try {
+    say('Reading your history\u2026');
+    const rows = (await fetchAllRows('sessions','user_id',uid)).filter(r => !r.is_draft);
+    const localDone = (db.sessions||[]).filter(x => !x.is_draft).length;
+    if(rows.length < localDone) throw new Error('could only read ' + rows.length + ' of your ' + localDone + ' sessions');
+    for(const row of rows){
+      const exs = JSON.parse(JSON.stringify(safeJSON(row.exercises, [])));
+      let n = 0;
+      exs.forEach(e => { if(e && !e.isCardio && !e.equipment && map[e.name]){ e.equipment = map[e.name]; n++; } });
+      if(!n) continue;
+      const r = await sb.from('sessions').update({exercises: JSON.stringify(exs)}).eq('id', row.id);
+      if(r && r.error) failed++; else { changedRows++; say('Updating\u2026 ' + changedRows); }
+    }
+    // Re-check on the server: nothing named here may still be blank
+    const after = (await fetchAllRows('sessions','user_id',uid)).filter(r => !r.is_draft);
+    const left = after.reduce((t,r) => t + safeJSON(r.exercises,[]).filter(e => e && !e.isCardio && !e.equipment && map[e.name]).length, 0);
+    if(failed || left) toast('Equipment set on ' + changedRows + ' session' + (changedRows===1?'':'s') + ', but ' + (left || failed) + ' couldn\u2019t be updated. Run it again to finish.', 'error');
+    else toast('Equipment set on ' + entries + ' entr' + (entries===1?'y':'ies') + ' in ' + changedRows + ' session' + (changedRows===1?'':'s') + '.');
+  } catch(e){
+    console.error(e);
+    toast('Stopped: ' + (e.message||e) + '. Nothing else was changed.', 'error');
+  } finally {
+    say('');
+    try { await loadUserData(); } catch(e){}
+    invalidateMuscleCache();
+    renderMissingEquipment();
+  }
+}
+
 async function renderLibrary(){
   if(!currentUser) return;
   document.getElementById('lib-count').textContent='...';
@@ -8093,6 +7985,7 @@ async function renderLibrary(){
   const nArch=db.library.filter(e=>e.archived).length;
   document.getElementById('lib-count').textContent=db.library.length+(nArch?' ('+nArch+' archived)':'');
   populateMergeSelects();
+  renderMissingEquipment();
   if(!db.library.length){
     document.getElementById('lib-display').innerHTML='<p style="font-size:13px;color:var(--muted);">No exercises yet. Paste your list above and click Import.</p>';
     return;
