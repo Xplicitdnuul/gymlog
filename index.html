@@ -384,6 +384,20 @@ html.mobile-layout .hs-chart { height:300px; }
 
 /* An exercise with no equipment yet: nudge, don't block */
 select.needs-eq { border-color: #E0A100; box-shadow: 0 0 0 1px rgba(224,161,0,0.35); }
+
+/* Rest timer: a bar pinned to the bottom of the screen, clear of the phone's home indicator */
+.rest-bar { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  z-index: 300; width: min(440px, calc(100% - 24px)); background: #1F2937; color: #fff; border-radius: 12px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.25); overflow: hidden; }
+.rest-bar.over { background: #2E7D32; }
+.rest-progress { height: 3px; background: rgba(255,255,255,0.6); transition: width 0.5s linear; }
+.rest-row { display: flex; align-items: center; gap: 8px; padding: 9px 12px; }
+.rest-main { flex: 1; min-width: 0; }
+.rest-time { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.rest-label { font-size: 11px; opacity: 0.8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rest-bar button { background: rgba(255,255,255,0.15); color: #fff; border: 0; border-radius: 8px; padding: 8px 10px; font-size: 13px; }
+.rest-btn { font-size: 11px !important; padding: 3px 8px !important; margin-left: 6px; }
+body.resting .page { padding-bottom: 90px; }
 </style>
 </head>
 <body>
@@ -992,8 +1006,8 @@ const SUPA_KEY = 'sb_publishable_AkKqGh9uB4I3q9dQJ7UTOQ_cI0s6bOc';
 if(typeof supabase === 'undefined') { document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;"><h2>Failed to load Supabase library.</h2><p>Please check your internet connection and reload the page.</p></div>'; throw new Error('Supabase not loaded'); }
 // Bumped with every shipped batch, so the build you're running is visible under
 // Goals & profile → App version (Safari can keep serving a cached copy).
-const APP_VERSION = '1.11.0';
-const BUILD_STAMP = '2026-11-15 equipment';
+const APP_VERSION = '1.13.0';
+const BUILD_STAMP = '2026-11-16 rest, ramp, update workout';
 // Version tracking — no longer need to clear localStorage auth tokens
 // since we now use cookie-based session storage
 const storedVersion = localStorage.getItem('gymlog_version');
@@ -1050,6 +1064,8 @@ window.addEventListener('online', async () => {
     } else {
       // Session still valid — refresh token and reload data if needed
       await sb.auth.refreshSession();
+      // A draft that failed while offline is sent now, without waiting for the next edit
+      if(db.activeSession && db.activeSession._sync === 'failed') retryDraftSave();
       if(db.library.length === 0 || db.profile.name === '') {
         console.log('Data missing after network restore — reloading...');
         _dataLoadedForUid = null;
@@ -1231,6 +1247,47 @@ function warmupDrafts(ex){
   return ex.wuDrafts;
 }
 // Build the warm-up rows for one exercise. `prefix` is the Log screen's id prefix ('ex-').
+// ── WARM-UP RAMP ──────────────────────────────────────────────────
+// Fills the warm-up rows from your first working weight. Bars: empty bar (barbell only — trap
+// bars vary in weight), then about 50%, 70% and, for heavy work, 85%. Everything else: 50% and
+// 75%. Rounded to the equipment's step; never for bodyweight, holds or cardio. The rows are
+// ordinary warm-up rows afterwards — change or remove them as you like.
+const BAR_TYPES = ['Barbell','Trap Bar','Smith machine'];
+function warmupRamp(ex, workKg){
+  const W = parseFloat(workKg);
+  if(!ex || !(W > 0) || ex.isCardio || isIsometric(ex) || ex.equipment === 'Bodyweight') return null;
+  const step = weightStep(ex.equipment);
+  const r = x => Math.max(step, Math.round(x / step) * step);
+  let plan;
+  if(BAR_TYPES.includes(ex.equipment) && W >= 60){
+    plan = [[ex.equipment === 'Barbell' ? 20 : r(W*0.3), 10], [r(W*0.5), 5], [r(W*0.7), 3]];
+    if(W >= 100) plan.push([r(W*0.85), 1]);
+  } else if(W >= 20){
+    plan = [[r(W*0.5), 8], [r(W*0.75), 4]];
+  } else {
+    plan = [[r(W*0.5), 10]];
+  }
+  // never at or above the working weight, never the same weight twice
+  const out = [];
+  plan.forEach(([kg, reps]) => { if(kg < W && !out.some(o => o.kg === kg)) out.push({kg, reps}); });
+  return out.length ? out.slice(0, MAX_WARMUP_SETS).map(o => ({kg:String(Math.round(o.kg*100)/100), reps:String(o.reps)})) : null;
+}
+function canRamp(ex){ return !!ex && !ex.isCardio && !isIsometric(ex) && ex.equipment !== 'Bodyweight'; }
+function applyWarmupRamp(ei){
+  const s = db.activeSession; const ex = s && s.exercises[ei];
+  if(!ex) return;
+  autosaveDraft();                                    // the working weight shown is what counts
+  const first = (ex.draftSets||[]).find(d => d && parseFloat(d.kg) > 0);
+  if(!first){ toast('Enter your first working weight, then tap Ramp up.', 'error'); return; }
+  const plan = warmupRamp(ex, first.kg);
+  if(!plan){ toast('That weight is too light to ramp up to.', 'error'); return; }
+  if(warmupDrafts(ex).some(w => w && (w.kg || w.reps)) && !confirm('Replace your warm-up sets with a ramp to ' + parseFloat(first.kg) + ' kg?')) return;
+  ex.wuDrafts = plan;
+  ex.wuHidden = false;
+  renderLog();
+  persistDraftSoon();
+}
+
 function warmupRowsHtml(prefix, ei, ex, wStep){
   const rows = warmupDrafts(ex);
   const save = 'autosaveDraft()';
@@ -1250,7 +1307,7 @@ function warmupRowsHtml(prefix, ei, ex, wStep){
       + '</div>';
   });
   if(rows.length < MAX_WARMUP_SETS){
-    html += '<div style="margin:0 0 6px 48px;"><button type="button" class="btn btn-sm" style="font-size:11px;padding:3px 8px;" onclick="addWarmupRow(\''+prefix+'\','+ei+')">+ Add warm-up set</button></div>';
+    html += '<div style="margin:0 0 6px 48px;"><button type="button" class="btn btn-sm" style="font-size:11px;padding:3px 8px;" onclick="addWarmupRow(\''+prefix+'\','+ei+')">+ Add warm-up set</button>'+(canRamp(ex)?'<button type="button" class="btn btn-sm" style="font-size:11px;padding:3px 8px;margin-left:6px;" data-ei="'+ei+'" onclick="applyWarmupRamp(parseInt(this.dataset.ei))" title="Fill warm-ups from your first working weight">Ramp up</button>':'')+'</div>';
   }
   return html;
 }
@@ -1307,7 +1364,7 @@ function assertCurrent(gen){ if(gen !== _authGen) throw new StaleLoad('signed ou
 // Every container the app fills with user content. Cleared on sign-out so nothing drawn for one
 // account is visible to the next (a previous user's coach review stayed on screen). The test
 // suite re-scans the page markup and fails if a new container isn't listed here.
-const USER_CONTENT_IDS = ['eqfix-list','eqfix-status','auth-error','auth-notice','overlay','nav-log-badge','overview-greeting','overview-active-prog','overview-quickstart','overview-metrics','overview-signals','overview-skipped','overview-last-session','overview-muscles','overview-goals','recent-sessions','planner-date','planner-weights','planner-cardio','muscle-settings-list','planner-estimate','gen-status','planner-result','log-content','saved-workouts-list','progress-metrics','cal-grid','cal-legend','muscle-heatmap','progress-goals','hardsets-content','stalling-content','volume-content','strength-ex-filter','cardio-stats','compare-content','pr-content','ai-report-age','ai-report-status','ai-report-content','timeoff-list','body-history','builder-ex-list','active-programme-section','programme-list','prog-gen-status','prog-day-list','suggestion-panel','sug-status','merge-status','lib-review','lib-display','history-content','goals-page-list','goals-list','backup-status','log-unmatched','log-voice-status','log-finish'];
+const USER_CONTENT_IDS = ['rest-bar','eqfix-list','eqfix-status','auth-error','auth-notice','overlay','nav-log-badge','overview-greeting','overview-active-prog','overview-quickstart','overview-metrics','overview-signals','overview-skipped','overview-last-session','overview-muscles','overview-goals','recent-sessions','planner-date','planner-weights','planner-cardio','muscle-settings-list','planner-estimate','gen-status','planner-result','log-content','saved-workouts-list','progress-metrics','cal-grid','cal-legend','muscle-heatmap','progress-goals','hardsets-content','stalling-content','volume-content','strength-ex-filter','cardio-stats','compare-content','pr-content','ai-report-age','ai-report-status','ai-report-content','timeoff-list','body-history','builder-ex-list','active-programme-section','programme-list','prog-gen-status','prog-day-list','suggestion-panel','sug-status','merge-status','lib-review','lib-display','history-content','goals-page-list','goals-list','backup-status','log-unmatched','log-voice-status','log-finish'];
 
 function clearUserScreens(){
   USER_CONTENT_IDS.forEach(id => { const el = document.getElementById(id); if(el) el.innerHTML = ''; });
@@ -1325,6 +1382,8 @@ function esc(v){
 
 function resetUserState(){
   _authGen++;
+  if(typeof stopRest === 'function') stopRest();
+  if(typeof db !== 'undefined' && db) db.pendingTemplateUpdate = null;
   clearUserScreens();
   currentUser = null;
   db = freshDb();
@@ -1550,6 +1609,7 @@ async function loadUserDataInner(gen) {
   // Restore any in-progress draft session — reuse the row already fetched above rather
   // than issuing an identical second query
   const draftData = draft.data;
+  const liveBefore = !!(db.activeSession && activeSessionHasWork());   // a workout already open in this page
   if(draftData&&draftData.length){
     const d=draftData[0];
     // Clean up drafts older than 7 days automatically
@@ -1578,6 +1638,10 @@ async function loadUserDataInner(gen) {
     };
     } // end age check
   }
+  if(db.activeSession && db.activeSession.draft_id && !liveBefore && !db.activeSession._serverHash)
+    db.activeSession._serverHash = contentHash(db.activeSession);   // restored from the server: nothing unsent
+  // The copy on this device wins if it holds changes the server never confirmed
+  reconcileLocalSessionCopy(liveBefore, !(draft && draft.error));
   const sw = await sb.from('saved_workouts').select('*').eq('user_id',uid).order('saved_at');
   assertCurrent(gen);
   db.savedWorkouts = keepOrReplace('saved workouts', sw, rows => rows.map(w=>({
@@ -2563,6 +2627,7 @@ function confirmReplaceActiveSession(){
   if(!confirm('You have "' + title + '" in progress. Replace it? What you\u2019ve entered will be lost.')) return false;
   const old = db.activeSession;
   old._discarded = true;
+  clearLocalSessionCopy();
   clearTimeout(_draftSaveTimer);
   _draftWriteChain = _draftWriteChain.then(async () => {
     if(old.draft_id){ const r = await sb.from('sessions').delete().eq('id', old.draft_id); if(r && r.error) console.warn('old draft cleanup', r.error); }
@@ -2580,6 +2645,8 @@ function loadSavedWorkout(i){
   // history only fills what the template leaves blank. A blank method ("Standard") can't be told
   // apart from "never set" — most templates predate the field — so it's filled with the method
   // last used WITH THAT EQUIPMENT, which keeps habits like unilateral pulldowns.
+  // Each exercise remembers its place in the template, so changes can be offered back to it
+  exercises.forEach((ex, idx) => { if(ex) ex.tplIndex = idx; });
   exercises.forEach(ex => {
     if(!ex || ex.isCardio) return;
     if(ex.equipment){
@@ -2590,7 +2657,12 @@ function loadSavedWorkout(i){
       else ex.equipment = equipmentFromName(ex.name);
     }
   });
+  // The baseline for "what changed today": the setup each exercise STARTED with, after blanks
+  // were filled from history. Comparing to the raw template instead would offer the same
+  // filled-in method after every session.
+  exercises.forEach(ex => { if(ex) ex.tplLoaded = {name:ex.name, equipment:ex.equipment||'', modifier:ex.modifier||'', sets:ex.sets||0, group:ex.group||''}; });
   db.activeSession = {
+    sourceWorkoutId: w.id,
     sessionTitle: w.sessionTitle || w.title || 'Custom workout',
     exercises: exercises,
     muscles: JSON.parse(JSON.stringify(muscles)),
@@ -3075,7 +3147,7 @@ function renderLog() {
       const idx=st ? (st.isRest ? st.nextTrainIdx : st.todayIdx) : null, d=idx!=null ? days[idx] : null;
       if(d && d.type!=='rest') today='<button class="btn btn-dark btn-sm" data-prog="'+esc(prog.id)+'" data-day="'+idx+'" onclick="startProgrammeDayByIndex(this.dataset.prog,parseInt(this.dataset.day))">Start '+esc(d.workoutTitle||('Day '+(idx+1)))+(st.isRest?' (rest day)':'')+'</button>';
     }
-    el.innerHTML='<div class="card"><div style="font-size:15px;font-weight:500;margin-bottom:4px;">Start a workout</div>'
+    el.innerHTML=templateOfferHtml()+'<div class="card"><div style="font-size:15px;font-weight:500;margin-bottom:4px;">Start a workout</div>'
       +'<p style="font-size:13px;color:var(--muted);margin-bottom:10px;">Start today\u2019s programme day, load a saved workout below, plan one \u2014 or just add exercises, cardio or a description in the card below.</p>'
       +'<div style="display:flex;gap:8px;flex-wrap:wrap;">'+today+'<button class="btn btn-sm" onclick="goToPlanner()">Plan a session</button></div></div>';
     updateNavBadge();
@@ -3178,7 +3250,7 @@ function renderLog() {
         +'</div>';
       setRows+='<div class="stepper">'
         +'<button type="button" class="step-btn minus" onclick="stepInput(\''+repsId+'\',-1)">\u2212</button>'
-        +'<input class="set-inp set-reps" type="number" inputmode="numeric" enterkeyhint="next" id="'+repsId+'" placeholder="'+(isoEx?'sec':'reps')+'" value="'+prefillReps+'" min="0" oninput="autosaveDraft()">'
+        +'<input class="set-inp set-reps" type="number" inputmode="numeric" enterkeyhint="next" id="'+repsId+'" placeholder="'+(isoEx?'sec':'reps')+'" value="'+prefillReps+'" min="0" oninput="autosaveDraft()" onchange="restAfterSet('+ei+')">'
         +'<button type="button" class="step-btn plus" onclick="stepInput(\''+repsId+'\',1)">+</button>'
         +'</div>';
       if(i<numSets-1) setRows+='<button type="button" class="set-fill" title="Copy this set to the ones below" onclick="fillDown('+ei+','+i+')">\u2913</button>';
@@ -3233,6 +3305,7 @@ function renderLog() {
       html2+=setRows;
       html2+='<div style="margin:2px 0 6px 48px;"><button type="button" class="btn btn-sm" style="font-size:11px;padding:3px 8px;" data-ei="'+ei+'" onclick="addLogSet(parseInt(this.dataset.ei))">+ Add set</button>'
         +(numSets>1?'<button type="button" class="btn btn-sm" style="font-size:11px;padding:3px 8px;margin-left:6px;color:var(--faint);" data-ei="'+ei+'" onclick="removeLogSet(parseInt(this.dataset.ei))" title="Remove the last set">\u2212</button>':'')
+        +(ei===Math.max(...logGroupMembers(ei))?'<button type="button" class="btn btn-sm rest-btn" data-ei="'+ei+'" onclick="startRest(parseInt(this.dataset.ei))" title="Start the rest timer">\u23f1 Rest '+fmtRest(restSecondsFor(ex))+'</button>':'')
         +'</div>';
     }
     html2+=cueHtml;
@@ -3253,6 +3326,7 @@ function renderLog() {
   restoreCardioLocal();
   renderCardioBlocks();
   s._renderedUids = s.exercises.map(exUid);     // what was drawn where — capture relies on it
+  saveLocalSessionCopy();
   updateNavBadge();
   renderSavedWorkouts();
 }
@@ -3361,15 +3435,22 @@ function swapLogExercise(ei,name){
   if(!db.activeSession||!name) return;
   const ex=db.activeSession.exercises[ei];
   if(!ex) return;
+  // Read the screen FIRST: reading it after the swap (as before) copied the old exercise's
+  // numbers into the new one — Chest Fly showed Bench Press's 80 kg and its "Paused" method.
+  autosaveDraft();
+  // Numbers still equal to the old exercise's prefill are cleared, so the new exercise prefills
+  // from its own history; anything typed (e.g. dictated onto a misheard name) is kept.
+  clearUntouchedPrefill(ex, ex.equipment, ex.modifier);
   const lib=db.library.find(l=>l.name===name);
+  const last=lastSetupFor(name);
   ex.name=name;
   if(lib) ex.muscle=lib.muscle;
-  ex.equipment=lastEquipmentFor(name)||'';
+  ex.equipment = last ? last.equipment : defaultEquipmentFor(name);
+  ex.modifier = last ? (last.modifier||'') : '';
   ex.isRepeat=false;
-  delete ex.draftSets;
   delete ex.loggedSets;
-  autosaveDraft();
   renderLog();
+  persistDraftSoon();
 }
 
 // Nudge a numeric input by delta (used by the +/- steppers). Never goes below 0.
@@ -3565,6 +3646,65 @@ function toggleExerciseDone(ei){
   renderLog();
 }
 
+// ── UPDATE THE WORKOUT FROM WHAT YOU DID ──────────────────────────
+// After saving a session that came from a saved workout, anything that differed — a swap,
+// equipment, method, set count, superset grouping, an added exercise — is offered back to the
+// template, listed exactly. Skipped exercises stay in it (skipping is about today). Programme
+// days point at the workout, so they pick the change up too.
+function templateChanges(s){
+  if(!s || s.sourceWorkoutId == null) return null;
+  const w = (db.savedWorkouts||[]).find(x => String(x.id) === String(s.sourceWorkoutId));
+  if(!w) return null;
+  const tpl = JSON.parse(JSON.stringify(safeJSON(w.exercises, [])));
+  const next = JSON.parse(JSON.stringify(tpl));
+  const lines = [];
+  const v = x => x || '';
+  (s.exercises||[]).forEach(ex => {
+    if(!ex) return;
+    if(ex.tplIndex == null){                     // added during the session
+      if(ex.skipped) return;
+      next.push({name:ex.name, muscle:ex.muscle, sets:ex.sets||3, reps:ex.reps||'10 reps', equipment:v(ex.equipment),
+        modifier:v(ex.modifier), group:v(ex.group), isCardio:!!ex.isCardio, isRepeat:false});
+      lines.push('Add ' + ex.name);
+      return;
+    }
+    const t = tpl[ex.tplIndex], n = next[ex.tplIndex];
+    if(!t) return;
+    const b = ex.tplLoaded || {name:t.name, equipment:v(t.equipment), modifier:v(t.modifier), sets:t.sets||0, group:v(t.group)};
+    if(ex.name !== b.name){ n.name = ex.name; n.muscle = ex.muscle; n.equipment = v(ex.equipment); n.modifier = v(ex.modifier); lines.push(b.name + ' \u2192 ' + ex.name); }
+    else {
+      if(!ex.isCardio && ex.equipment && v(ex.equipment) !== b.equipment){ n.equipment = ex.equipment; lines.push(ex.name + ': ' + (b.equipment || 'no equipment') + ' \u2192 ' + ex.equipment); }
+      if(!ex.isCardio && v(ex.modifier) !== b.modifier){ n.modifier = v(ex.modifier); lines.push(ex.name + ': ' + (b.modifier || 'standard') + ' \u2192 ' + (ex.modifier || 'standard')); }
+    }
+    if(!ex.isCardio && ex.sets && (ex.sets||0) !== b.sets){ n.sets = ex.sets; lines.push(ex.name + ': ' + (b.sets||'?') + ' \u2192 ' + ex.sets + ' sets'); }
+    if(v(ex.group) !== b.group){ n.group = v(ex.group); lines.push(ex.name + ': ' + (ex.group ? 'superset ' + ex.group : 'no superset')); }
+  });
+  return lines.length ? {workoutId: w.id, title: w.sessionTitle || w.title || 'this workout', lines, exercises: next} : null;
+}
+function templateOfferHtml(){
+  const u = db.pendingTemplateUpdate;
+  if(!u) return '';
+  const shown = u.lines.slice(0, 8).map(l => '<li>' + esc(l) + '</li>').join('')
+    + (u.lines.length > 8 ? '<li>\u2026and ' + (u.lines.length - 8) + ' more</li>' : '');
+  return '<div class="card" style="border-color:rgba(46,125,50,0.35);">'
+    + '<div style="font-size:14px;font-weight:500;margin-bottom:4px;">Update \u201c' + esc(u.title) + '\u201d?</div>'
+    + '<div style="font-size:12px;color:var(--muted);margin-bottom:6px;">Today differed from the workout:</div>'
+    + '<ul style="font-size:13px;margin:0 0 10px 18px;line-height:1.6;">' + shown + '</ul>'
+    + '<div style="display:flex;gap:8px;"><button class="btn btn-dark btn-sm" onclick="applyTemplateUpdate()">Update workout</button>'
+    + '<button class="btn btn-sm" onclick="dismissTemplateUpdate()">Keep as it is</button></div></div>';
+}
+async function applyTemplateUpdate(){
+  const u = db.pendingTemplateUpdate; if(!u) return;
+  const r = await sb.from('saved_workouts').update({exercises: JSON.stringify(u.exercises), muscles: JSON.stringify(sessionMuscles(u.exercises))}).eq('id', u.workoutId);
+  if(r && r.error){ toast('Couldn\u2019t update the workout \u2014 nothing was changed. Try again.', 'error'); return; }
+  const w = (db.savedWorkouts||[]).find(x => String(x.id) === String(u.workoutId));
+  if(w){ w.exercises = u.exercises; w.muscles = sessionMuscles(u.exercises); }
+  db.pendingTemplateUpdate = null;
+  toast('Updated \u201c' + u.title + '\u201d.');
+  renderLog();
+}
+function dismissTemplateUpdate(){ db.pendingTemplateUpdate = null; renderLog(); }
+
 // Skip a planned exercise for this session. Kept in the session (so planned-vs-done stays
 // visible in history and export) but saved with no sets, regardless of prefilled values.
 function toggleSkipExercise(ei){
@@ -3712,6 +3852,7 @@ async function autosaveDraft(){
   const s=db.activeSession;
   captureLogInputs(s);
   markStarted(s);
+  saveLocalSessionCopy();
   s.sessionNote=document.getElementById('session-note')?.value||'';
   if(s._finalizing || s._discarded) return;
   // Debounce — save 1s after last keystroke. The write itself goes through a queue so two
@@ -3762,9 +3903,143 @@ function durationLabel(min){
   return min < 60 ? min + ' min' : Math.floor(min/60) + ' h ' + String(min % 60).padStart(2,'0') + ' min';
 }
 
+// ── OFFLINE COPY ──────────────────────────────────────────────────
+// The workout in progress is also kept on this device, with a fingerprint of the content the
+// server last CONFIRMED. If the device copy's content differs, it holds work the server never
+// received — and on the next load it wins. Otherwise the
+// server's draft is used, as before. Cleared when the workout is saved, discarded or replaced.
+// Fingerprint of what a draft write sends (exercises + note), ignoring internal ids and
+// display-only flags that never trigger a save. "Unsynced" means the device copy's content
+// differs from the last content the server confirmed — content, not timestamps, so there's no race.
+function contentHash(s){
+  // Drawing fills in defaults (equipment "" where it was missing, an empty warm-up row); those
+  // are not edits. Blank equals missing — except a set's kg/reps, where blank means "cleared".
+  const emptyRow = x => x && typeof x === 'object' && !Array.isArray(x) && Object.values(x).every(y => y === '' || y == null);
+  const str = JSON.stringify({e: (s && s.exercises) || [], n: (s && s.sessionNote) || ''}, (k, v) => {
+    if(k && (k[0] === '_' || k === 'collapsed' || k === 'wuHidden')) return undefined;
+    if((v === '' || v === null) && k !== 'kg' && k !== 'reps') return undefined;
+    if(k === 'wuDrafts' && Array.isArray(v)){ const kept = v.filter(x => !emptyRow(x)); return kept.length ? kept : undefined; }
+    return v;
+  });
+  let h = 0x811c9dc5;
+  for(let i = 0; i < str.length; i++){ h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h.toString(36) + ':' + str.length;
+}
+function localSessionKey(){ return 'gymlog_log_session_' + (currentUser ? currentUser.id : 'anon'); }
+function saveLocalSessionCopy(){
+  const s = db.activeSession;
+  if(!s || !currentUser || s._finalizing || s._discarded) return;
+  try {
+    const session = {};
+    Object.keys(s).forEach(k => { if(k[0] !== '_') session[k] = s[k]; });   // no internal state
+    localStorage.setItem(localSessionKey(), JSON.stringify({savedAt:new Date().toISOString(), serverHash:s._serverHash||null, session}));
+  } catch(e){ console.warn('local session copy failed', e); }
+}
+function clearLocalSessionCopy(){ try { localStorage.removeItem(localSessionKey()); } catch(e){} }
+function readLocalSessionCopy(){
+  try {
+    const c = JSON.parse(localStorage.getItem(localSessionKey()) || 'null');
+    if(!c || !c.session || !Array.isArray(c.session.exercises)) return null;
+    if(c.savedAt && (Date.now() - new Date(c.savedAt).getTime()) > 36*3600e3){ clearLocalSessionCopy(); return null; }
+    return c;
+  } catch(e){ return null; }
+}
+// liveBefore: a workout was already in progress in this page (a background reload) — leave it.
+// serverReadOk: the draft read succeeded, so "no server draft" really means there is none.
+function reconcileLocalSessionCopy(liveBefore, serverReadOk){
+  if(liveBefore) return false;
+  const c = readLocalSessionCopy();
+  if(!c) return false;
+  const unsynced = !c.serverHash || c.serverHash !== contentHash(c.session);
+  if(!unsynced){
+    // Everything here reached the server. With no server draft it was saved or discarded
+    // elsewhere — don't bring it back.
+    if(serverReadOk && !db.activeSession) clearLocalSessionCopy();
+    return false;
+  }
+  const restored = c.session;
+  restored._serverHash = c.serverHash || null;
+  db.activeSession = restored;
+  toast('Restored your workout from this phone \u2014 its latest changes hadn\u2019t reached the server.');
+  persistDraftSoon();
+  return true;
+}
+
+// ── REST TIMER ────────────────────────────────────────────────────
+// Length comes from your rest settings by rep range: ≤5 reps strength, 6–12 hypertrophy, more
+// than 12 endurance. One tap on Rest starts it; editing a set's reps starts it too. In a superset
+// the rest belongs to the group and only follows its LAST exercise (A1 → B1 → rest → A2).
+// It counts against an end time, so it stays right when the phone sleeps.
+let _rest = null, _restTimer = null;
+function restSecondsFor(ex){
+  const R = db.rest || {};
+  if(!ex) return R.hyp || 90;
+  const d = (ex.draftSets||[]).find(x => x && parseInt(x.reps) > 0);
+  const reps = d ? parseInt(d.reps) : (parseInt(ex.reps) || 10);
+  if(isIsometric(ex)) return R.hyp || 90;
+  return reps <= 5 ? (R.strength || 180) : reps <= 12 ? (R.hyp || 90) : (R.end || 60);
+}
+function restLabelFor(ei){
+  const s = db.activeSession; if(!s) return '';
+  const members = logGroupMembers(ei);
+  return members.map(m => s.exercises[m] && s.exercises[m].name).filter(Boolean).join(' + ');
+}
+function startRest(ei){
+  const s = db.activeSession; if(!s || !s.exercises[ei]) return;
+  const members = logGroupMembers(ei);
+  const secs = restSecondsFor(s.exercises[Math.max(...members)]);
+  _rest = {endsAt: Date.now() + secs*1000, total: secs, label: restLabelFor(ei), buzzed: false};
+  clearInterval(_restTimer);
+  _restTimer = setInterval(tickRest, 500);
+  tickRest();
+}
+// After editing a working set's reps: rest, unless more of the superset round is still to come
+function restAfterSet(ei){
+  const members = logGroupMembers(ei);
+  if(ei === Math.max(...members)) startRest(ei);
+}
+function adjustRest(delta){
+  if(!_rest) return;
+  _rest.endsAt += delta*1000;
+  _rest.total = Math.max(5, _rest.total + delta);
+  tickRest();
+}
+function stopRest(){
+  _rest = null; clearInterval(_restTimer); _restTimer = null;
+  renderRestBar(0);
+}
+function tickRest(){
+  if(!_rest){ renderRestBar(0); return; }
+  const left = Math.round((_rest.endsAt - Date.now()) / 1000);
+  if(left <= 0 && !_rest.buzzed){
+    _rest.buzzed = true;
+    try { if(navigator.vibrate) navigator.vibrate([200,100,200]); } catch(e){}
+  }
+  if(left < -180){ stopRest(); return; }            // forgotten: tidy up after three minutes
+  renderRestBar(left);
+}
+function renderRestBar(left){
+  const el = document.getElementById('rest-bar');
+  if(!el) return;
+  if(!_rest){ el.style.display = 'none'; el.innerHTML = ''; document.body.classList.remove('resting'); return; }
+  const over = left <= 0, t = Math.abs(left);
+  const clock = Math.floor(t/60) + ':' + String(t%60).padStart(2,'0');
+  const pct = over ? 100 : Math.max(0, Math.min(100, 100 - (left / _rest.total) * 100));
+  el.style.display = 'block';
+  el.className = 'rest-bar' + (over ? ' over' : '');
+  document.body.classList.add('resting');
+  el.innerHTML = '<div class="rest-progress" style="width:' + pct.toFixed(1) + '%;"></div>'
+    + '<div class="rest-row"><div class="rest-main"><div class="rest-time">' + (over ? 'Go \u00b7 +' + clock : clock) + '</div>'
+    + '<div class="rest-label">' + (over ? 'Rest over' : 'Rest') + ' \u00b7 ' + esc(_rest.label) + '</div></div>'
+    + (over ? '' : '<button type="button" onclick="adjustRest(-15)">\u221215</button><button type="button" onclick="adjustRest(15)">+15</button>')
+    + '<button type="button" onclick="stopRest()">' + (over ? 'Close' : 'Skip') + '</button></div>';
+}
+function fmtRest(secs){ return Math.floor(secs/60) + ':' + String(secs%60).padStart(2,'0'); }
+
 async function writeDraft(s){
   if(!s || s._finalizing || s._discarded || db.activeSession !== s || !currentUser) return;
   setDraftSync(s, 'saving');
+  const sentHash = contentHash(s);                 // exactly what this write sends
   const payload = withTiming({exercises:JSON.stringify(s.exercises), note:s.sessionNote, is_draft:true}, s, false);
   const send = async (pl) => {
     if(s.draft_id) return sb.from('sessions').update(pl).eq('id', s.draft_id);
@@ -3779,6 +4054,7 @@ async function writeDraft(s){
   if(res && res.error && isMissingTimingColumn(res.error)){ _timingColumns = false; res = await send(stripTiming(payload)); }
   // Finalised or discarded while this was in flight: say nothing, the next step owns the state
   if(s._finalizing || s._discarded) return;
+  if(!(res && res.error)){ s._serverHash = sentHash; saveLocalSessionCopy(); }
   setDraftSync(s, (res && res.error) ? 'failed' : 'saved');
 }
 
@@ -3794,7 +4070,7 @@ function draftBannerHtml(s){
   if(st === 'saving') return '<div class="draft-banner"><span>Saving draft\u2026</span></div>';
   if(st === 'saved')  return '<div class="draft-banner"><span>Draft saved \u2014 your progress is safe.</span></div>';
   if(st === 'failed') return '<div class="draft-banner" style="background:rgba(179,38,30,0.08);border-color:rgba(179,38,30,0.3);color:#B3261E;">'
-    + '<span>Couldn\u2019t save your draft. Your entries are still on this screen \u2014 keep this page open.</span> '
+    + '<span>Couldn\u2019t reach the server \u2014 your workout is kept on this phone and will sync when you\u2019re back online.</span> '
     + '<button class="btn btn-sm" style="margin-left:8px;" onclick="retryDraftSave()">Retry</button></div>';
   return '';
 }
@@ -3904,6 +4180,7 @@ async function doSaveSession(){
     const pos = s._renderedUids ? renderedPosOf(s._renderedUids, live) : idx;
     ex.loggedSets = pos >= 0 ? captureLoggedSets(live, pos) : loggedSetsFromDraft(live);
     delete ex.draftSets; delete ex._uid; delete ex.done;   // Done is a logging aid, not history
+    delete ex.tplIndex; delete ex.tplLoaded;              // template bookkeeping, not history
     return ex;
   }).concat(cardioBlocksAsExercises(cardioBlocks));
   const muscles = sessionMuscles(exercises);
@@ -3930,6 +4207,9 @@ async function doSaveSession(){
   db.sessions.push({...saved, sessionTitle:title, title, date:saved.date||s.date,
     exercises, muscles, note:sessionNote, is_draft:false, ...progStamp});
   db.sessions.sort((a,b) => new Date(a.date) - new Date(b.date));
+  db.pendingTemplateUpdate = templateChanges(s);   // offered on the Log screen, never applied silently
+  stopRest();
+  clearLocalSessionCopy();      // saved: the device copy must not bring it back
   db.activeSession=null; db.pendingSession=null;
   resetCardioBlocks();
   updateNavBadge();
@@ -3954,6 +4234,7 @@ async function discardSession(){
       if(rDel && rDel.error) toast('Discarded here, but the saved draft couldn\u2019t be removed \u2014 it may reappear. Discard it again if it does.','error');
     }
   }
+  clearLocalSessionCopy();
   db.activeSession=null;
   resetCardioBlocks();
   updateNavBadge();
@@ -8120,6 +8401,7 @@ function updateRestDisplay(){
   document.getElementById('rest-trans-val').textContent=fmtSecs(db.rest.trans||120);
 }
 </script>
+<div id="rest-bar" class="rest-bar" style="display:none;"></div>
 <div id="toast"></div>
 </body>
 </html>
